@@ -255,13 +255,24 @@ When adding new features:
 3. Maintain French naming conventions for consistency
 4. Run backtest after strategy changes; document result changes
 
-### Backtest baseline (v3, Dec 2024 → Mar 2026)
-| Asset | Trades | Win% | PF | P&L |
-|-------|--------|------|----|-----|
-| MES1 | 110 | 58% | 1.92 | +$3,158 |
-| NQ1 | 140 | 56% | 2.35 | +$5,761 |
-| YM1 | 236 | 54% | 1.73 | +$6,634 |
-| **Total** | **486** | | | **+$15,553** |
+### Backtest baseline (v4 — paramètres optimisés, Dec 2024 → Mar 2026)
+| Asset | Trades | Win% | PF | P&L | Max DD |
+|-------|--------|------|----|-----|--------|
+| MES1 | 79 | 42% | 1.96 | +$3,838 | -$828 |
+| NQ1 | 127 | 50% | 2.43 | +$5,226 | -$348 |
+| YM1 | 147 | 50% | 1.76 | +$4,942 | -$466 |
+| **Total** | **353** | | | **+$14,006** | |
+
+Optimisé via `optimize.py` (walk-forward IS: déc 2024–sept 2025 / OOS: oct 2025–mars 2026).
+Backtest aligné sur le mode live (`max_signals=MAX_TRADES_PER_DAY` — résultats réalistes).
+
+**v3 → v4 changements clés :**
+- Seuil tendance ±0.15 → ±0.33 (filtre régime plus strict, moins de faux signaux)
+- ZONE_TOLERANCE_PCT 0.002 → 0.001 (clustering plus serré)
+- ZONE_DISTANCE_MAX_PCT 2.5% → 2.0% (zones plus proches du prix)
+- SL_BUFFER_TICKS 4 → 2 (SL plus serré = plus de contrats = gains plus élevés par trade)
+- RR MES1 1.5 → 3.0, NQ1 2.0 → 2.5, YM1 1.5 → 1.75
+- $/trade : MES1 $28.7 → $48.6, NQ1 $41.1 → $41.2, YM1 $28.1 → $33.6
 
 ---
 

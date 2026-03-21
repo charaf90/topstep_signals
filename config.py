@@ -46,10 +46,10 @@ INSTRUMENTS = {
 SL_MINIMUM = {"MES1": 9, "NQ1": 29, "YM1": 60}
 
 # Risk/Reward par actif (optimisé par recherche granulaire)
-RR_TARGET = {"MES1": 1.5, "NQ1": 2.0, "YM1": 1.5}
+RR_TARGET = {"MES1": 3.0, "NQ1": 2.5, "YM1": 1.75}
 
 # Seuil qualité zone par actif
-ZONE_QUALITY_MIN = {"MES1": 70, "NQ1": 60, "YM1": 40}
+ZONE_QUALITY_MIN = {"MES1": 70, "NQ1": 40, "YM1": 30}
 
 # Filtres pré-market par actif
 USE_PM_FILTER = {"MES1": True, "NQ1": True, "YM1": False}
@@ -63,7 +63,7 @@ TRADE_RANGE = {"MES1": True, "NQ1": True, "YM1": False}
 
 RISK_PER_TRADE_USD = 100
 MAX_TRADES_PER_DAY = 2
-SL_BUFFER_TICKS = 4
+SL_BUFFER_TICKS = 2
 
 # Horaires (UTC)
 CUTOFF_HOUR_UTC = 11        # Midi Paris = 11h UTC
@@ -89,13 +89,13 @@ PIVOT_CONFIGS = {
 # ZONES S/R
 # ==============================================================================
 
-ZONE_TOLERANCE_PCT = 0.002      # 0.2% — distance max pour regrouper des pivots
+ZONE_TOLERANCE_PCT = 0.001      # optimisé
 ZONE_MIN_TOUCHES = 2
 ZONE_MIN_TF_OR_TOUCHES = (2, 3) # 2 TF minimum OU 3 touches sur 1 TF
 ZONE_MAX_WIDTH_PCT = 0.004      # 0.4% max
 ZONE_RECENCY_THRESHOLD = 0.66
 ZONE_DISTANCE_MIN_PCT = 0.15
-ZONE_DISTANCE_MAX_PCT = 2.5
+ZONE_DISTANCE_MAX_PCT = 2.0
 
 # ==============================================================================
 # TENDANCE
@@ -107,8 +107,8 @@ TREND_EMA_PARAMS = {
     "H1": {"fast": 20, "slow": 50},
 }
 TREND_WEIGHTS = {"D1": 0.40, "H4": 0.35, "H1": 0.25}
-TREND_BULL_THRESHOLD = 0.15
-TREND_BEAR_THRESHOLD = -0.15
+TREND_BULL_THRESHOLD = 0.33
+TREND_BEAR_THRESHOLD = -0.33
 
 # ==============================================================================
 # GRAPHIQUES

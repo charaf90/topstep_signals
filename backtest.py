@@ -46,9 +46,9 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFra
         if len(us_data) < MIN_BARS_US_SESSION:
             continue
 
-        # Récupérer TOUS les signaux qualifiés (pas de limite)
+        # Identique au mode live : on ne génère que les max N meilleurs signaux (qualité décroissante)
         signals = generate_signals(df_15m, tf_dict, ticker, cutoff, trend_scores,
-                                   max_signals=0)
+                                   max_signals=MAX_TRADES_PER_DAY)
 
         # 1. Simuler tous les signaux pour trouver leur heure de déclenchement (fill_time)
         day_trades = []
