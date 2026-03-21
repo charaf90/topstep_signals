@@ -6,9 +6,11 @@ Usage :
   python backtest.py --csv-dir ./data                    # Backtest 3 actifs
   python backtest.py --csv-dir ./data --ticker NQ1       # 1 actif
   python backtest.py --csv-dir ./data --plot             # Avec graphiques
+  python backtest.py --csv-dir ./data --telegram         # Avec envoi Telegram
 """
 
 import argparse
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -189,6 +191,51 @@ def print_stats(df_trades: pd.DataFrame, ticker: str):
         print(f"  {m} : ${v:>+8,.0f} {bar}{bust}")
 
 
+def format_backtest_report(results: list) -> str:
+    """Formate le rapport backtest en HTML pour Telegram."""
+    msg = "📊 <b>RAPPORT BACKTEST</b>\n\n"
+
+    total_pnl = 0
+    total_trades = 0
+
+    for res in results:
+        ticker = res["ticker"]
+        filled = res["filled"]
+        n = len(filled)
+        if n == 0:
+            continue
+
+        total_trades += n
+        wins = filled[filled["pnl"] > 0]
+        losses = filled[filled["pnl"] <= 0]
+        pnl = filled["pnl"].sum()
+        total_pnl += pnl
+        gp = wins["pnl"].sum() if len(wins) else 0
+        gl = abs(losses["pnl"].sum()) if len(losses) else 1
+        cum = filled["pnl"].cumsum()
+        dd = (cum - cum.cummax()).min()
+
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"📈 <b>{ticker}</b> — {INSTRUMENTS[ticker]['name']}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"  Trades : {n} (WR={len(wins)/n*100:.0f}%)\n"
+        msg += f"  PF     : {gp/gl:.2f}\n"
+        msg += f"  P&amp;L   : <b>${pnl:+,.0f}</b>\n"
+        msg += f"  Max DD : ${dd:,.0f}\n"
+        msg += f"  $/trade: ${filled['pnl'].mean():+.1f}\n"
+
+        for r in ["TP", "SL", "TE"]:
+            sub = filled[filled["result"] == r]
+            if len(sub) > 0:
+                msg += f"  {r}: n={len(sub)}  avg=${sub['pnl'].mean():+.0f}\n"
+        msg += "\n"
+
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"💰 <b>TOTAL: {total_trades} trades  |  ${total_pnl:+,.0f}</b>\n"
+
+    return msg
+
+
 def main():
     parser = argparse.ArgumentParser(description="Backtest stratégie ordres limites")
     parser.add_argument("--csv-dir", type=str, required=True,
@@ -202,11 +249,20 @@ def main():
     parser.add_argument("--plot-filter", type=str, default="all",
                         choices=["all", "tp", "sl", "te", "win", "loss"],
                         help="Filtrer les trades à tracer (défaut: all)")
+    parser.add_argument("--telegram", action="store_true",
+                        help="Envoyer le rapport sur Telegram")
     args = parser.parse_args()
+
+    # --telegram implique --plot
+    if args.telegram:
+        args.plot = True
 
     tickers = [args.ticker] if args.ticker else list(INSTRUMENTS.keys())
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
+
+    backtest_results = []
+    all_chart_files = []
 
     for ticker in tickers:
         print(f"\n{'='*60}")
@@ -226,6 +282,10 @@ def main():
         df_trades = run_backtest(df_15m, tf, ticker)
         audit(df_trades, ticker)
         print_stats(df_trades, ticker)
+
+        # Collecter les résultats pour le rapport Telegram
+        filled_trades = df_trades[df_trades["result"] != "NOT_FILLED"]
+        backtest_results.append({"ticker": ticker, "filled": filled_trades})
 
         # Sauvegarde
         out_csv = output_dir / f"backtest_{ticker}.csv"
@@ -262,6 +322,7 @@ def main():
                     tag = trade_dict["result"].lower()
                     chart_path = str(chart_dir / f"{trade_dict['date']}_{tag}_{idx+1}.png")
                     plot_backtest_trade(df_15m, trade_dict, ticker, chart_path)
+                    all_chart_files.append((chart_path, trade_dict))
                     if (idx + 1) % 25 == 0:
                         print(f"    {idx+1}/{total}...")
                 print(f"  ✓ {total} graphiques → {chart_dir}")
@@ -269,6 +330,37 @@ def main():
     print(f"\n{'='*60}")
     print(f"  ✅ BACKTEST TERMINÉ")
     print(f"{'='*60}")
+
+    # Envoi Telegram
+    if args.telegram:
+        from core.telegram import get_chat_id, send_message, send_photo
+
+        try:
+            chat_id = get_chat_id()
+
+            # Résumé texte
+            report = format_backtest_report(backtest_results)
+            send_message(chat_id, report)
+            print(f"\n  ✓ Rapport envoyé sur Telegram")
+
+            # Graphiques
+            total = len(all_chart_files)
+            if total > 0:
+                print(f"  ▸ Envoi de {total} graphiques...")
+                for idx, (chart_path, trade_dict) in enumerate(all_chart_files):
+                    ticker_t = trade_dict.get("date", "")
+                    caption = (
+                        f"{trade_dict['date']} {trade_dict['dir'].upper()} "
+                        f"{trade_dict['result']} ${trade_dict['pnl']:+.0f}"
+                    )
+                    send_photo(chat_id, chart_path, caption=caption)
+                    if (idx + 1) % 25 == 0:
+                        print(f"    {idx+1}/{total}...")
+                    time.sleep(0.05)
+                print(f"  ✓ {total} graphiques envoyés")
+
+        except Exception as e:
+            print(f"  [!] Erreur Telegram: {e}")
 
 
 if __name__ == "__main__":
