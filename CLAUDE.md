@@ -255,13 +255,17 @@ When adding new features:
 3. Maintain French naming conventions for consistency
 4. Run backtest after strategy changes; document result changes
 
-### Backtest baseline (v4 — paramètres optimisés, Dec 2024 → Mar 2026)
+### Backtest baseline (v4 — paramètres optimisés + fix simulation, Dec 2024 → Mar 2026)
 | Asset | Trades | Win% | PF | P&L | Max DD |
 |-------|--------|------|----|-----|--------|
-| MES1 | 79 | 42% | 1.96 | +$3,838 | -$828 |
-| NQ1 | 127 | 50% | 2.43 | +$5,226 | -$348 |
-| YM1 | 147 | 50% | 1.76 | +$4,942 | -$466 |
-| **Total** | **353** | | | **+$14,006** | |
+| MES1 | 79 | 33% | 1.28 | +$1,318 | -$1,120 |
+| NQ1 | 127 | 36% | 1.39 | +$1,810 | -$980 |
+| YM1 | 147 | 36% | 0.97 | -$218 | -$1,132 |
+| **Total** | **353** | | | **+$2,910** | |
+
+**Note :** Résultats après correction du bug TP sur bougie de fill (v4-fix).
+Le TP n'est plus accordé sur la même bougie 15min que l'entry (ambiguïté intra-bougie).
+Les paramètres v4 doivent être ré-optimisés avec la simulation corrigée.
 
 Optimisé via `optimize.py` (walk-forward IS: déc 2024–sept 2025 / OOS: oct 2025–mars 2026).
 Backtest aligné sur le mode live (`max_signals=MAX_TRADES_PER_DAY` — résultats réalistes).
@@ -272,7 +276,6 @@ Backtest aligné sur le mode live (`max_signals=MAX_TRADES_PER_DAY` — résulta
 - ZONE_DISTANCE_MAX_PCT 2.5% → 2.0% (zones plus proches du prix)
 - SL_BUFFER_TICKS 4 → 2 (SL plus serré = plus de contrats = gains plus élevés par trade)
 - RR MES1 1.5 → 3.0, NQ1 2.0 → 2.5, YM1 1.5 → 1.75
-- $/trade : MES1 $28.7 → $48.6, NQ1 $41.1 → $41.2, YM1 $28.1 → $33.6
 
 ---
 

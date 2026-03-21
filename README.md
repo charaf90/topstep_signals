@@ -21,14 +21,14 @@ Les ordres ne sont jamais modifiés après placement. Max 2 trades/jour/actif, r
 
 ## Résultats backtest
 
-**Période : décembre 2024 → mars 2026 (v4 — paramètres optimisés)**
+**Période : décembre 2024 → mars 2026 (v4 — simulation corrigée)**
 
 | Actif | Trades | WR | PF | P&L | Max DD | $/trade |
 |-------|--------|-----|------|---------|--------|---------|
-| MES1 | 79 | 42% | 1.96 | +$3,838 | -$828 | +$48.6 |
-| NQ1 | 127 | 50% | 2.43 | +$5,226 | -$348 | +$41.2 |
-| YM1 | 147 | 50% | 1.76 | +$4,942 | -$466 | +$33.6 |
-| **Total** | **353** | | | **+$14,006** | | |
+| MES1 | 79 | 33% | 1.28 | +$1,318 | -$1,120 | +$16.7 |
+| NQ1 | 127 | 36% | 1.39 | +$1,810 | -$980 | +$14.3 |
+| YM1 | 147 | 36% | 0.97 | -$218 | -$1,132 | -$1.5 |
+| **Total** | **353** | | | **+$2,910** | | |
 
 ---
 

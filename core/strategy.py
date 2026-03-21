@@ -180,23 +180,35 @@ def simulate_trade(us_data: pd.DataFrame, signal: dict, dpp: float) -> dict:
 
     fill_time = us_data.index[fill_idx]
 
-    # Résolution : SL d'abord si même barre (pire cas)
+    # Résolution : bougie de fill = SL uniquement (ambiguïté intra-bougie)
     result = None
     exit_price = None
     exit_time = None
 
-    for i in range(fill_idx, len(us_data)):
-        bar = us_data.iloc[i]
-        if direction == "long":
-            if bar["low"] <= sl:
-                result = "SL"; exit_price = sl; exit_time = us_data.index[i]; break
-            if bar["high"] >= tp:
-                result = "TP"; exit_price = tp; exit_time = us_data.index[i]; break
-        else:
-            if bar["high"] >= sl:
-                result = "SL"; exit_price = sl; exit_time = us_data.index[i]; break
-            if bar["low"] <= tp:
-                result = "TP"; exit_price = tp; exit_time = us_data.index[i]; break
+    # Bougie de fill : on ne peut pas savoir si le prix a atteint le TP
+    # après l'entry dans la même bougie → seul le SL est vérifié (conservateur)
+    bar = us_data.iloc[fill_idx]
+    if direction == "long":
+        if bar["low"] <= sl:
+            result = "SL"; exit_price = sl; exit_time = us_data.index[fill_idx]
+    else:
+        if bar["high"] >= sl:
+            result = "SL"; exit_price = sl; exit_time = us_data.index[fill_idx]
+
+    # Bougies suivantes : SL d'abord, puis TP
+    if result is None:
+        for i in range(fill_idx + 1, len(us_data)):
+            bar = us_data.iloc[i]
+            if direction == "long":
+                if bar["low"] <= sl:
+                    result = "SL"; exit_price = sl; exit_time = us_data.index[i]; break
+                if bar["high"] >= tp:
+                    result = "TP"; exit_price = tp; exit_time = us_data.index[i]; break
+            else:
+                if bar["high"] >= sl:
+                    result = "SL"; exit_price = sl; exit_time = us_data.index[i]; break
+                if bar["low"] <= tp:
+                    result = "TP"; exit_price = tp; exit_time = us_data.index[i]; break
 
     if result is None:
         result = "TE"
