@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.chat_id
+output/
+data/
+*.csv
+.env
+.venv/
