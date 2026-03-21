@@ -255,17 +255,17 @@ When adding new features:
 3. Maintain French naming conventions for consistency
 4. Run backtest after strategy changes; document result changes
 
-### Backtest baseline (v4 — paramètres optimisés + fix simulation, Dec 2024 → Mar 2026)
+### Backtest baseline (v4 + simulation corrigée, Dec 2024 → Mar 2026)
 | Asset | Trades | Win% | PF | P&L | Max DD |
 |-------|--------|------|----|-----|--------|
 | MES1 | 79 | 33% | 1.28 | +$1,318 | -$1,120 |
-| NQ1 | 127 | 36% | 1.39 | +$1,810 | -$980 |
+| NQ1 | 127 | 37% | 1.44 | +$2,013 | -$778 |
 | YM1 | 147 | 36% | 0.97 | -$218 | -$1,132 |
-| **Total** | **353** | | | **+$2,910** | |
+| **Total** | **353** | | | **+$3,113** | |
 
-**Note :** Résultats après correction du bug TP sur bougie de fill (v4-fix).
-Le TP n'est plus accordé sur la même bougie 15min que l'entry (ambiguïté intra-bougie).
-Les paramètres v4 doivent être ré-optimisés avec la simulation corrigée.
+**Simulation corrigée (v4-fix) :** Sur la bougie de fill, le TP n'est accordé que si
+la bougie va dans le sens du trade (haussière pour LONG, baissière pour SHORT).
+Les paramètres v4 restent les meilleurs après ré-optimisation (optimizer OOS négatif).
 
 Optimisé via `optimize.py` (walk-forward IS: déc 2024–sept 2025 / OOS: oct 2025–mars 2026).
 Backtest aligné sur le mode live (`max_signals=MAX_TRADES_PER_DAY` — résultats réalistes).

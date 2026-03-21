@@ -89,7 +89,7 @@ PIVOT_CONFIGS = {
 # ZONES S/R
 # ==============================================================================
 
-ZONE_TOLERANCE_PCT = 0.001      # optimisé
+ZONE_TOLERANCE_PCT = 0.001      # optimisé v4
 ZONE_MIN_TOUCHES = 2
 ZONE_MIN_TF_OR_TOUCHES = (2, 3) # 2 TF minimum OU 3 touches sur 1 TF
 ZONE_MAX_WIDTH_PCT = 0.004      # 0.4% max

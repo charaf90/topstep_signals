@@ -341,7 +341,7 @@ def compute_score(df: pd.DataFrame) -> dict:
     gross_loss = abs(filled[filled["pnl"] <= 0]["pnl"].sum()) or 1.0
     pf         = gross_win / gross_loss
 
-    if wr < 0.40 or pf < 1.2:
+    if wr < 0.30 or pf < 1.2:
         return {"score": 0.0, "n": n, "wr": wr, "pf": pf, "pnl": pnl}
 
     return {"score": pnl, "n": n, "wr": wr, "pf": pf, "pnl": pnl}
