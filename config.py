@@ -128,3 +128,7 @@ CHART_STYLE = {
     "font.size": 9,
 }
 CHART_CANDLES = 200
+
+# Backtest charts
+BACKTEST_CHART_CONTEXT_BEFORE = 50   # Bougies avant le fill
+BACKTEST_CHART_CONTEXT_AFTER = 20    # Bougies après la sortie

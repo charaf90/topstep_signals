@@ -23,7 +23,7 @@ from config import (
 from core.data import load_csv, build_timeframes
 from core.strategy import generate_signals, simulate_trade
 from core.trend import precompute_trends
-from core.chart import plot_signal
+from core.chart import plot_signal, plot_backtest_trade
 
 
 def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFrame:
@@ -198,7 +198,10 @@ def main():
     parser.add_argument("--output-dir", type=str, default="./output",
                         help="Répertoire de sortie")
     parser.add_argument("--plot", action="store_true",
-                        help="Générer graphiques de trades exemples")
+                        help="Générer graphiques pour chaque trade rempli")
+    parser.add_argument("--plot-filter", type=str, default="all",
+                        choices=["all", "tp", "sl", "te", "win", "loss"],
+                        help="Filtrer les trades à tracer (défaut: all)")
     args = parser.parse_args()
 
     tickers = [args.ticker] if args.ticker else list(INSTRUMENTS.keys())
@@ -229,28 +232,39 @@ def main():
         df_trades.to_csv(out_csv, index=False)
         print(f"\n  ✓ {out_csv}")
 
-        # Graphiques exemples
+        # Graphiques des trades
         if args.plot:
-            filled = df_trades[df_trades["result"] != "NOT_FILLED"]
-            for res in ["TP", "SL"]:
-                sub = filled[filled["result"] == res]
-                if len(sub) > 0:
-                    trade = sub.sort_values("pnl", ascending=(res == "SL")).iloc[0]
-                    cutoff = pd.Timestamp(f"{trade['date']} {CUTOFF_HOUR_UTC:02d}:00:00")
-                    sig = {
-                        "ticker": ticker, "direction": trade["dir"],
-                        "entry": trade["entry"], "sl": trade["sl"], "tp": trade["tp"],
-                        "sl_dist": trade["sl_dist"], "tp_dist": trade["tp_dist"],
-                        "rr": trade["rr"], "n_ct": trade["n_ct"],
-                        "risk": trade["risk_$"], "gain": trade["n_ct"] * trade["tp_dist"] * INSTRUMENTS[ticker]["dollar_per_point"],
-                        "quality": trade["quality"], "n_tf": trade["n_tf"],
-                        "touches": trade["touches"], "regime": trade["regime"],
-                        "zone_low": trade["zone_low"], "zone_high": trade["zone_high"],
-                        "price_now": trade["entry"],
-                    }
-                    chart_path = str(output_dir / f"backtest_{ticker}_{res}.png")
-                    plot_signal(df_15m, sig, cutoff, chart_path)
-                    print(f"  ✓ {chart_path}")
+            chart_dir = output_dir / "backtest_charts" / ticker
+            chart_dir.mkdir(parents=True, exist_ok=True)
+
+            filled = df_trades[df_trades["result"] != "NOT_FILLED"].copy()
+
+            # Appliquer le filtre
+            pf = args.plot_filter
+            if pf == "tp":
+                filled = filled[filled["result"] == "TP"]
+            elif pf == "sl":
+                filled = filled[filled["result"] == "SL"]
+            elif pf == "te":
+                filled = filled[filled["result"] == "TE"]
+            elif pf == "win":
+                filled = filled[filled["pnl"] > 0]
+            elif pf == "loss":
+                filled = filled[filled["pnl"] <= 0]
+
+            total = len(filled)
+            if total == 0:
+                print(f"  Aucun trade à tracer (filtre: {pf})")
+            else:
+                print(f"  ▸ Génération de {total} graphiques (filtre: {pf})...")
+                for idx, (_, row) in enumerate(filled.iterrows()):
+                    trade_dict = row.to_dict()
+                    tag = trade_dict["result"].lower()
+                    chart_path = str(chart_dir / f"{trade_dict['date']}_{tag}_{idx+1}.png")
+                    plot_backtest_trade(df_15m, trade_dict, ticker, chart_path)
+                    if (idx + 1) % 25 == 0:
+                        print(f"    {idx+1}/{total}...")
+                print(f"  ✓ {total} graphiques → {chart_dir}")
 
     print(f"\n{'='*60}")
     print(f"  ✅ BACKTEST TERMINÉ")
