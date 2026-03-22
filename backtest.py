@@ -23,12 +23,13 @@ from config import (
     MIN_BARS_HISTORY, MIN_BARS_US_SESSION,
 )
 from core.data import load_csv, build_timeframes
-from core.strategy import generate_signals, simulate_trade
+from core.strategy import generate_signals, generate_signals_zones_only, simulate_trade
 from core.trend import precompute_trends
 from core.chart import plot_signal, plot_backtest_trade
 
 
-def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFrame:
+def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
+                 signal_fn=generate_signals) -> pd.DataFrame:
     """
     Backtest complet jour par jour.
     Les ordres non remplis ne comptent PAS vers le max de 2 trades/jour.
@@ -49,8 +50,8 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFra
             continue
 
         # Identique au mode live : on ne génère que les max N meilleurs signaux (qualité décroissante)
-        signals = generate_signals(df_15m, tf_dict, ticker, cutoff, trend_scores,
-                                   max_signals=MAX_TRADES_PER_DAY)
+        signals = signal_fn(df_15m, tf_dict, ticker, cutoff, trend_scores,
+                            max_signals=MAX_TRADES_PER_DAY)
 
         # 1. Simuler tous les signaux pour trouver leur heure de déclenchement (fill_time)
         day_trades = []
@@ -75,6 +76,9 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFra
                 "zone_high": sig["zone_high"],
                 **result,
             }
+            if "rsi_score" in sig:
+                trade["rsi_score"] = sig["rsi_score"]
+                trade["rsi_bonus"] = sig["rsi_bonus"]
             day_trades.append(trade)
 
         # 2. Séparer les trades remplis et non remplis
@@ -104,7 +108,7 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFra
     return pd.DataFrame(trades)
 
 
-def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
+def audit(df_trades: pd.DataFrame, ticker: str, skip_regime: bool = False) -> bool:
     """Vérifie l'intégrité des trades."""
     dpp = INSTRUMENTS[ticker]["dollar_per_point"]
     sl_min = SL_MINIMUM[ticker]
@@ -124,19 +128,20 @@ def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
     if (filled["sl_dist"] < sl_min - 0.01).any():
         errors += 1
 
-    # Régime
-    for _, r in filled.iterrows():
-        if r["dir"] == "long" and r["regime"] == "BEAR":
-            errors += 1
-        if r["dir"] == "short" and r["regime"] == "BULL":
-            errors += 1
+    # Régime (désactivé en mode zones pures)
+    if not skip_regime:
+        for _, r in filled.iterrows():
+            if r["dir"] == "long" and r["regime"] == "BEAR":
+                errors += 1
+            if r["dir"] == "short" and r["regime"] == "BULL":
+                errors += 1
 
     print(f"  AUDIT: {'✅ OK' if errors == 0 else f'❌ {errors} erreurs'}")
     return errors == 0
 
 
-def print_stats(df_trades: pd.DataFrame, ticker: str):
-    """Rapport statistique."""
+def print_stats(df_trades: pd.DataFrame, ticker: str, mode: str = "full"):
+    """Rapport statistique. mode: 'full', 'zones_only', 'zones_rsi'."""
     filled = df_trades[df_trades["result"] != "NOT_FILLED"]
     if len(filled) == 0:
         print(f"  Aucun trade rempli")
@@ -150,8 +155,9 @@ def print_stats(df_trades: pd.DataFrame, ticker: str):
     dd = (cum - cum.cummax()).min()
 
     rr = RR_TARGET[ticker]
+    label = {"full": "", "zones_only": " [ZONES PURES]", "zones_rsi": " [ZONES+RSI]"}
     print(f"\n  {'═'*55}")
-    print(f"  {ticker} — {INSTRUMENTS[ticker]['name']}")
+    print(f"  {ticker} — {INSTRUMENTS[ticker]['name']}{label.get(mode, '')}")
     print(f"  {'═'*55}")
     print(f"  Config  : SL≥{SL_MINIMUM[ticker]}pts  RR={rr}  QualMin={ZONE_QUALITY_MIN[ticker]}")
     print(f"  Trades  : {len(filled)} remplis / {len(df_trades)} signaux")
@@ -173,12 +179,60 @@ def print_stats(df_trades: pd.DataFrame, ticker: str):
         if len(sub) > 0:
             print(f"  {r:3s}: n={len(sub):>4}  avg=${sub['pnl'].mean():+.0f}")
 
-    print(f"  {'─'*55}")
-    for regime in ["BULL", "BEAR", "RANGE"]:
-        sub = filled[filled["regime"] == regime]
-        if len(sub) > 0:
+    # Breakdown par régime (mode full uniquement)
+    if mode == "full":
+        print(f"  {'─'*55}")
+        for regime in ["BULL", "BEAR", "RANGE"]:
+            sub = filled[filled["regime"] == regime]
+            if len(sub) > 0:
+                wr = (sub["pnl"] > 0).mean() * 100
+                print(f"  {regime:5s}: n={len(sub):>3}  WR={wr:.0f}%  P&L=${sub['pnl'].sum():+,.0f}")
+
+    # Breakdowns zones pures / zones+RSI
+    if mode in ("zones_only", "zones_rsi"):
+        # LONG vs SHORT
+        print(f"  {'─'*55}")
+        print(f"  Direction:")
+        for d in ["long", "short"]:
+            sub = filled[filled["dir"] == d]
+            if len(sub) > 0:
+                w = sub[sub["pnl"] > 0]
+                l = sub[sub["pnl"] <= 0]
+                gp_d = w["pnl"].sum() if len(w) else 0
+                gl_d = abs(l["pnl"].sum()) if len(l) else 1
+                wr = (sub["pnl"] > 0).mean() * 100
+                print(f"  {d.upper():5s}: n={len(sub):>3}  WR={wr:.0f}%  PF={gp_d/gl_d:.2f}  P&L=${sub['pnl'].sum():+,.0f}")
+
+        # Distribution par qualité
+        print(f"  {'─'*55}")
+        print(f"  Qualité zone:")
+        for lo, hi, lbl in [(0, 40, "Q<40"), (40, 60, "Q40-60"), (60, 80, "Q60-80"), (80, 101, "Q80+")]:
+            sub = filled[(filled["quality"] >= lo) & (filled["quality"] < hi)]
+            if len(sub) > 0:
+                wr = (sub["pnl"] > 0).mean() * 100
+                print(f"  {lbl:8s}: n={len(sub):>3}  WR={wr:.0f}%  P&L=${sub['pnl'].sum():+,.0f}  avg=${sub['pnl'].mean():+.0f}")
+
+        # Distribution par n_tf
+        print(f"  {'─'*55}")
+        print(f"  Timeframes zone:")
+        for ntf in sorted(filled["n_tf"].unique()):
+            sub = filled[filled["n_tf"] == ntf]
             wr = (sub["pnl"] > 0).mean() * 100
-            print(f"  {regime:5s}: n={len(sub):>3}  WR={wr:.0f}%  P&L=${sub['pnl'].sum():+,.0f}")
+            print(f"  {int(ntf)}TF    : n={len(sub):>3}  WR={wr:.0f}%  P&L=${sub['pnl'].sum():+,.0f}  avg=${sub['pnl'].mean():+.0f}")
+
+    # Segmentation RSI (mode zones_rsi uniquement)
+    if mode == "zones_rsi" and "rsi_score" in filled.columns:
+        print(f"  {'─'*55}")
+        print(f"  RSI Score:")
+        for score in range(5):
+            sub = filled[filled["rsi_score"] == score]
+            if len(sub) > 0:
+                w = sub[sub["pnl"] > 0]
+                l = sub[sub["pnl"] <= 0]
+                gp_s = w["pnl"].sum() if len(w) else 0
+                gl_s = abs(l["pnl"].sum()) if len(l) else 1
+                wr = (sub["pnl"] > 0).mean() * 100
+                print(f"  RSI={score}: n={len(sub):>3}  WR={wr:.0f}%  PF={gp_s/gl_s:.2f}  P&L=${sub['pnl'].sum():+,.0f}  avg=${sub['pnl'].mean():+.0f}")
 
     # Mensuel
     print(f"  {'─'*55}")
@@ -251,6 +305,8 @@ def main():
                         help="Filtrer les trades à tracer (défaut: all)")
     parser.add_argument("--telegram", action="store_true",
                         help="Envoyer le rapport sur Telegram")
+    parser.add_argument("--zones-only", action="store_true",
+                        help="Backtest zones pures (sans tendance ni filtre pré-market)")
     args = parser.parse_args()
 
     # --telegram implique --plot
@@ -261,12 +317,21 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
 
+    # Sélection de la fonction de signaux
+    if args.zones_only:
+        sig_fn = generate_signals_zones_only
+        mode = "zones_only"
+    else:
+        sig_fn = generate_signals
+        mode = "full"
+
     backtest_results = []
     all_chart_files = []
 
     for ticker in tickers:
         print(f"\n{'='*60}")
-        print(f"  BACKTEST — {ticker} (RR={RR_TARGET[ticker]})")
+        mode_label = " [ZONES PURES]" if mode != "full" else ""
+        print(f"  BACKTEST — {ticker} (RR={RR_TARGET[ticker]}){mode_label}")
         print(f"{'='*60}")
 
         csv_path = Path(args.csv_dir) / f"{ticker}_data_m15.csv"
@@ -279,9 +344,9 @@ def main():
         print(f"  {len(df_15m):,} bougies")
 
         print(f"  ▸ Exécution...")
-        df_trades = run_backtest(df_15m, tf, ticker)
-        audit(df_trades, ticker)
-        print_stats(df_trades, ticker)
+        df_trades = run_backtest(df_15m, tf, ticker, signal_fn=sig_fn)
+        audit(df_trades, ticker, skip_regime=(mode != "full"))
+        print_stats(df_trades, ticker, mode=mode)
 
         # Collecter les résultats pour le rapport Telegram
         filled_trades = df_trades[df_trades["result"] != "NOT_FILLED"]

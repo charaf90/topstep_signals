@@ -153,6 +153,107 @@ def generate_signals(
     return signals
 
 
+def generate_signals_zones_only(
+    df_15m: pd.DataFrame,
+    tf_dict: Dict[str, pd.DataFrame],
+    ticker: str,
+    cutoff: pd.Timestamp,
+    trend_scores: Optional[Dict] = None,
+    max_signals: int = 0,
+) -> List[dict]:
+    """
+    Variante zones pures : pas de filtre tendance, pas de filtre pré-market.
+    Tous les signaux qualifiés sont retournés (support → LONG, résistance → SHORT).
+    """
+    inst = INSTRUMENTS[ticker]
+    dpp = inst["dollar_per_point"]
+    tick = inst["tick_size"]
+    sl_min = SL_MINIMUM[ticker]
+    rr = RR_TARGET[ticker]
+    quality_min = ZONE_QUALITY_MIN[ticker]
+    buffer = SL_BUFFER_TICKS * tick
+
+    # Zones (pas de tendance, pas de pré-market)
+    zones = detect_zones(tf_dict, cutoff)
+    if not zones:
+        return []
+
+    # Prix actuel
+    before = df_15m[df_15m.index <= cutoff]
+    if len(before) < MIN_BARS_HISTORY:
+        return []
+    price_now = before["close"].iloc[-1]
+
+    signals = []
+    for zone in zones:
+        if max_signals > 0 and len(signals) >= max_signals:
+            break
+
+        if zone["quality"] < quality_min:
+            continue
+
+        zm = zone["mid"]
+        is_support = zm < price_now
+        is_resistance = zm > price_now
+        if not is_support and not is_resistance:
+            continue
+
+        dist_pct = abs(price_now - zm) / price_now * 100
+        if dist_pct < ZONE_DISTANCE_MIN_PCT or dist_pct > ZONE_DISTANCE_MAX_PCT:
+            continue
+
+        direction = "long" if is_support else "short"
+
+        zone_width = zone["high"] - zone["low"]
+        if direction == "long":
+            raw_entry = zone["low"] + 0.25 * zone_width
+            entry = math.floor(raw_entry / tick) * tick
+        else:
+            raw_entry = zone["high"] - 0.25 * zone_width
+            entry = math.ceil(raw_entry / tick) * tick
+
+        if direction == "long":
+            sl_price = min(zone["low"] - buffer, entry - sl_min)
+            sl_dist = entry - sl_price
+            tp_dist = sl_dist * rr
+            tp_price = entry + tp_dist
+        else:
+            sl_price = max(zone["high"] + buffer, entry + sl_min)
+            sl_dist = sl_price - entry
+            tp_dist = sl_dist * rr
+            tp_price = entry - tp_dist
+
+        n_ct = int(RISK_PER_TRADE_USD / (sl_dist * dpp))
+        if n_ct == 0:
+            continue
+
+        risk = n_ct * sl_dist * dpp
+        gain = n_ct * tp_dist * dpp
+
+        signals.append({
+            "ticker": ticker,
+            "direction": direction,
+            "entry": entry,
+            "sl": sl_price,
+            "tp": tp_price,
+            "sl_dist": sl_dist,
+            "tp_dist": tp_dist,
+            "rr": rr,
+            "n_ct": n_ct,
+            "risk": risk,
+            "gain": gain,
+            "quality": zone["quality"],
+            "n_tf": zone["n_tf"],
+            "touches": zone["touches"],
+            "regime": "NONE",
+            "zone_low": zone["low"],
+            "zone_high": zone["high"],
+            "price_now": price_now,
+        })
+
+    return signals
+
+
 def simulate_trade(us_data: pd.DataFrame, signal: dict, dpp: float) -> dict:
     """
     Simule un trade sur la session US.
