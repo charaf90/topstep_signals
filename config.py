@@ -98,6 +98,16 @@ ZONE_DISTANCE_MIN_PCT = 0.15
 ZONE_DISTANCE_MAX_PCT = 2.0
 
 # ==============================================================================
+# RSI
+# ==============================================================================
+
+RSI_PERIOD = 14
+RSI_ZONE_TOLERANCE = 2.0       # points RSI pour clustering pivots
+RSI_ZONE_NEAR = 5.0            # RSI actuel "proche" d'une zone si |diff| <= N
+RSI_BONUS_PER_TF = 5           # bonus qualité par TF aligné
+RSI_MIN_TOUCHES = 2            # touches minimum pour une zone RSI
+
+# ==============================================================================
 # TENDANCE
 # ==============================================================================
 

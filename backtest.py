@@ -23,7 +23,10 @@ from config import (
     MIN_BARS_HISTORY, MIN_BARS_US_SESSION,
 )
 from core.data import load_csv, build_timeframes
-from core.strategy import generate_signals, generate_signals_zones_only, simulate_trade
+from core.strategy import (
+    generate_signals, generate_signals_zones_only,
+    generate_signals_zones_rsi, simulate_trade,
+)
 from core.trend import precompute_trends
 from core.chart import plot_signal, plot_backtest_trade
 
@@ -307,7 +310,12 @@ def main():
                         help="Envoyer le rapport sur Telegram")
     parser.add_argument("--zones-only", action="store_true",
                         help="Backtest zones pures (sans tendance ni filtre pré-market)")
+    parser.add_argument("--zones-rsi", action="store_true",
+                        help="Backtest zones + RSI (sans tendance ni filtre pré-market)")
     args = parser.parse_args()
+
+    if args.zones_only and args.zones_rsi:
+        parser.error("--zones-only et --zones-rsi sont mutuellement exclusifs")
 
     # --telegram implique --plot
     if args.telegram:
@@ -318,7 +326,10 @@ def main():
     output_dir.mkdir(exist_ok=True)
 
     # Sélection de la fonction de signaux
-    if args.zones_only:
+    if args.zones_rsi:
+        sig_fn = generate_signals_zones_rsi
+        mode = "zones_rsi"
+    elif args.zones_only:
         sig_fn = generate_signals_zones_only
         mode = "zones_only"
     else:
@@ -330,7 +341,7 @@ def main():
 
     for ticker in tickers:
         print(f"\n{'='*60}")
-        mode_label = " [ZONES PURES]" if mode != "full" else ""
+        mode_label = {"full": "", "zones_only": " [ZONES PURES]", "zones_rsi": " [ZONES+RSI]"}.get(mode, "")
         print(f"  BACKTEST — {ticker} (RR={RR_TARGET[ticker]}){mode_label}")
         print(f"{'='*60}")
 
