@@ -57,9 +57,14 @@ def format_message(all_signals: dict, date_str: str) -> str:
             msg += f"📊 <b>{ticker} — {arrow} {d}</b>  (RR={s['rr']})\n"
             msg += f"━━━━━━━━━━━━━━━━━━━━\n"
             msg += f"🎯 Entry   : <code>{s['entry']:.2f}</code>\n"
+            if s.get("scale_in"):
+                msg += f"🎯 Entry 2 : <code>{s['entry_2']:.2f}</code>\n"
             msg += f"🛑 SL      : <code>{s['sl']:.2f}</code> ({s['sl_dist']:.1f} pts)\n"
             msg += f"✅ TP      : <code>{s['tp']:.2f}</code> ({s['tp_dist']:.1f} pts)\n"
-            msg += f"📦 Contrats: {s['n_ct']} micro(s)\n"
+            if s.get("scale_in"):
+                msg += f"📦 Contrats: {s['n_ct_1']}+{s['n_ct_2']} micro(s)\n"
+            else:
+                msg += f"📦 Contrats: {s['n_ct']} micro(s)\n"
             msg += f"💰 Risque  : ${s['risk']:.0f}\n"
             msg += f"💵 Gain    : ${s['gain']:.0f}\n"
             msg += f"{re} Régime  : {s['regime']}\n"

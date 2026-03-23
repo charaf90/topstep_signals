@@ -73,6 +73,9 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFra
                 "regime": sig["regime"],
                 "zone_low": sig["zone_low"],
                 "zone_high": sig["zone_high"],
+                "tp_type": sig.get("tp_type", "rr"),
+                **{k: sig[k] for k in ["entry_1", "entry_2", "n_ct_1", "n_ct_2", "scale_in"]
+                   if k in sig},
                 **result,
             }
             day_trades.append(trade)
@@ -113,6 +116,9 @@ def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
 
     # P&L
     for _, r in filled.iterrows():
+        if r.get("scale_in", False):
+            # Scale-in : PnL calculé sur 2 entrées, audit simplifié (skip)
+            continue
         if r["dir"] == "long":
             exp = r["n_ct"] * (r["exit"] - r["entry"]) * dpp
         else:
