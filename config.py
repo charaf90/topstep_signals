@@ -189,6 +189,24 @@ TOPSTEP_TRAILING_DD    = 2_000         # Trailing drawdown maximum
 TOPSTEP_SAFETY_MULT    = 1.1
 
 # ==============================================================================
+# CIRCUIT BREAKERS INTRA-JOUR (réduction du DD portefeuille)
+# ==============================================================================
+# Daily stop : après 1 SL dans la journée, les ordres restants sont annulés.
+# Désactivé par défaut : combiné au consec-loss breaker, il coupait trop de
+# trades profitables et faisait chuter le P&L total sous le target Topstep.
+DAILY_STOP_AFTER_SL     = False
+
+# Consecutive-loss breaker : après N jours perdants consécutifs, on saute 1 jour.
+# 0 = désactivé. Le streak se réinitialise dès qu'un jour neutre/gagnant survient.
+# 5 est le sweet spot empirique (bootstrap 99.9%, DD réduit vs v5 sans breaker).
+CONSEC_LOSS_PAUSE_DAYS  = 5
+
+# Daily lock-in : après un gain cumulé ≥ seuil sur la journée, plus de nouveau trade.
+# 0 = désactivé. Un seuil trop bas (< 1.5× risque nominal) plafonne la capacité
+# à atteindre le target Topstep dans le bootstrap.
+DAILY_LOCKIN_THRESHOLD  = 0
+
+# ==============================================================================
 # GRAPHIQUES
 # ==============================================================================
 

@@ -24,6 +24,7 @@ from config import (
     COMPOSITE_SCORE_MIN, TREND_STRENGTH_MIN,
     TOPSTEP_DAILY_LOSS_MAX, TOPSTEP_TRAILING_DD,
     TOPSTEP_PROFIT_TARGET,
+    DAILY_STOP_AFTER_SL, CONSEC_LOSS_PAUSE_DAYS, DAILY_LOCKIN_THRESHOLD,
 )
 from core.data import load_csv, build_timeframes
 from core.strategy import generate_signals, simulate_trade
@@ -38,6 +39,11 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
     Backtest complet jour par jour.
     Les ordres non remplis ne comptent PAS vers le max de 2 trades/jour.
 
+    Circuit breakers appliqués dans l'ordre chronologique intra-jour :
+      • DAILY_STOP_AFTER_SL — après 1 SL, annule les ordres restants
+      • DAILY_LOCKIN_THRESHOLD — après gain cumulé ≥ seuil, plus de nouveau trade
+      • CONSEC_LOSS_PAUSE_DAYS — saute la journée après N jours perdants d'affilée
+
     Args:
         topstep_guard : si True, vérifie le slack Topstep avant chaque journée
                          et saute le jour si le risque nominal dépasserait la limite.
@@ -50,6 +56,7 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
     # Trackers Topstep (sur la séquence backtest du ticker)
     cum_pnl = 0.0
     peak_pnl = 0.0
+    consec_loss_days = 0
 
     for day in dates:
         ds = day.strftime("%Y-%m-%d")
@@ -59,6 +66,11 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
 
         us_data = df_15m[(df_15m.index >= us_start) & (df_15m.index <= us_end)]
         if len(us_data) < MIN_BARS_US_SESSION:
+            continue
+
+        # Circuit breaker : pause après N jours perdants consécutifs (saute 1 jour)
+        if CONSEC_LOSS_PAUSE_DAYS > 0 and consec_loss_days >= CONSEC_LOSS_PAUSE_DAYS:
+            consec_loss_days = 0  # reset : la pause d'un jour relance le cycle
             continue
 
         # Garde-fou Topstep : saute la journée si slack insuffisant
@@ -107,15 +119,30 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
         not_filled = [t for t in day_trades if t["result"] == "NOT_FILLED"]
 
         # 3. Trier chronologiquement par heure de fill
-        # fill_time est une chaîne issue d'un pd.Timestamp ("YYYY-MM-DD HH:MM:SS"), donc triable
         filled.sort(key=lambda t: t["fill_time"])
 
-        # 4. Appliquer la limite MAX_TRADES_PER_DAY sur les trades chronologiques
-        kept_filled = filled[:MAX_TRADES_PER_DAY]
-        cancelled_filled = filled[MAX_TRADES_PER_DAY:]
-        
-        # Les ordres "trop tard" deviennent simplement non remplis (annulés virtuellement)
-        for t in cancelled_filled:
+        # 4. Appliquer la limite MAX_TRADES_PER_DAY
+        capped = filled[:MAX_TRADES_PER_DAY]
+        cancelled_late = filled[MAX_TRADES_PER_DAY:]
+
+        # 5. Circuit breakers intra-jour (daily stop + lock-in) appliqués chronologiquement
+        kept_filled = []
+        cancelled_cb = []
+        running_pnl = 0.0
+        breaker_armed = False
+        for t in capped:
+            if breaker_armed:
+                cancelled_cb.append(t)
+                continue
+            kept_filled.append(t)
+            running_pnl += t["pnl"]
+            if DAILY_STOP_AFTER_SL and t["result"] == "SL":
+                breaker_armed = True
+            elif DAILY_LOCKIN_THRESHOLD > 0 and running_pnl >= DAILY_LOCKIN_THRESHOLD:
+                breaker_armed = True
+
+        # Les ordres "trop tard" et ceux coupés par un breaker deviennent NOT_FILLED
+        for t in cancelled_late + cancelled_cb:
             t["result"] = "NOT_FILLED"
             t["pnl"] = 0
             t["fill_time"] = None
@@ -124,13 +151,19 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
 
         trades.extend(kept_filled)
         trades.extend(not_filled)
-        trades.extend(cancelled_filled)
+        trades.extend(cancelled_late)
+        trades.extend(cancelled_cb)
 
-        # Mise à jour des trackers Topstep après les trades de la journée
+        # Mise à jour des trackers Topstep et du streak perdant
         day_pnl = sum(t["pnl"] for t in kept_filled)
         cum_pnl += day_pnl
         if cum_pnl > peak_pnl:
             peak_pnl = cum_pnl
+        if day_pnl < 0:
+            consec_loss_days += 1
+        elif day_pnl > 0:
+            consec_loss_days = 0
+        # day_pnl == 0 (aucun trade rempli) : streak inchangé
 
     return pd.DataFrame(trades)
 

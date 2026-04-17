@@ -136,3 +136,62 @@ Le P&L reste équivalent à v4 mais le **risque Topstep est désormais compatibl
 
 **À faire** : walk-forward complet via `optimize.py` avec les nouvelles grilles
 (`GRID_COMPOSITE_ASSET`) pour calibrer composite/trend par asset sur IS/OOS.
+
+---
+
+## CHECKPOINT v5.1 — CIRCUIT BREAKERS INTRA-JOUR (avril 2026)
+
+**Objectif** : réduire le trailing drawdown sans sacrifier le taux de succès
+Topstep. On ajoute une couche de circuit breakers par-dessus le v5.
+
+### Nouveautés
+
+1. **`config.DAILY_STOP_AFTER_SL`** — arrêt intra-jour après le 1er SL.
+   Testé `True` : coupe trop de trades profitables (P&L total sous le target),
+   bootstrap chute. Désactivé par défaut.
+2. **`config.CONSEC_LOSS_PAUSE_DAYS`** — saute 1 jour après N jours perdants
+   consécutifs. **5 = sweet spot** empirique (le streak se reset après la pause).
+3. **`config.DAILY_LOCKIN_THRESHOLD`** — plafond de gain journalier. Seuil trop
+   bas plafonne la capacité à atteindre +$3000 dans les bootstraps. Désactivé
+   par défaut.
+4. **Câblage Phase C de l'optimizer** — `optimize_composite_per_asset` balaye
+   `GRID_COMPOSITE_ASSET` en walk-forward, réactive YM1 si OOS PF ≥ 1.2.
+
+### Résultats (déc 2024 → mars 2026, portefeuille)
+
+| | v5 (baseline) | **v5.1 (breakers)** | Δ |
+|---|---|---|---|
+| P&L total | +$3,084 | **+$3,322** | **+$238** |
+| Perte jour max | -$296 | -$296 | 0 |
+| Trailing DD | -$1,768 | **-$1,530** | **-$238** |
+| Consec. loss days | 8 | **7** | **-1** |
+| Jours gagnants | 52% | **53%** | +1pp |
+| Bootstrap pass | 99.8% | **99.9%** | +0.1pp |
+
+### Paramétrage retenu
+
+```python
+DAILY_STOP_AFTER_SL    = False   # trop agressif combiné aux autres
+CONSEC_LOSS_PAUSE_DAYS = 5       # le seul breaker retenu
+DAILY_LOCKIN_THRESHOLD = 0       # désactivé : faisait chuter le bootstrap
+```
+
+### Tests comparatifs (portefeuille)
+
+| Config | P&L | Trailing DD | Bootstrap |
+|---|---|---|---|
+| v5 baseline (aucun breaker) | +$3,084 | -$1,768 | 99.8% |
+| daily_stop seul | +$2,875 | -$1,318 | 52.6% |
+| consec_loss=5 seul | **+$3,322** | **-$1,530** | **99.9%** |
+| daily_stop + consec_loss=5 | +$2,965 | -$1,228 | 73.6% |
+| consec_loss=3 + lock-in=300 | +$2,380 | -$1,502 | 6.2% |
+
+### Verdict
+
++7.7% de P&L et -13.5% de trailing DD simultanément, sans aucune configuration
+additionnelle. Le breaker consécutif attrape les régimes défavorables
+(news cycle, vol extrême) en prenant un jour de récupération après 5 jours
+perdants — précisément les streaks qui creusent le trailing DD.
+
+**À faire** : lancer la Phase C walk-forward (`python optimize.py --csv-dir ./data`)
+pour calibrer score_min / trend_strength par asset et trancher sur YM1.

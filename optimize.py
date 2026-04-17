@@ -248,11 +248,28 @@ def set_composite_params(ticker: str, p: dict):
     config.TREND_STRENGTH_MIN[ticker] = p["trend_strength"]
 
 
+def set_ym1_enabled(enabled: bool):
+    """Active/désactive YM1 globalement (Phase C décide par PF OOS ≥ 1.2)."""
+    config.YM1_ENABLED = enabled
+    core.strategy.YM1_ENABLED = enabled
+
+
+_DEFAULTS_COMPOSITE = {
+    t: {
+        "score_min":      config.COMPOSITE_SCORE_MIN[t],
+        "trend_strength": config.TREND_STRENGTH_MIN[t],
+    }
+    for t in INSTRUMENTS
+}
+
+
 def restore_defaults():
     """Remet toutes les valeurs d'origine."""
     set_global_params(_DEFAULTS_GLOBAL)
     for t, p in _DEFAULTS_ASSET.items():
         set_asset_params(t, p)
+    for t, p in _DEFAULTS_COMPOSITE.items():
+        set_composite_params(t, p)
 
 
 # ==============================================================================
@@ -663,6 +680,96 @@ def optimize_per_asset(data: dict, trend_cache: dict, date_from: str, date_to: s
 
 
 # ==============================================================================
+# PHASE C — PARAMÈTRES DU SCORE COMPOSITE PAR ACTIF
+# ==============================================================================
+
+def optimize_composite_per_asset(
+    data: dict, trend_cache: dict,
+    date_from_is: str, date_to_is: str,
+    date_from_oos: str,
+):
+    """
+    Grid search sur COMPOSITE_SCORE_MIN et TREND_STRENGTH_MIN par actif.
+
+    Utilise run_period (chemin complet generate_signals) car le composite est
+    calculé à l'intérieur et n'est pas câblé dans run_period_cached. On scanne
+    donc IS pour sélectionner, puis on vérifie OOS.
+
+    Pour YM1 : le flag YM1_ENABLED est forcé True durant l'optimisation, puis
+    remis à False si PF OOS < 1.2.
+    """
+    keys   = list(GRID_COMPOSITE_ASSET.keys())
+    values = list(GRID_COMPOSITE_ASSET.values())
+    combos = list(itertools.product(*values))
+    total  = len(combos)
+
+    print(f"\n{'='*62}")
+    print(f"  PHASE C — Score composite par actif ({total} combinaisons × 3 actifs)")
+    print(f"{'='*62}")
+
+    # Autoriser YM1 uniquement pendant cette phase ; on décide à la fin.
+    set_ym1_enabled(True)
+
+    best_per_ticker = {}
+
+    for ticker, (df_15m, tf_dict) in data.items():
+        print(f"\n  ▸ Optimisation composite {ticker}...")
+        results = []
+        t0 = time.time()
+
+        for idx, combo in enumerate(combos, 1):
+            p = dict(zip(keys, combo))
+            set_composite_params(ticker, p)
+
+            m = compute_score(
+                run_period(df_15m, tf_dict, ticker, date_from_is, date_to_is,
+                           trend_cache[ticker])
+            )
+            results.append({"params": p, **m})
+
+            if idx % 10 == 0 or idx == total:
+                elapsed = time.time() - t0
+                eta = elapsed / idx * (total - idx)
+                best_so_far = max(results, key=lambda r: r["score"])
+                print(f"    [{idx:>3}/{total}]  meilleur P&L IS=${best_so_far['pnl']:>8,.0f}"
+                      f"  (score_min={best_so_far['params']['score_min']}"
+                      f"  trend={best_so_far['params']['trend_strength']})"
+                      f"  ETA {eta:.0f}s")
+
+        results.sort(key=lambda r: r["score"], reverse=True)
+        best = results[0]
+
+        # Vérifier OOS PF pour la décision YM1
+        set_composite_params(ticker, best["params"])
+        df_oos = run_period(df_15m, tf_dict, ticker, date_from_oos,
+                            "2030-12-31", trend_cache[ticker])
+        m_oos = compute_score(df_oos)
+
+        best_per_ticker[ticker] = {
+            **best["params"],
+            "is_pnl": best["pnl"], "is_pf": best["pf"], "is_wr": best["wr"],
+            "oos_pnl": m_oos["pnl"], "oos_pf": m_oos["pf"], "oos_wr": m_oos["wr"],
+            "oos_n": m_oos["n"],
+        }
+
+        print(f"\n  Meilleur composite {ticker}: score_min={best['params']['score_min']}"
+              f"  trend_strength={best['params']['trend_strength']}")
+        print(f"    IS  : n={best['n']}  WR={best['wr']*100:.0f}%"
+              f"  PF={best['pf']:.2f}  P&L=${best['pnl']:,.0f}")
+        print(f"    OOS : n={m_oos['n']}  WR={m_oos['wr']*100:.0f}%"
+              f"  PF={m_oos['pf']:.2f}  P&L=${m_oos['pnl']:,.0f}")
+
+    # Décision finale YM1 : PF OOS ≥ 1.2 requis
+    ym1 = best_per_ticker.get("YM1", {})
+    ym1_keep = ym1.get("oos_pf", 0) >= 1.2 and ym1.get("oos_n", 0) >= 8
+    set_ym1_enabled(ym1_keep)
+    print(f"\n  → YM1 {'✅ RÉACTIVÉ' if ym1_keep else '❌ DÉSACTIVÉ'}"
+          f"  (OOS PF={ym1.get('oos_pf', 0):.2f} ; seuil requis 1.20)")
+
+    return best_per_ticker, ym1_keep
+
+
+# ==============================================================================
 # VALIDATION OUT-OF-SAMPLE
 # ==============================================================================
 
@@ -798,6 +905,11 @@ def main():
         data, trend_cache, "2024-12-01", TRAIN_END
     )
 
+    # ── Phase C : paramètres composite par actif (IS + validation OOS PF) ──
+    best_composite, ym1_keep = optimize_composite_per_asset(
+        data, trend_cache, "2024-12-01", TRAIN_END, TEST_START
+    )
+
     # Calculer le P&L in-sample total avec les meilleurs paramètres
     print(f"\n{'='*62}")
     print(f"  IN-SAMPLE avec paramètres optimaux")
@@ -817,9 +929,14 @@ def main():
 
     # ── Récapitulatif ───────────────────────────────────────────────────────
     print_summary(best_global, best_per_ticker, train_pnl, oos_pnl)
+    print(f"\n  === Paramètres composite (Phase C) ===")
+    for t, p in best_composite.items():
+        print(f"  {t}: score_min={p['score_min']}  trend_strength={p['trend_strength']}"
+              f"  — IS PF={p['is_pf']:.2f}  OOS PF={p['oos_pf']:.2f}")
+    print(f"  YM1_ENABLED = {ym1_keep}")
 
     # ── Écrire les nouveaux paramètres dans config.py ──────────────────────
-    update_config(best_global, best_per_ticker)
+    update_config(best_global, best_per_ticker, best_composite, ym1_keep)
     print(f"\n  ✅ config.py mis à jour avec les paramètres optimaux.")
     print(f"  Relancer le backtest complet pour vérification :")
     print(f"    python backtest.py --csv-dir {args.csv_dir}")
@@ -829,7 +946,9 @@ def main():
 # MISE À JOUR DE CONFIG.PY
 # ==============================================================================
 
-def update_config(global_p: dict, asset_p: dict):
+def update_config(global_p: dict, asset_p: dict,
+                  composite_p: dict | None = None,
+                  ym1_enabled: bool | None = None):
     """Met à jour config.py avec les paramètres optimaux trouvés."""
     config_path = Path(__file__).parent / "config.py"
     text = config_path.read_text()
@@ -877,6 +996,28 @@ def update_config(global_p: dict, asset_p: dict):
             f'TREND_BEAR_THRESHOLD = -{global_p["trend_thr"]}'
         ),
     ]
+
+    # Phase C : paramètres composite + YM1_ENABLED
+    if composite_p is not None:
+        replacements.extend([
+            (
+                _find_line(text, "COMPOSITE_SCORE_MIN"),
+                f'COMPOSITE_SCORE_MIN = {{"MES1": {composite_p["MES1"]["score_min"]}, '
+                f'"NQ1": {composite_p["NQ1"]["score_min"]}, '
+                f'"YM1": {composite_p["YM1"]["score_min"]}}}'
+            ),
+            (
+                _find_line(text, "TREND_STRENGTH_MIN"),
+                f'TREND_STRENGTH_MIN = {{"MES1": {composite_p["MES1"]["trend_strength"]}, '
+                f'"NQ1": {composite_p["NQ1"]["trend_strength"]}, '
+                f'"YM1": {composite_p["YM1"]["trend_strength"]}}}'
+            ),
+        ])
+    if ym1_enabled is not None:
+        replacements.append((
+            _find_line(text, "YM1_ENABLED"),
+            f'YM1_ENABLED = {ym1_enabled}'
+        ))
 
     for old_line, new_line in replacements:
         if old_line and old_line in text:
