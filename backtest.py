@@ -21,22 +21,35 @@ from config import (
     RISK_PER_TRADE_USD, MAX_TRADES_PER_DAY, CUTOFF_HOUR_UTC,
     US_SESSION_START_UTC, US_SESSION_END_UTC,
     MIN_BARS_HISTORY, MIN_BARS_US_SESSION,
+    COMPOSITE_SCORE_MIN, TREND_STRENGTH_MIN,
+    TOPSTEP_DAILY_LOSS_MAX, TOPSTEP_TRAILING_DD,
+    TOPSTEP_PROFIT_TARGET,
 )
 from core.data import load_csv, build_timeframes
 from core.strategy import generate_signals, simulate_trade
 from core.trend import precompute_trends
+from core.risk_topstep import trade_allowed
 from core.chart import plot_signal, plot_backtest_trade
 
 
-def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFrame:
+def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
+                 topstep_guard: bool = True) -> pd.DataFrame:
     """
     Backtest complet jour par jour.
     Les ordres non remplis ne comptent PAS vers le max de 2 trades/jour.
+
+    Args:
+        topstep_guard : si True, vérifie le slack Topstep avant chaque journée
+                         et saute le jour si le risque nominal dépasserait la limite.
     """
     dpp = INSTRUMENTS[ticker]["dollar_per_point"]
     trend_scores = precompute_trends(tf_dict)
     dates = df_15m.index.normalize().unique()
     trades = []
+
+    # Trackers Topstep (sur la séquence backtest du ticker)
+    cum_pnl = 0.0
+    peak_pnl = 0.0
 
     for day in dates:
         ds = day.strftime("%Y-%m-%d")
@@ -47,6 +60,12 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFra
         us_data = df_15m[(df_15m.index >= us_start) & (df_15m.index <= us_end)]
         if len(us_data) < MIN_BARS_US_SESSION:
             continue
+
+        # Garde-fou Topstep : saute la journée si slack insuffisant
+        if topstep_guard:
+            allowed, _ = trade_allowed(day_pnl=0.0, cum_pnl=cum_pnl, peak_pnl=peak_pnl)
+            if not allowed:
+                continue
 
         # Identique au mode live : on ne génère que les max N meilleurs signaux (qualité décroissante)
         signals = generate_signals(df_15m, tf_dict, ticker, cutoff, trend_scores,
@@ -68,6 +87,9 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFra
                 "n_ct": sig["n_ct"],
                 "risk_$": sig["risk"],
                 "quality": sig["quality"],
+                "composite": sig.get("composite", 0),
+                "alignment": sig.get("alignment", 0),
+                "atr_ratio": sig.get("atr_ratio", 0),
                 "n_tf": sig["n_tf"],
                 "touches": sig["touches"],
                 "regime": sig["regime"],
@@ -104,6 +126,12 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str) -> pd.DataFra
         trades.extend(not_filled)
         trades.extend(cancelled_filled)
 
+        # Mise à jour des trackers Topstep après les trades de la journée
+        day_pnl = sum(t["pnl"] for t in kept_filled)
+        cum_pnl += day_pnl
+        if cum_pnl > peak_pnl:
+            peak_pnl = cum_pnl
+
     return pd.DataFrame(trades)
 
 
@@ -111,6 +139,9 @@ def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
     """Vérifie l'intégrité des trades."""
     dpp = INSTRUMENTS[ticker]["dollar_per_point"]
     sl_min = SL_MINIMUM[ticker]
+    if len(df_trades) == 0 or "result" not in df_trades.columns:
+        print(f"  AUDIT: ⚠ aucun trade généré (filtre composite trop strict ?)")
+        return True
     filled = df_trades[df_trades["result"] != "NOT_FILLED"]
     errors = 0
 
@@ -143,6 +174,9 @@ def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
 
 def print_stats(df_trades: pd.DataFrame, ticker: str):
     """Rapport statistique."""
+    if len(df_trades) == 0 or "result" not in df_trades.columns:
+        print(f"  Aucun signal généré")
+        return
     filled = df_trades[df_trades["result"] != "NOT_FILLED"]
     if len(filled) == 0:
         print(f"  Aucun trade rempli")
@@ -195,6 +229,179 @@ def print_stats(df_trades: pd.DataFrame, ticker: str):
         bar = "█" * max(1, int(abs(v) / 100))
         bust = " ⚠ BUST" if v < -2000 else ""
         print(f"  {m} : ${v:>+8,.0f} {bar}{bust}")
+
+
+def validate_topstep(df_trades: pd.DataFrame, n_bootstrap: int = 1000) -> dict:
+    """
+    Métriques spécifiques au challenge Topstep.
+
+    Calcule le DD trailing (peak_pnl - cum_pnl) simulé, la perte journalière max,
+    le nombre max de jours consécutifs perdants, le taux de journées gagnantes,
+    et un bootstrap challenge (X% de permutations qui atteignent le target sans
+    violation des limites).
+    """
+    if len(df_trades) == 0 or "result" not in df_trades.columns:
+        return {"passed": False, "reason": "no_trades"}
+    filled = df_trades[df_trades["result"] != "NOT_FILLED"].copy()
+    if len(filled) == 0:
+        return {"passed": False, "reason": "no_trades"}
+
+    # Agrégation par jour
+    daily = filled.groupby("date")["pnl"].sum().sort_index()
+    days = daily.values
+
+    # Séquence Topstep (ordre chronologique)
+    cum = np.cumsum(days)
+    peak = np.maximum.accumulate(cum)
+    trailing_dd = (cum - peak).min()          # valeur ≤ 0
+    max_daily_loss = days.min()               # valeur ≤ 0
+    max_daily_gain = days.max()
+
+    # Jours consécutifs perdants
+    max_consec_loss = 0
+    cur = 0
+    for v in days:
+        if v < 0:
+            cur += 1
+            max_consec_loss = max(max_consec_loss, cur)
+        else:
+            cur = 0
+
+    n_days = len(days)
+    n_win = int((days > 0).sum())
+    n_flat = int((days == 0).sum())
+    winning_ratio = n_win / n_days if n_days > 0 else 0.0
+
+    # Bootstrap challenge : reshuffle l'ordre des jours
+    rng = np.random.default_rng(42)
+    pass_count = 0
+    for _ in range(n_bootstrap):
+        perm = rng.permutation(days)
+        c = 0.0
+        p = 0.0
+        ok = True
+        reached = False
+        for d in perm:
+            # Violation daily loss
+            if d <= -TOPSTEP_DAILY_LOSS_MAX:
+                ok = False; break
+            c += d
+            if c > p:
+                p = c
+            # Violation trailing DD
+            if (p - c) >= TOPSTEP_TRAILING_DD:
+                ok = False; break
+            if c >= TOPSTEP_PROFIT_TARGET:
+                reached = True
+                break
+        if ok and reached:
+            pass_count += 1
+
+    bootstrap_pass_rate = pass_count / n_bootstrap if n_bootstrap > 0 else 0.0
+
+    return {
+        "n_days": n_days,
+        "n_winning_days": n_win,
+        "n_flat_days": n_flat,
+        "winning_ratio": winning_ratio,
+        "trailing_dd": float(trailing_dd),
+        "max_daily_loss": float(max_daily_loss),
+        "max_daily_gain": float(max_daily_gain),
+        "max_consec_loss": int(max_consec_loss),
+        "bootstrap_pass_rate": bootstrap_pass_rate,
+        "violates_daily": bool(max_daily_loss <= -TOPSTEP_DAILY_LOSS_MAX),
+        "violates_trailing": bool(trailing_dd <= -TOPSTEP_TRAILING_DD),
+    }
+
+
+def print_topstep_report(ts: dict, ticker: str):
+    """Affiche les métriques Topstep pour un ticker."""
+    print(f"\n  {'─'*55}")
+    print(f"  TOPSTEP — Validation challenge 50K ({ticker})")
+    print(f"  {'─'*55}")
+    if ts.get("reason") == "no_trades":
+        print(f"  Aucun trade")
+        return
+    flag_d = "❌" if ts["violates_daily"] else "✅"
+    flag_t = "❌" if ts["violates_trailing"] else "✅"
+    print(f"  Jours         : {ts['n_days']} ({ts['n_winning_days']} win, ratio {ts['winning_ratio']*100:.0f}%)")
+    print(f"  Perte jour max: ${ts['max_daily_loss']:+,.0f}   {flag_d} (limite -${TOPSTEP_DAILY_LOSS_MAX})")
+    print(f"  Trailing DD   : ${ts['trailing_dd']:+,.0f}   {flag_t} (limite -${TOPSTEP_TRAILING_DD})")
+    print(f"  Consec. loss  : {ts['max_consec_loss']} jours")
+    print(f"  Bootstrap pass: {ts['bootstrap_pass_rate']*100:.1f}%  (cible ≥ 80%)")
+
+
+def portfolio_topstep_report(results: list, n_bootstrap: int = 1000):
+    """
+    Validation Topstep sur le portefeuille global (P&L journalier agrégé
+    sur les 3 actifs, c'est ainsi que le broker Topstep le voit).
+    """
+    all_days = {}
+    for r in results:
+        filled = r["filled"]
+        if filled is None or len(filled) == 0:
+            continue
+        for _, row in filled.iterrows():
+            d = row["date"]
+            all_days[d] = all_days.get(d, 0.0) + float(row["pnl"])
+
+    if not all_days:
+        print("\n  PORTEFEUILLE — Aucun trade")
+        return
+
+    daily = pd.Series(all_days).sort_index()
+    days = daily.values
+
+    cum = np.cumsum(days)
+    peak = np.maximum.accumulate(cum)
+    trailing_dd = (cum - peak).min()
+    max_daily_loss = days.min()
+    max_daily_gain = days.max()
+    n_win = int((days > 0).sum())
+    winning_ratio = n_win / len(days)
+
+    max_consec = 0
+    cur = 0
+    for v in days:
+        if v < 0:
+            cur += 1
+            max_consec = max(max_consec, cur)
+        else:
+            cur = 0
+
+    # Bootstrap portfolio
+    rng = np.random.default_rng(42)
+    pass_count = 0
+    for _ in range(n_bootstrap):
+        perm = rng.permutation(days)
+        c, p = 0.0, 0.0
+        ok, reached = True, False
+        for d in perm:
+            if d <= -TOPSTEP_DAILY_LOSS_MAX:
+                ok = False; break
+            c += d
+            if c > p: p = c
+            if (p - c) >= TOPSTEP_TRAILING_DD:
+                ok = False; break
+            if c >= TOPSTEP_PROFIT_TARGET:
+                reached = True; break
+        if ok and reached:
+            pass_count += 1
+    boot = pass_count / n_bootstrap if n_bootstrap > 0 else 0.0
+
+    total_pnl = float(cum[-1])
+    flag_d = "❌" if max_daily_loss <= -TOPSTEP_DAILY_LOSS_MAX else "✅"
+    flag_t = "❌" if trailing_dd <= -TOPSTEP_TRAILING_DD else "✅"
+    print(f"\n  {'═'*55}")
+    print(f"  PORTEFEUILLE — TOPSTEP 50K (3 actifs agrégés)")
+    print(f"  {'═'*55}")
+    print(f"  Jours         : {len(days)} ({n_win} win, ratio {winning_ratio*100:.0f}%)")
+    print(f"  P&L total     : ${total_pnl:+,.0f}")
+    print(f"  Perte jour max: ${max_daily_loss:+,.0f}   {flag_d} (limite -${TOPSTEP_DAILY_LOSS_MAX})")
+    print(f"  Gain jour max : ${max_daily_gain:+,.0f}")
+    print(f"  Trailing DD   : ${trailing_dd:+,.0f}   {flag_t} (limite -${TOPSTEP_TRAILING_DD})")
+    print(f"  Consec. loss  : {max_consec} jours")
+    print(f"  Bootstrap pass: {boot*100:.1f}%  (cible ≥ 80%, target $+{TOPSTEP_PROFIT_TARGET})")
 
 
 def format_backtest_report(results: list) -> str:
@@ -288,9 +495,14 @@ def main():
         df_trades = run_backtest(df_15m, tf, ticker)
         audit(df_trades, ticker)
         print_stats(df_trades, ticker)
+        ts = validate_topstep(df_trades, n_bootstrap=1000)
+        print_topstep_report(ts, ticker)
 
         # Collecter les résultats pour le rapport Telegram
-        filled_trades = df_trades[df_trades["result"] != "NOT_FILLED"]
+        if len(df_trades) > 0 and "result" in df_trades.columns:
+            filled_trades = df_trades[df_trades["result"] != "NOT_FILLED"]
+        else:
+            filled_trades = pd.DataFrame()
         backtest_results.append({"ticker": ticker, "filled": filled_trades})
 
         # Sauvegarde
@@ -332,6 +544,9 @@ def main():
                     if (idx + 1) % 25 == 0:
                         print(f"    {idx+1}/{total}...")
                 print(f"  ✓ {total} graphiques → {chart_dir}")
+
+    # Validation Topstep portefeuille (P&L journalier agrégé sur tous les tickers)
+    portfolio_topstep_report(backtest_results, n_bootstrap=1000)
 
     print(f"\n{'='*60}")
     print(f"  ✅ BACKTEST TERMINÉ")

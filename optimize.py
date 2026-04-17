@@ -196,6 +196,12 @@ GRID_ASSET = {
     "sl_buffer":   [2, 3, 4, 5, 6],
 }
 
+# Phase C : paramètres du score composite par actif
+GRID_COMPOSITE_ASSET = {
+    "score_min":       [50, 55, 58, 60, 65, 70],
+    "trend_strength":  [0.15, 0.20, 0.25, 0.30, 0.40],
+}
+
 # Valeurs par défaut (sauvegardées au démarrage pour restauration finale)
 _DEFAULTS_GLOBAL = {
     "dist_min":  config.ZONE_DISTANCE_MIN_PCT,
@@ -234,6 +240,12 @@ def set_asset_params(ticker: str, p: dict):
     config.RR_TARGET[ticker]          = p["rr"]
     config.ZONE_QUALITY_MIN[ticker]   = p["quality_min"]
     core.strategy.SL_BUFFER_TICKS     = p["sl_buffer"]
+
+
+def set_composite_params(ticker: str, p: dict):
+    """Applique les paramètres du score composite (Phase C)."""
+    config.COMPOSITE_SCORE_MIN[ticker] = p["score_min"]
+    config.TREND_STRENGTH_MIN[ticker] = p["trend_strength"]
 
 
 def restore_defaults():
@@ -318,14 +330,17 @@ def compute_score(df: pd.DataFrame) -> dict:
     """
     Objectif principal : P&L total (maximiser).
 
-    Contraintes de robustesse (score = 0 si non satisfaites) :
-      - n_trades >= 8   → évite les sur-optimisations sur 3 trades chanceux
-      - win_rate >= 40% → cohérence statistique minimale
-      - profit_factor >= 1.2
+    Contraintes Topstep-aware (score = 0 si non satisfaites) :
+      - n_trades >= 8    → évite sur-optimisation sur petit échantillon
+      - win_rate >= 32%  → plancher statistique
+      - profit_factor >= 1.4 → durcie pour Topstep 50K
+      - max_dd >= -1200  → marge sur trailing DD de 2000
+      - max_consec_losses <= 5 → évite les streaks mortels
 
     Score final = pnl_total si contraintes OK, sinon 0.
     """
-    empty = {"score": 0.0, "n": 0, "wr": 0.0, "pf": 0.0, "pnl": 0.0}
+    empty = {"score": 0.0, "n": 0, "wr": 0.0, "pf": 0.0, "pnl": 0.0,
+             "dd": 0.0, "consec": 0}
     if df.empty:
         return empty
 
@@ -341,10 +356,28 @@ def compute_score(df: pd.DataFrame) -> dict:
     gross_loss = abs(filled[filled["pnl"] <= 0]["pnl"].sum()) or 1.0
     pf         = gross_win / gross_loss
 
-    if wr < 0.30 or pf < 1.2:
-        return {"score": 0.0, "n": n, "wr": wr, "pf": pf, "pnl": pnl}
+    # DD et streak sur P&L cumulatif journalier
+    daily = filled.groupby("date")["pnl"].sum().sort_index().values
+    cum = np.cumsum(daily)
+    peak = np.maximum.accumulate(cum)
+    dd = float((cum - peak).min()) if len(cum) > 0 else 0.0
+    consec = 0
+    cur = 0
+    for v in daily:
+        if v < 0:
+            cur += 1
+            consec = max(consec, cur)
+        else:
+            cur = 0
 
-    return {"score": pnl, "n": n, "wr": wr, "pf": pf, "pnl": pnl}
+    out = {"score": 0.0, "n": n, "wr": wr, "pf": pf, "pnl": pnl,
+           "dd": dd, "consec": consec}
+
+    if wr < 0.32 or pf < 1.4 or dd < -1200 or consec > 5:
+        return out
+
+    out["score"] = pnl
+    return out
 
 
 # ==============================================================================

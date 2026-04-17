@@ -135,6 +135,59 @@ TREND_WEIGHTS = {"D1": 0.40, "H4": 0.35, "H1": 0.25}
 TREND_BULL_THRESHOLD = 0.33
 TREND_BEAR_THRESHOLD = -0.33
 
+# Force de tendance minimale (|alignment_score|) par actif.
+# Filtre appliqué par le score composite, même en régime BULL/BEAR.
+TREND_STRENGTH_MIN = {"MES1": 0.25, "NQ1": 0.20, "YM1": 0.40}
+
+# ==============================================================================
+# SCORE COMPOSITE (coeur du filtrage ultra-sélectif)
+# ==============================================================================
+# Pondération du score composite (somme = 1.0).
+COMPOSITE_WEIGHTS = {
+    "zone_quality":    0.40,
+    "trend_alignment": 0.25,
+    "pm_context":      0.20,
+    "volatility":      0.15,
+}
+
+# Seuil composite minimum par actif (0-100). Plus élevé = plus sélectif.
+COMPOSITE_SCORE_MIN = {"MES1": 60, "NQ1": 58, "YM1": 70}
+
+# YM1 : désactivation globale tant qu'aucune preuve OOS (PF ≥ 1.2).
+# L'optimizer peut basculer à True après validation.
+YM1_ENABLED = False
+
+# ==============================================================================
+# VOLATILITÉ PRÉ-MARCHÉ
+# ==============================================================================
+# Toutes les mesures sont normalisées par l'ATR journalier (atr_daily) —
+# ainsi les seuils sont interprétables : 0.5 = 50% d'une journée typique.
+ATR_OVN_PERIOD       = 14              # Période de l'ATR journalier (jours)
+ATR30_LOOKBACK_DAYS  = 30              # Fenêtre 15m qui sert à reconstruire les bougies D1
+VOL_SCORE_CENTER     = 0.55            # Nuit "moyenne" = 55% du range journalier
+VOL_SCORE_TOL        = 0.30            # Tolérance de la courbe cloche
+
+# atr_ratio = ovn_range / atr_daily. Bornes : nuit trop calme ou trop agitée.
+ATR_RATIO_MIN = {"MES1": 0.20, "NQ1": 0.20, "YM1": 0.18}
+ATR_RATIO_MAX = {"MES1": 1.40, "NQ1": 1.50, "YM1": 1.30}
+
+# Gap (|open session - close J-1|) / atr_daily — rejet si gap violent.
+GAP_ATR_MAX   = {"MES1": 0.80, "NQ1": 0.90, "YM1": 0.70}
+
+# Range overnight / atr_daily — même mesure que atr_ratio, conservé pour lisibilité.
+OVN_RANGE_MAX = {"MES1": 1.40, "NQ1": 1.50, "YM1": 1.30}
+
+# ==============================================================================
+# GARDE-FOU TOPSTEP (challenge 50K)
+# ==============================================================================
+TOPSTEP_ACCOUNT_SIZE   = 50_000
+TOPSTEP_PROFIT_TARGET  = 3_000
+TOPSTEP_DAILY_LOSS_MAX = 1_000         # Limite perte journalière (valeur absolue)
+TOPSTEP_TRAILING_DD    = 2_000         # Trailing drawdown maximum
+
+# Marge de sécurité : autorise le trade si slack > risk × mult.
+TOPSTEP_SAFETY_MULT    = 1.1
+
 # ==============================================================================
 # GRAPHIQUES
 # ==============================================================================

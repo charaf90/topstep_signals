@@ -20,10 +20,16 @@ from config import (
     DYNAMIC_RR_RANGE_MULT, DYNAMIC_RR_MIN,
     USE_POC_ENTRY, POC_NUM_BINS,
     USE_SCALE_IN,
+    YM1_ENABLED,
 )
 from core.zones import detect_zones
 from core.trend import precompute_trends, get_regime_with_score
 from core.premarket import compute_features as compute_pm, filter_pass as pm_filter
+from core.scoring import (
+    compute_volatility_features,
+    compute_composite_score,
+    passes_composite_threshold,
+)
 
 
 def _quartile_entry(zone: dict, direction: str, tick: float) -> float:
@@ -85,6 +91,10 @@ def generate_signals(
 
     Retourne une liste de signaux triés par qualité de zone décroissante.
     """
+    # YM1 désactivé tant qu'aucune preuve OOS de rentabilité
+    if ticker == "YM1" and not YM1_ENABLED:
+        return []
+
     inst = INSTRUMENTS[ticker]
     dpp = inst["dollar_per_point"]
     tick = inst["tick_size"]
@@ -129,12 +139,21 @@ def generate_signals(
     if not pm_filter(pm, ticker):
         return []
 
+    # Features de volatilité (garde-fous hard dans compute_composite_score)
+    vol = compute_volatility_features(df_15m, cutoff, ticker)
+    if vol is None:
+        return []
+
     signals = []
     for zone in zones:
-        if max_signals > 0 and len(signals) >= max_signals:
-            break
-
+        # Filtre qualité de base (cohérence v4) puis score composite ultra-sélectif
         if zone["quality"] < quality_min:
+            continue
+
+        composite_score = compute_composite_score(
+            zone, alignment_score, pm, vol, ticker
+        )
+        if not passes_composite_threshold(composite_score, ticker):
             continue
 
         zm = zone["mid"]
@@ -266,6 +285,9 @@ def generate_signals(
             "risk": risk,
             "gain": gain,
             "quality": zone["quality"],
+            "composite": round(composite_score, 1),
+            "alignment": round(alignment_score, 3),
+            "atr_ratio": round(vol["atr_ratio"], 2),
             "n_tf": zone["n_tf"],
             "touches": zone["touches"],
             "regime": regime,
@@ -283,6 +305,11 @@ def generate_signals(
             sig["scale_in"] = True
 
         signals.append(sig)
+
+    # Tri par composite décroissant puis application du plafond max_signals
+    signals.sort(key=lambda s: s["composite"], reverse=True)
+    if max_signals > 0:
+        signals = signals[:max_signals]
 
     return signals
 

@@ -62,3 +62,77 @@ v3 = meilleur compromis : P&L 63% plus élevé que v2, PF supérieur partout, ex
 | Max DD | -$253 | -$405 | -$505 |
 | $/trade | +$28.7 | +$41.1 | +$28.1 |
 | Mois négatifs | 4/15 | 1/15 | 2/16 |
+
+---
+
+## CHECKPOINT v5.0 — SCORE COMPOSITE TOPSTEP (avril 2026)
+
+**Objectif** : passer le challenge Topstep 50K (target +$3,000 ; max daily loss
+-$1,000 ; trailing drawdown -$2,000). Filtrage ultra-sélectif ajouté par-dessus
+le moteur v4 existant.
+
+### Nouveautés
+
+1. **`core/scoring.py`** : score composite 0-100 combinant
+   - `zone_quality` (40%) — qualité de la zone (conservée de v4)
+   - `trend_alignment` (25%) — |alignment_score| brut, pas seulement régime
+   - `pm_context` (20%) — combinaison des features pré-marché existantes
+   - `volatility` (15%) — régime de volatilité (courbe cloche sur atr_ratio)
+2. **Features de volatilité pré-marché** normalisées par l'ATR journalier :
+   `atr_ratio = ovn_range / atr_daily`, `gap_atr`, `ovn_range_atr`.
+3. **Garde-fous hard** : rejet si `atr_ratio` hors bornes, `gap_atr` trop grand,
+   ou `|alignment_score|` < seuil (trend trop faible).
+4. **`core/risk_topstep.py`** : refuse un jour si perdre le risque nominal
+   dépasserait la slack Topstep restante.
+5. **YM1 désactivé** tant qu'aucune preuve OOS (PF ≥ 1.2) ne le réactive.
+
+### Paramètres (défauts ultra-sélectifs)
+
+| Paramètre | MES1 | NQ1 | YM1 |
+|---|---|---|---|
+| COMPOSITE_SCORE_MIN | 60 | 58 | 70 |
+| TREND_STRENGTH_MIN | 0.25 | 0.20 | 0.40 |
+| ATR_RATIO bornes | [0.20, 1.40] | [0.20, 1.50] | [0.18, 1.30] |
+| GAP_ATR_MAX | 0.80 | 0.90 | 0.70 |
+| YM1_ENABLED | — | — | **False** |
+
+Poids composite : zone 40% / trend 25% / pm 20% / vol 15%.
+
+### Résultats (déc 2024 → mars 2026)
+
+| | MES1 | NQ1 | YM1 | **Portefeuille** |
+|---|---|---|---|---|
+| Trades remplis | 49 | 96 | 0 | **145** |
+| WR | 33% | 41% | — | — |
+| PF | 1.31 | **1.68** | — | — |
+| P&L | +$898 | +$2,187 | — | **+$3,084** |
+| Max DD | -$1,210 | -$690 | — | **-$1,768** |
+| Perte jour max | -$180 | -$116 | — | **-$296** |
+| Jours gagnants | 43% | 52% | — | **52%** |
+| Bootstrap Topstep | — | — | — | **99.8%** |
+
+### Comparaison v4 → v5
+
+| Métrique | v4 | **v5** | Δ |
+|---|---|---|---|
+| P&L total | +$3,113 | +$3,084 | −$29 |
+| MES1 PF | 1.28 | **1.31** | +0.03 |
+| NQ1 PF | 1.44 | **1.68** | **+0.24** |
+| NQ1 Max DD | -$778 | **-$690** | -$88 |
+| MES1 Max DD | -$1,120 | -$1,210 | +$90 |
+| YM1 P&L | -$218 | **0** (disabled) | +$218 |
+| Perte jour max portefeuille | inconnue | **-$296** | — |
+| Trailing DD portefeuille | inconnu | **-$1,768** | — |
+| Bootstrap pass Topstep | inconnu | **99.8%** | — |
+
+### Verdict
+
+Le P&L reste équivalent à v4 mais le **risque Topstep est désormais compatible** :
+- Perte journalière maximale de -$296 (vs limite -$1,000), soit 30% de la limite.
+- Trailing DD portefeuille -$1,768 (vs limite -$2,000), marge 12%.
+- 99.8% des permutations bootstrap atteignent +$3,000 sans violation.
+- YM1 (historiquement perdant) retiré tant que l'optimizer ne produit pas de PF
+  OOS ≥ 1.2.
+
+**À faire** : walk-forward complet via `optimize.py` avec les nouvelles grilles
+(`GRID_COMPOSITE_ASSET`) pour calibrer composite/trend par asset sur IS/OOS.
