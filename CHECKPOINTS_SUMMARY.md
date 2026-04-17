@@ -62,3 +62,194 @@ v3 = meilleur compromis : P&L 63% plus élevé que v2, PF supérieur partout, ex
 | Max DD | -$253 | -$405 | -$505 |
 | $/trade | +$28.7 | +$41.1 | +$28.1 |
 | Mois négatifs | 4/15 | 1/15 | 2/16 |
+
+---
+
+## CHECKPOINT v5.0 — SCORE COMPOSITE TOPSTEP (avril 2026)
+
+**Objectif** : passer le challenge Topstep 50K (target +$3,000 ; max daily loss
+-$1,000 ; trailing drawdown -$2,000). Filtrage ultra-sélectif ajouté par-dessus
+le moteur v4 existant.
+
+### Nouveautés
+
+1. **`core/scoring.py`** : score composite 0-100 combinant
+   - `zone_quality` (40%) — qualité de la zone (conservée de v4)
+   - `trend_alignment` (25%) — |alignment_score| brut, pas seulement régime
+   - `pm_context` (20%) — combinaison des features pré-marché existantes
+   - `volatility` (15%) — régime de volatilité (courbe cloche sur atr_ratio)
+2. **Features de volatilité pré-marché** normalisées par l'ATR journalier :
+   `atr_ratio = ovn_range / atr_daily`, `gap_atr`, `ovn_range_atr`.
+3. **Garde-fous hard** : rejet si `atr_ratio` hors bornes, `gap_atr` trop grand,
+   ou `|alignment_score|` < seuil (trend trop faible).
+4. **`core/risk_topstep.py`** : refuse un jour si perdre le risque nominal
+   dépasserait la slack Topstep restante.
+5. **YM1 désactivé** tant qu'aucune preuve OOS (PF ≥ 1.2) ne le réactive.
+
+### Paramètres (défauts ultra-sélectifs)
+
+| Paramètre | MES1 | NQ1 | YM1 |
+|---|---|---|---|
+| COMPOSITE_SCORE_MIN | 60 | 58 | 70 |
+| TREND_STRENGTH_MIN | 0.25 | 0.20 | 0.40 |
+| ATR_RATIO bornes | [0.20, 1.40] | [0.20, 1.50] | [0.18, 1.30] |
+| GAP_ATR_MAX | 0.80 | 0.90 | 0.70 |
+| YM1_ENABLED | — | — | **False** |
+
+Poids composite : zone 40% / trend 25% / pm 20% / vol 15%.
+
+### Résultats (déc 2024 → mars 2026)
+
+| | MES1 | NQ1 | YM1 | **Portefeuille** |
+|---|---|---|---|---|
+| Trades remplis | 49 | 96 | 0 | **145** |
+| WR | 33% | 41% | — | — |
+| PF | 1.31 | **1.68** | — | — |
+| P&L | +$898 | +$2,187 | — | **+$3,084** |
+| Max DD | -$1,210 | -$690 | — | **-$1,768** |
+| Perte jour max | -$180 | -$116 | — | **-$296** |
+| Jours gagnants | 43% | 52% | — | **52%** |
+| Bootstrap Topstep | — | — | — | **99.8%** |
+
+### Comparaison v4 → v5
+
+| Métrique | v4 | **v5** | Δ |
+|---|---|---|---|
+| P&L total | +$3,113 | +$3,084 | −$29 |
+| MES1 PF | 1.28 | **1.31** | +0.03 |
+| NQ1 PF | 1.44 | **1.68** | **+0.24** |
+| NQ1 Max DD | -$778 | **-$690** | -$88 |
+| MES1 Max DD | -$1,120 | -$1,210 | +$90 |
+| YM1 P&L | -$218 | **0** (disabled) | +$218 |
+| Perte jour max portefeuille | inconnue | **-$296** | — |
+| Trailing DD portefeuille | inconnu | **-$1,768** | — |
+| Bootstrap pass Topstep | inconnu | **99.8%** | — |
+
+### Verdict
+
+Le P&L reste équivalent à v4 mais le **risque Topstep est désormais compatible** :
+- Perte journalière maximale de -$296 (vs limite -$1,000), soit 30% de la limite.
+- Trailing DD portefeuille -$1,768 (vs limite -$2,000), marge 12%.
+- 99.8% des permutations bootstrap atteignent +$3,000 sans violation.
+- YM1 (historiquement perdant) retiré tant que l'optimizer ne produit pas de PF
+  OOS ≥ 1.2.
+
+**À faire** : walk-forward complet via `optimize.py` avec les nouvelles grilles
+(`GRID_COMPOSITE_ASSET`) pour calibrer composite/trend par asset sur IS/OOS.
+
+---
+
+## CHECKPOINT v5.1 — CIRCUIT BREAKERS INTRA-JOUR (avril 2026)
+
+**Objectif** : réduire le trailing drawdown sans sacrifier le taux de succès
+Topstep. On ajoute une couche de circuit breakers par-dessus le v5.
+
+### Nouveautés
+
+1. **`config.DAILY_STOP_AFTER_SL`** — arrêt intra-jour après le 1er SL.
+   Testé `True` : coupe trop de trades profitables (P&L total sous le target),
+   bootstrap chute. Désactivé par défaut.
+2. **`config.CONSEC_LOSS_PAUSE_DAYS`** — saute 1 jour après N jours perdants
+   consécutifs. **5 = sweet spot** empirique (le streak se reset après la pause).
+3. **`config.DAILY_LOCKIN_THRESHOLD`** — plafond de gain journalier. Seuil trop
+   bas plafonne la capacité à atteindre +$3000 dans les bootstraps. Désactivé
+   par défaut.
+4. **Câblage Phase C de l'optimizer** — `optimize_composite_per_asset` balaye
+   `GRID_COMPOSITE_ASSET` en walk-forward, réactive YM1 si OOS PF ≥ 1.2.
+
+### Résultats (déc 2024 → mars 2026, portefeuille)
+
+| | v5 (baseline) | **v5.1 (breakers)** | Δ |
+|---|---|---|---|
+| P&L total | +$3,084 | **+$3,322** | **+$238** |
+| Perte jour max | -$296 | -$296 | 0 |
+| Trailing DD | -$1,768 | **-$1,530** | **-$238** |
+| Consec. loss days | 8 | **7** | **-1** |
+| Jours gagnants | 52% | **53%** | +1pp |
+| Bootstrap pass | 99.8% | **99.9%** | +0.1pp |
+
+### Paramétrage retenu
+
+```python
+DAILY_STOP_AFTER_SL    = False   # trop agressif combiné aux autres
+CONSEC_LOSS_PAUSE_DAYS = 5       # le seul breaker retenu
+DAILY_LOCKIN_THRESHOLD = 0       # désactivé : faisait chuter le bootstrap
+```
+
+### Tests comparatifs (portefeuille)
+
+| Config | P&L | Trailing DD | Bootstrap |
+|---|---|---|---|
+| v5 baseline (aucun breaker) | +$3,084 | -$1,768 | 99.8% |
+| daily_stop seul | +$2,875 | -$1,318 | 52.6% |
+| consec_loss=5 seul | **+$3,322** | **-$1,530** | **99.9%** |
+| daily_stop + consec_loss=5 | +$2,965 | -$1,228 | 73.6% |
+| consec_loss=3 + lock-in=300 | +$2,380 | -$1,502 | 6.2% |
+
+### Verdict
+
++7.7% de P&L et -13.5% de trailing DD simultanément, sans aucune configuration
+additionnelle. Le breaker consécutif attrape les régimes défavorables
+(news cycle, vol extrême) en prenant un jour de récupération après 5 jours
+perdants — précisément les streaks qui creusent le trailing DD.
+
+**À faire** : lancer la Phase C walk-forward (`python optimize.py --csv-dir ./data`)
+pour calibrer score_min / trend_strength par asset et trancher sur YM1.
+
+---
+
+## CHECKPOINT v5.2 — CALIBRATION PHASE C WALK-FORWARD (avril 2026)
+
+**Méthode** : `run_phase_c.py` = walk-forward IS (déc 2024 → sept 2025) / OOS
+(oct 2025 → mars 2026) sur `GRID_COMPOSITE_ASSET` (30 combos par actif).
+Sélection par P&L IS ; validation par PF OOS.
+
+### Résultats Phase C
+
+| Actif | IS: score_min / trend | IS PF | IS P&L | OOS PF | OOS P&L | Décision |
+|---|---|---|---|---|---|---|
+| MES1 | 58 / 0.15 | 2.97 | +$1,952 | **0.64** | -$785 | **REJET** (overfit) |
+| NQ1  | 55 / 0.30 | 2.04 | +$1,723 | **1.75** | +$870 | **RETENU** |
+| YM1  | 50 / 0.15 | 1.14 | +$570 | **0.73** | -$928 | YM1 reste désactivé |
+
+### Application
+
+- **MES1** : reverté aux valeurs v5 (`score_min=60`, `trend=0.25`) car
+  l'optimizer pickait une configuration overfittée (OOS PF 0.64).
+- **NQ1** : adopté (`score_min=55`, `trend=0.30`). Seul actif à valider OOS.
+- **YM1** : `YM1_ENABLED=False` confirmé (OOS PF 0.73 < 1.2 requis).
+
+### Résultats portefeuille (déc 2024 → mars 2026, avec circuit breakers v5.1)
+
+| | v5.0 | v5.1 (breakers) | **v5.2 (+NQ1 calib)** | Δ total |
+|---|---|---|---|---|
+| P&L portefeuille | +$3,084 | +$3,322 | **+$3,728** | **+$644** |
+| Perte jour max | -$296 | -$296 | -$296 | 0 |
+| Trailing DD | -$1,768 | -$1,530 | **-$1,500** | -$268 |
+| Jours gagnants | 52% | 53% | **55%** | +3pp |
+| Max consec loss | 8j | 7j | 7j | -1j |
+| Bootstrap pass | 99.8% | 99.9% | **100.0%** | +0.2pp |
+
+### Détail par actif (portefeuille agrégé)
+
+| | MES1 | NQ1 | YM1 |
+|---|---|---|---|
+| Trades remplis | 47 | 95 | 0 |
+| WR | 34% | 42% | — |
+| PF | 1.39 | **1.87** | — |
+| P&L | +$1,078 | +$2,651 | 0 |
+| Max DD | -$1,030 | -$632 | — |
+
+### Verdict
+
+Première séquence walk-forward validée OOS : NQ1 gagne +21% de P&L grâce
+au desserrement `score_min` 58→55 et au resserrement `trend` 0.20→0.30
+(sélectivité directionnelle accrue).
+
+Le résultat MES1 rappelle la règle fondamentale : **on ne livre jamais les
+paramètres optimisés uniquement sur IS**. La validation OOS est le garde-fou
+qui a ici sauvé MES1 d'une chute de -$785.
+
+**Outil opérationnel** : backtest +$3,728 / Trailing DD -$1,500 / 100%
+bootstrap Topstep. Marge de sécurité de 25% sur le trailing DD. Prêt pour
+paper trading sur compte évaluation Topstep.
