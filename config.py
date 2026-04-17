@@ -65,6 +65,31 @@ RISK_PER_TRADE_USD = 100
 MAX_TRADES_PER_DAY = 2
 SL_BUFFER_TICKS = 2
 
+# --- Nouvelles features de gestion du risque ---
+
+# ATR dynamique pour le buffer SL
+USE_ATR_BUFFER = False          # True = buffer dynamique basé sur ATR
+ATR_PERIOD = 14                 # Période ATR (bougies 15m)
+ATR_BUFFER_MULT = 0.5           # Multiplicateur ATR pour le buffer SL
+
+# TP structurel (prochaine zone S/R)
+USE_STRUCTURAL_TP = False       # True = TP ancré sur la prochaine zone S/R
+STRUCTURAL_TP_MIN_RR = 1.5      # RR minimum pour accepter un TP structurel
+
+# RR dynamique selon la force de la tendance
+USE_DYNAMIC_RR = False          # True = RR ajusté selon la force de la tendance
+DYNAMIC_RR_STRONG_MULT = 1.5    # |alignment| > 0.6 → RR × 1.5
+DYNAMIC_RR_MODERATE_MULT = 1.0  # |alignment| > 0.33 → RR × 1.0
+DYNAMIC_RR_RANGE_MULT = 0.75    # |alignment| <= 0.33 → RR × 0.75
+DYNAMIC_RR_MIN = 1.5            # RR plancher après ajustement
+
+# Entrée au POC (Point of Control / profil de volume)
+USE_POC_ENTRY = False           # True = entrée au POC de la zone
+POC_NUM_BINS = 20               # Nombre de bins pour le profil de volume
+
+# Scale-in (entrées fractionnées)
+USE_SCALE_IN = False            # True = 2 entrées fractionnées dans la zone
+
 # Horaires (UTC)
 CUTOFF_HOUR_UTC = 11        # Midi Paris = 11h UTC
 US_SESSION_START_UTC = 13

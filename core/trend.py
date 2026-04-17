@@ -48,3 +48,26 @@ def get_regime(trend_scores: Dict[str, pd.Series], cutoff: pd.Timestamp) -> Opti
     elif alignment < TREND_BEAR_THRESHOLD:
         return "BEAR"
     return "RANGE"
+
+
+def get_regime_with_score(
+    trend_scores: Dict[str, pd.Series], cutoff: pd.Timestamp
+) -> tuple:
+    """Retourne (regime, alignment_score) à un instant donné."""
+    _TF_FREQ = {"D1": "D", "H4": "4h", "H1": "h"}
+    alignment = 0.0
+    for tf_name, weight in TREND_WEIGHTS.items():
+        s = trend_scores[tf_name]
+        tf_cutoff = cutoff.floor(_TF_FREQ.get(tf_name, "h"))
+        available = s[s.index < tf_cutoff]
+        if len(available) == 0:
+            return None, 0.0
+        alignment += available.iloc[-1] * weight
+
+    if alignment > TREND_BULL_THRESHOLD:
+        regime = "BULL"
+    elif alignment < TREND_BEAR_THRESHOLD:
+        regime = "BEAR"
+    else:
+        regime = "RANGE"
+    return regime, alignment
