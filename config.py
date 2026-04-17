@@ -114,7 +114,7 @@ PIVOT_CONFIGS = {
 # ZONES S/R
 # ==============================================================================
 
-ZONE_TOLERANCE_PCT = 0.001      # optimisé v4
+ZONE_TOLERANCE_PCT = 0.001      # optimisé
 ZONE_MIN_TOUCHES = 2
 ZONE_MIN_TF_OR_TOUCHES = (2, 3) # 2 TF minimum OU 3 touches sur 1 TF
 ZONE_MAX_WIDTH_PCT = 0.004      # 0.4% max
@@ -137,7 +137,11 @@ TREND_BEAR_THRESHOLD = -0.33
 
 # Force de tendance minimale (|alignment_score|) par actif.
 # Filtre appliqué par le score composite, même en régime BULL/BEAR.
-TREND_STRENGTH_MIN = {"MES1": 0.25, "NQ1": 0.20, "YM1": 0.40}
+# MES1 : valeur v5 conservée (0.25). L'optimizer IS proposait 0.15 mais
+# l'OOS (PF=0.64) montrait un overfitting franc.
+# NQ1  : 0.30 retenu après Phase C (OOS PF=1.75, P&L OOS +$870 validés).
+# YM1  : conservé à 0.40 (ticker désactivé).
+TREND_STRENGTH_MIN = {"MES1": 0.25, "NQ1": 0.3, "YM1": 0.40}
 
 # ==============================================================================
 # SCORE COMPOSITE (coeur du filtrage ultra-sélectif)
@@ -151,7 +155,10 @@ COMPOSITE_WEIGHTS = {
 }
 
 # Seuil composite minimum par actif (0-100). Plus élevé = plus sélectif.
-COMPOSITE_SCORE_MIN = {"MES1": 60, "NQ1": 58, "YM1": 70}
+# MES1 : valeur v5 conservée (60). Optimizer proposait 58 mais OOS négatif.
+# NQ1  : 55 retenu après Phase C (OOS PF=1.75 validé).
+# YM1  : 70 (ticker désactivé tant que YM1_ENABLED=False).
+COMPOSITE_SCORE_MIN = {"MES1": 60, "NQ1": 55, "YM1": 70}
 
 # YM1 : désactivation globale tant qu'aucune preuve OOS (PF ≥ 1.2).
 # L'optimizer peut basculer à True après validation.

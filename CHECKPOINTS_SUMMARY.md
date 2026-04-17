@@ -195,3 +195,61 @@ perdants — précisément les streaks qui creusent le trailing DD.
 
 **À faire** : lancer la Phase C walk-forward (`python optimize.py --csv-dir ./data`)
 pour calibrer score_min / trend_strength par asset et trancher sur YM1.
+
+---
+
+## CHECKPOINT v5.2 — CALIBRATION PHASE C WALK-FORWARD (avril 2026)
+
+**Méthode** : `run_phase_c.py` = walk-forward IS (déc 2024 → sept 2025) / OOS
+(oct 2025 → mars 2026) sur `GRID_COMPOSITE_ASSET` (30 combos par actif).
+Sélection par P&L IS ; validation par PF OOS.
+
+### Résultats Phase C
+
+| Actif | IS: score_min / trend | IS PF | IS P&L | OOS PF | OOS P&L | Décision |
+|---|---|---|---|---|---|---|
+| MES1 | 58 / 0.15 | 2.97 | +$1,952 | **0.64** | -$785 | **REJET** (overfit) |
+| NQ1  | 55 / 0.30 | 2.04 | +$1,723 | **1.75** | +$870 | **RETENU** |
+| YM1  | 50 / 0.15 | 1.14 | +$570 | **0.73** | -$928 | YM1 reste désactivé |
+
+### Application
+
+- **MES1** : reverté aux valeurs v5 (`score_min=60`, `trend=0.25`) car
+  l'optimizer pickait une configuration overfittée (OOS PF 0.64).
+- **NQ1** : adopté (`score_min=55`, `trend=0.30`). Seul actif à valider OOS.
+- **YM1** : `YM1_ENABLED=False` confirmé (OOS PF 0.73 < 1.2 requis).
+
+### Résultats portefeuille (déc 2024 → mars 2026, avec circuit breakers v5.1)
+
+| | v5.0 | v5.1 (breakers) | **v5.2 (+NQ1 calib)** | Δ total |
+|---|---|---|---|---|
+| P&L portefeuille | +$3,084 | +$3,322 | **+$3,728** | **+$644** |
+| Perte jour max | -$296 | -$296 | -$296 | 0 |
+| Trailing DD | -$1,768 | -$1,530 | **-$1,500** | -$268 |
+| Jours gagnants | 52% | 53% | **55%** | +3pp |
+| Max consec loss | 8j | 7j | 7j | -1j |
+| Bootstrap pass | 99.8% | 99.9% | **100.0%** | +0.2pp |
+
+### Détail par actif (portefeuille agrégé)
+
+| | MES1 | NQ1 | YM1 |
+|---|---|---|---|
+| Trades remplis | 47 | 95 | 0 |
+| WR | 34% | 42% | — |
+| PF | 1.39 | **1.87** | — |
+| P&L | +$1,078 | +$2,651 | 0 |
+| Max DD | -$1,030 | -$632 | — |
+
+### Verdict
+
+Première séquence walk-forward validée OOS : NQ1 gagne +21% de P&L grâce
+au desserrement `score_min` 58→55 et au resserrement `trend` 0.20→0.30
+(sélectivité directionnelle accrue).
+
+Le résultat MES1 rappelle la règle fondamentale : **on ne livre jamais les
+paramètres optimisés uniquement sur IS**. La validation OOS est le garde-fou
+qui a ici sauvé MES1 d'une chute de -$785.
+
+**Outil opérationnel** : backtest +$3,728 / Trailing DD -$1,500 / 100%
+bootstrap Topstep. Marge de sécurité de 25% sur le trailing DD. Prêt pour
+paper trading sur compte évaluation Topstep.
