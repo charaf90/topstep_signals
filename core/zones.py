@@ -110,9 +110,18 @@ def detect_zones(tf_dict: Dict[str, pd.DataFrame], cutoff: pd.Timestamp) -> List
             + np.mean([p["recency"] for p in group]) * 15
         )
 
+        # Liste des TF contributrices triée par poids cumulé décroissant
+        # (utilisée par les graphiques d'analyse pour colorer la zone par TF dominante)
+        tf_weights = {}
+        for p in group:
+            tf_weights[p["tf"]] = tf_weights.get(p["tf"], 0.0) + p["weight"]
+        tfs_sorted = sorted(tf_weights.keys(), key=lambda t: tf_weights[t], reverse=True)
+
         zones.append({
             "low": zone_low, "high": zone_high, "mid": zone_mid,
             "touches": n_touches, "n_tf": len(tfs), "quality": quality,
+            "tfs": tfs_sorted,
+            "dominant_tf": tfs_sorted[0],
         })
 
     zones.sort(key=lambda z: z["quality"], reverse=True)

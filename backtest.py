@@ -25,16 +25,22 @@ from config import (
     TOPSTEP_DAILY_LOSS_MAX, TOPSTEP_TRAILING_DD,
     TOPSTEP_PROFIT_TARGET,
     DAILY_STOP_AFTER_SL, CONSEC_LOSS_PAUSE_DAYS, DAILY_LOCKIN_THRESHOLD,
+    STRATEGY_VERSION, ANALYSIS_CHARTS_ENABLED,
 )
 from core.data import load_csv, build_timeframes
 from core.strategy import generate_signals, simulate_trade
-from core.trend import precompute_trends
+from core.trend import precompute_trends, get_regime_with_score
 from core.risk_topstep import trade_allowed
 from core.chart import plot_signal, plot_backtest_trade
+from core.analysis_chart import plot_day_analysis
+from core.zones import detect_zones
+from core.premarket import compute_features as compute_pm_features
+from core.scoring import compute_volatility_features
 
 
 def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
-                 topstep_guard: bool = True) -> pd.DataFrame:
+                 topstep_guard: bool = True,
+                 analysis_chart_dir=None) -> pd.DataFrame:
     """
     Backtest complet jour par jour.
     Les ordres non remplis ne comptent PAS vers le max de 2 trades/jour.
@@ -153,6 +159,35 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
         trades.extend(not_filled)
         trades.extend(cancelled_late)
         trades.extend(cancelled_cb)
+
+        # ── Graphique d'analyse journalier ──────────────────────────────
+        # Une "photographie" complète du jour vu par la stratégie : zones
+        # par TF, signaux générés, exécutions, contexte (regime, pm, vol).
+        # Voir CLAUDE.md → "Graphiques d'analyse journaliers (consigne pérenne)".
+        if analysis_chart_dir is not None and len(signals) > 0:
+            try:
+                day_zones = detect_zones(tf_dict, cutoff)
+                day_regime, day_align = get_regime_with_score(trend_scores, cutoff)
+                day_pm = compute_pm_features(df_15m, cutoff)
+                day_vol = compute_volatility_features(df_15m, cutoff, ticker)
+                chart_path = analysis_chart_dir / f"{ds}.png"
+                plot_day_analysis(
+                    df_15m=df_15m,
+                    ticker=ticker,
+                    date_str=ds,
+                    cutoff=cutoff,
+                    us_end=us_end,
+                    zones=day_zones,
+                    signals=signals,
+                    trades=(kept_filled + cancelled_late + cancelled_cb + not_filled),
+                    regime=day_regime,
+                    alignment_score=day_align,
+                    pm_features=day_pm,
+                    vol_features=day_vol,
+                    output_path=str(chart_path),
+                )
+            except Exception as e:
+                print(f"  [!] analyse {ds}: {e}")
 
         # Mise à jour des trackers Topstep et du streak perdant
         day_pnl = sum(t["pnl"] for t in kept_filled)
@@ -497,6 +532,9 @@ def main():
                         help="Filtrer les trades à tracer (défaut: all)")
     parser.add_argument("--telegram", action="store_true",
                         help="Envoyer le rapport sur Telegram")
+    parser.add_argument("--no-analysis-charts", action="store_true",
+                        help="Désactive les graphiques d'analyse journaliers "
+                             "(activés par défaut, voir ANALYSIS_CHARTS_ENABLED).")
     args = parser.parse_args()
 
     # --telegram implique --plot
@@ -524,8 +562,20 @@ def main():
         tf = build_timeframes(df_15m)
         print(f"  {len(df_15m):,} bougies")
 
+        # Dossier d'analyse journalière (1 PNG / jour tradé, voir CLAUDE.md)
+        analysis_dir = None
+        if ANALYSIS_CHARTS_ENABLED and not args.no_analysis_charts:
+            analysis_dir = (
+                output_dir / "analysis_charts" / STRATEGY_VERSION / ticker
+            )
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+
         print(f"  ▸ Exécution...")
-        df_trades = run_backtest(df_15m, tf, ticker)
+        df_trades = run_backtest(df_15m, tf, ticker,
+                                 analysis_chart_dir=analysis_dir)
+        if analysis_dir is not None:
+            n_charts = len(list(analysis_dir.glob("*.png")))
+            print(f"  ✓ {n_charts} graphique(s) d'analyse → {analysis_dir}")
         audit(df_trades, ticker)
         print_stats(df_trades, ticker)
         ts = validate_topstep(df_trades, n_bootstrap=1000)
