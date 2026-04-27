@@ -313,6 +313,72 @@ When adding new features:
 
 ---
 
+## Graphiques d'analyse journaliers (consigne pérenne)
+
+> **Règle imposée par l'utilisateur — vaut pour TOUTES les stratégies, présentes
+> et futures. À ne pas retirer sans demande explicite.**
+
+Chaque exécution de `backtest.py` doit produire **un graphique PNG par jour
+tradé / ticker** dans :
+
+```
+output/analysis_charts/{STRATEGY_VERSION}/{TICKER}/{YYYY-MM-DD}.png
+```
+
+C'est une "photographie" complète de la journée vue par la stratégie : on
+doit pouvoir prendre n'importe quelle journée tradée, ouvrir le PNG
+correspondant, et comprendre toute la décision sans relancer le code.
+
+### Contenu obligatoire de chaque graphique
+
+1. **Cours OHLC 15min** — `ANALYSIS_CHART_CONTEXT_BEFORE` (200) bougies avant
+   le cutoff d'analyse + toutes les bougies jusqu'à la fin de la session US
+   du jour. Une seule image regroupe **tous** les signaux du jour, jamais un
+   par signal.
+2. **Échelle Y basée sur le prix** (`low.min` → `high.max` + marge), **pas** sur
+   les zones — c'est explicite dans la spec utilisateur. Les zones hors
+   fenêtre sont ignorées plutôt que d'aplatir le mouvement du prix.
+3. **Zones S/R identifiées par timeframe** : bandes horizontales colorées par
+   TF dominante (D1=ambre, H4=violet, H1=bleu, 15m=gris) avec étiquette
+   `TFs Q{quality} ({touches}t)`.
+4. **Marqueur cutoff vertical** pour visualiser le moment d'analyse.
+5. **Pour chaque signal** : lignes E/SL/TP étendues sur toute la session US,
+   étiquettes numérotées (E1, SL1, TP1, …), marqueur fill (triangle bleu) et
+   exit (cercle vert/rouge/orange selon TP/SL/TE) avec P&L annoté.
+6. **Encadré récap des signaux** (haut gauche) listant pour chaque signal :
+   direction, prix d'entrée, SL, TP, RR, contrats, score composite, qualité
+   de zone, résultat simulé.
+7. **Encadré contexte** (bas gauche) avec : régime, alignment, features
+   pré-marché (`ovn_path_eff`, `prev_return`, `prev_close_pos`) et features
+   de volatilité (`atr_daily`, `atr_ratio`, `gap_atr`, `vol_score`).
+8. **Légende TF** + entry/SL/TP en haut à droite.
+9. **Titre** : ticker, date, nombre de signaux, nombre de fills, P&L jour.
+
+### Implémentation actuelle
+
+- Module : `core/analysis_chart.py` → `plot_day_analysis(...)`
+- Activation : `ANALYSIS_CHARTS_ENABLED = True` dans `config.py`
+- Override CLI : `python backtest.py --no-analysis-charts` pour désactiver.
+- Tag stratégie : `STRATEGY_VERSION` dans `config.py` — bump à chaque
+  nouvelle stratégie pour avoir un dossier dédié et conserver les
+  graphiques de la version précédente côte à côte (analyse comparative).
+
+### Règles à respecter dans toute évolution
+
+- **Ne pas désactiver** la génération par défaut — l'utilisateur s'appuie
+  dessus pour valider chaque nouvelle stratégie.
+- **Bump `STRATEGY_VERSION`** dans `config.py` dès qu'une stratégie change
+  significativement (nouveau filtre, nouvelle pondération, nouveau seuil).
+  Cela évite d'écraser les graphiques d'une version précédente.
+- **Si une nouvelle feature de décision est ajoutée** (un nouveau filtre,
+  un nouveau scoring, un nouveau régime…), elle doit apparaître dans le
+  bandeau contexte du graphique. Touchez `core/analysis_chart.py` en même
+  temps que vous touchez la logique de décision.
+- **Pas de fork** : si vous ajoutez un autre type de graphique (ex. revue
+  par trade), conservez `plot_day_analysis` comme la vue principale.
+
+---
+
 ## Development Workflow
 
 ### Branch convention

@@ -232,6 +232,17 @@ CHART_STYLE = {
 }
 CHART_CANDLES = 200
 
-# Backtest charts
+# Backtest charts (par trade)
 BACKTEST_CHART_CONTEXT_BEFORE = 50   # Bougies avant le fill
 BACKTEST_CHART_CONTEXT_AFTER = 20    # Bougies après la sortie
+
+# ==============================================================================
+# GRAPHIQUES D'ANALYSE JOURNALIERS (1 PNG / jour tradé / ticker)
+# ==============================================================================
+# Voir CLAUDE.md → "Graphiques d'analyse journaliers (consigne pérenne)" :
+# toute nouvelle stratégie doit produire ces graphiques en backtest pour
+# permettre une revue visuelle rapide. Les fichiers sont stockés sous
+# output/analysis_charts/{STRATEGY_VERSION}/{TICKER}/{YYYY-MM-DD}.png.
+STRATEGY_VERSION = "v5.2"             # tag de la stratégie courante
+ANALYSIS_CHARTS_ENABLED = True        # générer ces graphiques par défaut en backtest
+ANALYSIS_CHART_CONTEXT_BEFORE = 200   # bougies 15m avant cutoff (cf. spec utilisateur)
