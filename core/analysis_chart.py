@@ -45,6 +45,7 @@ TF_COLORS = {
     "H4":  "#a566ff",   # violet
     "H1":  "#42a5f5",   # bleu clair
     "15m": "#9e9e9e",   # gris
+    "OPR": "#ffd54f",   # jaune (zone OPR)
 }
 
 EXIT_COLORS = {"TP": TV_GREEN, "SL": TV_RED, "TE": TV_ORANGE}

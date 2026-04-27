@@ -10,7 +10,13 @@ The codebase is **pure Python (~2,000 lines)**, file-based (no database), and ru
 - Composite score 0-100 (zone 40% / trend 25% / pm 20% / vol 15%) replaces the simple quality threshold.
 - Topstep slack guardrail refuses a trade when daily-loss or trailing-DD cushion < risk × 1.1.
 - Consecutive-loss circuit breaker pauses trading 1 day after 5 consecutive losing days.
-- YM1 disabled globally (`YM1_ENABLED=False`) — no OOS profitability proof yet.
+- YM1 disabled globally (`YM1_ENABLED=False`) for the composite strategy — no OOS profitability proof yet.
+
+**Stratégie OPR (`opr-v1`)** tourne en parallèle du composite et est activée par
+défaut dans `backtest.py --strategy both`. C'est une approche
+breakout-pullback de la 1ère bougie 15min de la session US — voir section
+"Stratégie OPR" plus bas. Calibration walk-forward IS / OOS validée
+(MES1 OOS PF=1.61, NQ1 OOS PF=1.65, YM1 OOS PF=1.87).
 
 ---
 
@@ -21,7 +27,8 @@ topstep_signals/
 ├── config.py               # Central configuration (all strategy parameters)
 ├── signals.py              # Main live signal generator & Telegram sender
 ├── backtest.py             # Historical backtesting engine + validate_topstep bootstrap
-├── optimize.py             # Walk-forward IS/OOS optimizer (Phase A/B/C)
+├── optimize.py             # Walk-forward IS/OOS optimizer (Phase A/B/C, composite)
+├── optimize_opr.py         # Walk-forward optimizer for OPR_RR per asset
 ├── run_phase_c.py          # Phase C alone (composite calibration only)
 ├── requirements.txt        # Python dependencies
 ├── README.md               # French user documentation
@@ -33,8 +40,10 @@ topstep_signals/
 │   ├── premarket.py        # Pre-market feature calculation & filtering
 │   ├── scoring.py          # Composite score 0-100 + ATR volatility features
 │   ├── risk_topstep.py     # Topstep slack guardrail (daily loss / trailing DD)
-│   ├── strategy.py         # Signal generation + composite filtering + simulation
-│   ├── chart.py            # TradingView-style chart generation (matplotlib)
+│   ├── strategy.py         # Composite signal generation + simulation
+│   ├── opr.py              # OPR (Opening Range Breakout) signal generation + simulation
+│   ├── chart.py            # Per-trade TradingView-style chart (matplotlib)
+│   ├── analysis_chart.py   # Daily analysis chart (1 PNG / day / ticker)
 │   └── telegram.py         # Telegram text + image senders
 └── data/                   # gitignored
     ├── MES1_data_m15.csv
@@ -212,6 +221,63 @@ Portfolio `alignment_score` = Σ weight × TF score. Regime labels:
 
 Global: no LONG in BEAR, no SHORT in BULL (hard gate). SL buffer = 2 ticks.
 Topstep slack guardrail + `CONSEC_LOSS_PAUSE_DAYS=5` sit on top.
+
+---
+
+## Stratégie OPR (`opr-v1`) — exécutée en parallèle du composite
+
+Stratégie de breakout-pullback ancrée sur la 1ère bougie 15min de la
+session US (13:00 UTC). Implémentation : `core/opr.py`. Backtest dédié :
+`backtest.py --strategy opr` (ou `--strategy both` pour les deux).
+
+### Définition de la zone
+- **OPR_high** = high de la 1ère bougie 15min (13:00–13:15 UTC)
+- **OPR_low**  = low de cette bougie
+
+### Triggers
+- **Premier déclenchement** : la 1ère bougie qui clôture **hors** de la zone
+  → ordre limite au niveau OPR du sens de sortie (`limit BUY @ OPR_high`
+  si close au-dessus, `limit SELL @ OPR_low` si close en-dessous).
+- **Continuation intraday** : une bougie qui **ouvre dans l'OPR** puis
+  **clôture hors** de l'OPR replace l'ordre dans le sens de sortie. Cela
+  permet plusieurs entrées si le prix oscille autour de la zone.
+- Si la direction change entre deux triggers, l'ordre précédent encore en
+  attente est annulé et remplacé.
+
+### Construction du trade
+- `entry`   = OPR_high (long) ou OPR_low (short)
+- `sl`      = autre côté de l'OPR ± `OPR_SL_BUFFER_TICKS` (2 ticks par défaut),
+  élargi à `SL_MINIMUM[ticker]` si nécessaire
+- `tp`      = entry ± `sl_dist` × `OPR_RR_BY_TICKER[ticker]`
+- `n_ct`    = `RISK_PER_TRADE_USD` / (`sl_dist` × $/pt) — risque fixe $100
+- Garde-fous : range OPR ∈ [`OPR_RANGE_MIN_PCT`, `OPR_RANGE_MAX_PCT`] du mid
+
+### Calibration walk-forward (IS Dec 2024 → Sep 2025, OOS Oct 2025 → Mar 2026)
+
+| Asset | RR retenu | IS PF | OOS PF | OOS P&L | OOS n |
+|-------|-----------|-------|--------|---------|-------|
+| MES1  | 3.0       | 1.64  | 1.61   | +$5,049 | 158   |
+| NQ1   | 3.0       | 1.34  | 1.65   | +$3,812 | 142   |
+| YM1   | 2.5       | 1.67  | **1.87** | **+$6,012** | 142   |
+
+> YM1 est désactivé pour la stratégie composite mais **pleinement actif en
+> OPR** — l'OPR contourne le besoin d'un score composite et la calibration
+> walk-forward est validée largement.
+
+Pour ré-optimiser : `python optimize_opr.py --csv-dir ./data`. Le script
+applique le même critère qu'`optimize.py` Phase C (OOS PF ≥ 1.2,
+n_trades OOS ≥ 8, P&L OOS > 0).
+
+### Règles à respecter pour évoluer la stratégie OPR
+- **Bump `OPR_STRATEGY_VERSION`** dans `config.py` (ex. `opr-v2`) à chaque
+  changement structurel (nouvelle règle de trigger, nouveau filtre).
+  Cela isole les graphiques d'analyse et permet une comparaison versionnée.
+- **Re-calibrer `OPR_RR_BY_TICKER`** via `optimize_opr.py` quand la règle
+  de trigger change.
+- **Ne pas activer `OPR_REQUIRE_TREND` sans validation OOS** : la stratégie
+  fonctionne souvent à contre-tendance court terme.
+- **Garder le module `core/opr.py` indépendant** des modules composite
+  (`zones.py`, `scoring.py`) — les deux stratégies cohabitent en parallèle.
 
 ---
 
