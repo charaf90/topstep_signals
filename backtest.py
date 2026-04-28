@@ -3,14 +3,14 @@
 Backtest de la stratégie ordres limites.
 
 Usage :
-  python backtest.py --csv-dir ./data                    # Backtest 3 actifs
+  python backtest.py --csv-dir ./data                    # Backtest 3 actifs (CSV)
   python backtest.py --csv-dir ./data --ticker NQ1       # 1 actif
   python backtest.py --csv-dir ./data --plot             # Avec graphiques
-  python backtest.py --csv-dir ./data --telegram         # Avec envoi Telegram
+  python backtest.py --live                              # Données récentes via TradingView
+  python backtest.py --live --bars 20000                 # Profondeur live custom
 """
 
 import argparse
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -28,7 +28,7 @@ from config import (
     STRATEGY_VERSION, ANALYSIS_CHARTS_ENABLED,
     OPR_ENABLED, OPR_STRATEGY_VERSION, OPR_MAX_TRADES_PER_DAY,
 )
-from core.data import load_csv, build_timeframes
+from core.data import load_csv, fetch_live, build_timeframes
 from core.strategy import generate_signals, simulate_trade
 from core.trend import precompute_trends, get_regime_with_score
 from core.risk_topstep import trade_allowed
@@ -652,51 +652,6 @@ def portfolio_topstep_report(results: list, n_bootstrap: int = 1000):
     print(f"  Bootstrap pass: {boot*100:.1f}%  (cible ≥ 80%, target $+{TOPSTEP_PROFIT_TARGET})")
 
 
-def format_backtest_report(results: list) -> str:
-    """Formate le rapport backtest en HTML pour Telegram."""
-    msg = "📊 <b>RAPPORT BACKTEST</b>\n\n"
-
-    total_pnl = 0
-    total_trades = 0
-
-    for res in results:
-        ticker = res["ticker"]
-        filled = res["filled"]
-        n = len(filled)
-        if n == 0:
-            continue
-
-        total_trades += n
-        wins = filled[filled["pnl"] > 0]
-        losses = filled[filled["pnl"] <= 0]
-        pnl = filled["pnl"].sum()
-        total_pnl += pnl
-        gp = wins["pnl"].sum() if len(wins) else 0
-        gl = abs(losses["pnl"].sum()) if len(losses) else 1
-        cum = filled["pnl"].cumsum()
-        dd = (cum - cum.cummax()).min()
-
-        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"📈 <b>{ticker}</b> — {INSTRUMENTS[ticker]['name']}\n"
-        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"  Trades : {n} (WR={len(wins)/n*100:.0f}%)\n"
-        msg += f"  PF     : {gp/gl:.2f}\n"
-        msg += f"  P&amp;L   : <b>${pnl:+,.0f}</b>\n"
-        msg += f"  Max DD : ${dd:,.0f}\n"
-        msg += f"  $/trade: ${filled['pnl'].mean():+.1f}\n"
-
-        for r in ["TP", "SL", "TE"]:
-            sub = filled[filled["result"] == r]
-            if len(sub) > 0:
-                msg += f"  {r}: n={len(sub)}  avg=${sub['pnl'].mean():+.0f}\n"
-        msg += "\n"
-
-    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"💰 <b>TOTAL: {total_trades} trades  |  ${total_pnl:+,.0f}</b>\n"
-
-    return msg
-
-
 def _run_strategy_for_ticker(strategy: str, ticker: str, df_15m, tf,
                              args, output_dir: Path) -> dict:
     """
@@ -746,8 +701,15 @@ def _run_strategy_for_ticker(strategy: str, ticker: str, df_15m, tf,
 
 def main():
     parser = argparse.ArgumentParser(description="Backtest stratégie ordres limites")
-    parser.add_argument("--csv-dir", type=str, required=True,
-                        help="Répertoire des fichiers CSV 15m")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--csv-dir", type=str, default=None,
+                     help="Répertoire des fichiers CSV 15m (mode offline)")
+    src.add_argument("--live", action="store_true",
+                     help="Récupère les données récentes via TradingView "
+                          "(tvDatafeed) au lieu des CSV locaux.")
+    parser.add_argument("--bars", type=int, default=10000,
+                        help="Nombre de bougies 15m à récupérer en mode --live "
+                             "(défaut: 10000).")
     parser.add_argument("--ticker", type=str, default=None,
                         help="Actif unique (défaut: tous)")
     parser.add_argument("--output-dir", type=str, default="./output",
@@ -761,16 +723,10 @@ def main():
     parser.add_argument("--plot-filter", type=str, default="all",
                         choices=["all", "tp", "sl", "te", "win", "loss"],
                         help="Filtrer les trades à tracer (défaut: all)")
-    parser.add_argument("--telegram", action="store_true",
-                        help="Envoyer le rapport sur Telegram")
     parser.add_argument("--no-analysis-charts", action="store_true",
                         help="Désactive les graphiques d'analyse journaliers "
                              "(activés par défaut, voir ANALYSIS_CHARTS_ENABLED).")
     args = parser.parse_args()
-
-    # --telegram implique --plot
-    if args.telegram:
-        args.plot = True
 
     tickers = [args.ticker] if args.ticker else list(INSTRUMENTS.keys())
     output_dir = Path(args.output_dir)
@@ -783,21 +739,28 @@ def main():
 
     # Résultats par stratégie : {strategy: [{ticker, filled}, ...]}
     results_by_strategy = {s: [] for s in strategies}
-    all_chart_files = []
 
     for ticker in tickers:
         print(f"\n{'='*60}")
         print(f"  BACKTEST — {ticker} (composite RR={RR_TARGET[ticker]})")
         print(f"{'='*60}")
 
-        csv_path = Path(args.csv_dir) / f"{ticker}_data_m15.csv"
-        if not csv_path.exists():
-            print(f"  [!] Fichier introuvable: {csv_path}")
-            continue
+        if args.live:
+            print(f"  ▸ {ticker} — récupération live TradingView ({args.bars} bougies)...")
+            df_15m = fetch_live(ticker, bars=args.bars)
+            if df_15m.empty:
+                print(f"  [!] Aucune donnée live pour {ticker}")
+                continue
+        else:
+            csv_path = Path(args.csv_dir) / f"{ticker}_data_m15.csv"
+            if not csv_path.exists():
+                print(f"  [!] Fichier introuvable: {csv_path}")
+                continue
+            df_15m = load_csv(str(csv_path))
 
-        df_15m = load_csv(str(csv_path))
         tf = build_timeframes(df_15m)
-        print(f"  {len(df_15m):,} bougies")
+        print(f"  {len(df_15m):,} bougies "
+              f"[{df_15m.index.min()} → {df_15m.index.max()}]")
 
         df_trades = None  # référence vers le composite pour le bloc --plot
         for strat in strategies:
@@ -840,7 +803,6 @@ def main():
                     tag = trade_dict["result"].lower()
                     chart_path = str(chart_dir / f"{trade_dict['date']}_{tag}_{idx+1}.png")
                     plot_backtest_trade(df_15m, trade_dict, ticker, chart_path)
-                    all_chart_files.append((chart_path, trade_dict))
                     if (idx + 1) % 25 == 0:
                         print(f"    {idx+1}/{total}...")
                 print(f"  ✓ {total} graphiques → {chart_dir}")
@@ -865,39 +827,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  ✅ BACKTEST TERMINÉ")
     print(f"{'='*60}")
-
-    # Envoi Telegram (utilise le composite par défaut, puis OPR si présent)
-    backtest_results = results_by_strategy.get("composite",
-                                               results_by_strategy.get("opr", []))
-    if args.telegram:
-        from core.telegram import get_chat_id, send_message, send_photo
-
-        try:
-            chat_id = get_chat_id()
-
-            # Résumé texte
-            report = format_backtest_report(backtest_results)
-            send_message(chat_id, report)
-            print(f"\n  ✓ Rapport envoyé sur Telegram")
-
-            # Graphiques
-            total = len(all_chart_files)
-            if total > 0:
-                print(f"  ▸ Envoi de {total} graphiques...")
-                for idx, (chart_path, trade_dict) in enumerate(all_chart_files):
-                    ticker_t = trade_dict.get("date", "")
-                    caption = (
-                        f"{trade_dict['date']} {trade_dict['dir'].upper()} "
-                        f"{trade_dict['result']} ${trade_dict['pnl']:+.0f}"
-                    )
-                    send_photo(chat_id, chart_path, caption=caption)
-                    if (idx + 1) % 25 == 0:
-                        print(f"    {idx+1}/{total}...")
-                    time.sleep(0.05)
-                print(f"  ✓ {total} graphiques envoyés")
-
-        except Exception as e:
-            print(f"  [!] Erreur Telegram: {e}")
 
 
 if __name__ == "__main__":
