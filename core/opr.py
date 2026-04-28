@@ -331,11 +331,11 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
         if pending is not None:
             level = pending["entry"]
             direction = pending["direction"]
-            # Avant 9h45 NY, on n'autorise pas le fill (cohérent avec
-            # `validTradeTime > oprEnd`). En pratique pending ne peut
-            # exister qu'après le 1er trigger qui se produit lui-même
-            # post-9h45, donc cette garde est défensive.
-            if ts <= win_end_t:
+            # La fenêtre OPR est [9h30, 9h45) — exclusive de la borne
+            # supérieure. La bougie 15m qui ouvre à 9h45 NY est la 1ère
+            # bougie post-OPR, donc tradable. On utilise donc une
+            # comparaison stricte.
+            if ts < win_end_t:
                 pending = None
             elif ts >= session_end_t:
                 # Plus de fill possible après la cloche : ordre annulé.
@@ -404,7 +404,9 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
         #    16h30 NY (et tant qu'il n'y a ni position ni ordre en attente).
         if position is not None or pending is not None:
             continue
-        if ts <= win_end_t or ts >= session_end_t:
+        # Fenêtre OPR [9h30, 9h45) exclusive : la bougie 15m qui ouvre à
+        # 9h45 est la 1ère post-OPR et peut donc déclencher un trigger.
+        if ts < win_end_t or ts >= session_end_t:
             continue
         if n_fills >= OPR_MAX_TRADES_PER_DAY:
             continue
