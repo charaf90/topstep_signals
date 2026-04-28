@@ -214,8 +214,52 @@ CONSEC_LOSS_PAUSE_DAYS  = 5
 DAILY_LOCKIN_THRESHOLD  = 0
 
 # ==============================================================================
-# GRAPHIQUES
+# STRATÉGIE OPR (Opening Range Breakout — pullback PineScript) — opr-v2
 # ==============================================================================
+# Réécriture fidèle au PineScript fourni par l'utilisateur (avr. 2026) :
+#   • Zone OPR = 1ère bougie 15min de la session US ouvrant à 9h30 NY.
+#     L'heure est fixée en heure NY (America/New_York) afin que la stratégie
+#     soit invariante au passage été/hiver côté Paris.
+#   • Trigger pullback : une bougie qui OUVRE dans la zone OPR et CLÔTURE
+#     hors zone arme un ordre LIMIT au niveau OPR du sens de sortie
+#     (limit BUY @ OPR_high si close > OPR_high, limit SELL @ OPR_low
+#     si close < OPR_low).
+#   • Une seule position ouverte à la fois (pyramiding=0 dans le PineScript).
+#   • SL / TP en distance fixe (points), pas en RR de l'OPR.
+#   • Toutes les positions sont fermées à 16h30 NY.
+#
+# Voir core/opr.py.
+
+OPR_ENABLED = True
+
+# Fuseau horaire de référence pour la zone OPR et l'horaire de session.
+# `America/New_York` gère automatiquement DST (EST/EDT) — l'OPR reste à
+# 9h30 NY toute l'année, ce qui se traduit en 14h30 UTC (hiver) ou 13h30
+# UTC (été). C'est une exigence explicite : on ne hard-code plus l'heure UTC.
+OPR_TIMEZONE = "America/New_York"
+
+# Heures NY (h, m). La fenêtre OPR est [WINDOW_START, WINDOW_END) — soit la
+# bougie 15m unique 9h30 → 9h45 NY.
+OPR_WINDOW_START = (9, 30)
+OPR_WINDOW_END = (9, 45)
+
+# Heure NY de fermeture forcée des positions (clôture session US).
+OPR_SESSION_END = (16, 30)
+
+# Stop-loss et take-profit en POINTS (distance fixe à l'entrée), par actif.
+# Reproduit `stopPerInput` / `takePerInput` du PineScript. Calibrables via
+# optimize_opr.py. Les valeurs initiales ($50 risque / $100 reward grosso
+# modo selon $/pt) servent de point de départ raisonnable.
+OPR_SL_POINTS = {"MES1": 10.0, "NQ1": 25.0, "YM1": 50.0}
+OPR_TP_POINTS = {"MES1": 20.0, "NQ1": 50.0, "YM1": 100.0}
+
+# Plafond de fills par jour (sécurité même si la logique "1 position à la
+# fois" rend ce plafond rarement atteint). Conservé pour homogénéité.
+OPR_MAX_TRADES_PER_DAY = 4
+
+# Tag de version OPR pour le dossier de graphiques d'analyse.
+# Bump à chaque modification significative des règles OPR.
+OPR_STRATEGY_VERSION = "opr-v2"
 
 CHART_STYLE = {
     "figure.facecolor": "#131722",

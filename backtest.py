@@ -26,6 +26,7 @@ from config import (
     TOPSTEP_PROFIT_TARGET,
     DAILY_STOP_AFTER_SL, CONSEC_LOSS_PAUSE_DAYS, DAILY_LOCKIN_THRESHOLD,
     STRATEGY_VERSION, ANALYSIS_CHARTS_ENABLED,
+    OPR_ENABLED, OPR_STRATEGY_VERSION, OPR_MAX_TRADES_PER_DAY,
 )
 from core.data import load_csv, build_timeframes
 from core.strategy import generate_signals, simulate_trade
@@ -36,6 +37,9 @@ from core.analysis_chart import plot_day_analysis
 from core.zones import detect_zones
 from core.premarket import compute_features as compute_pm_features
 from core.scoring import compute_volatility_features
+from core.opr import run_opr_day
+from zoneinfo import ZoneInfo
+from config import OPR_TIMEZONE
 
 
 def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
@@ -203,20 +207,197 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
     return pd.DataFrame(trades)
 
 
+def run_opr_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
+                     topstep_guard: bool = True,
+                     analysis_chart_dir=None) -> pd.DataFrame:
+    """
+    Backtest de la stratégie OPR `opr-v2` (PineScript pullback).
+
+    La logique métier vit dans core/opr.run_opr_day() : 1ère bougie 15m de
+    la session NY (9h30-9h45) = zone OPR ; trigger pullback (open inside,
+    close outside) → ordre limite ; SL/TP en distance fixe ; 1 position à
+    la fois ; close all à 16h30 NY.
+
+    Garde-fous Topstep et circuit breakers identiques au backtest composite
+    pour cohérence si les deux stratégies tournent en parallèle.
+    """
+    tz = ZoneInfo(OPR_TIMEZONE)
+    trend_scores = precompute_trends(tf_dict)
+
+    # Construit la liste des jours de trading en référence NY pour éviter
+    # les ambiguïtés DST.
+    if df_15m.index.tz is None:
+        idx_ny = df_15m.index.tz_localize("UTC").tz_convert(tz)
+    else:
+        idx_ny = df_15m.index.tz_convert(tz)
+    ny_days = pd.DatetimeIndex(idx_ny.normalize().unique()).sort_values()
+
+    trades_out = []
+    cum_pnl = 0.0
+    peak_pnl = 0.0
+    consec_loss_days = 0
+
+    for day_ny in ny_days:
+        ds = day_ny.strftime("%Y-%m-%d")
+        cutoff = pd.Timestamp(f"{ds} {CUTOFF_HOUR_UTC:02d}:00:00")
+        # us_end pour le chart d'analyse : exprimé en UTC naïf comme l'index
+        # source. 16h30 NY (DST-aware) → UTC naïf.
+        h_close, m_close = 16, 30
+        us_end_utc = (day_ny.replace(hour=h_close, minute=m_close)
+                          .tz_convert("UTC").tz_localize(None))
+
+        if CONSEC_LOSS_PAUSE_DAYS > 0 and consec_loss_days >= CONSEC_LOSS_PAUSE_DAYS:
+            consec_loss_days = 0
+            continue
+
+        if topstep_guard:
+            allowed, _ = trade_allowed(day_pnl=0.0, cum_pnl=cum_pnl, peak_pnl=peak_pnl)
+            if not allowed:
+                continue
+
+        # Régime composite (info contextuelle pour les charts/audit)
+        regime, _ = get_regime_with_score(trend_scores, cutoff)
+
+        signals, sim_results, opr_zone = run_opr_day(df_15m, ticker, day_ny)
+        if not signals:
+            continue
+
+        # Convertit en lignes de trade pour le DataFrame de sortie
+        day_trades = []
+        for sig, res in zip(signals, sim_results):
+            row = {
+                "date": ds,
+                "strategy": "OPR",
+                "dir": sig["direction"],
+                "entry": sig["entry"],
+                "sl": sig["sl"],
+                "tp": sig["tp"],
+                "sl_dist": sig["sl_dist"],
+                "tp_dist": sig["tp_dist"],
+                "rr": sig["rr"],
+                "n_ct": sig["n_ct"],
+                "risk_$": sig["risk"],
+                "quality": 0.0,
+                "composite": 0.0,
+                "alignment": 0.0,
+                "atr_ratio": 0.0,
+                "n_tf": 1,
+                "touches": 0,
+                "regime": regime or "?",
+                "zone_low": sig["zone_low"],
+                "zone_high": sig["zone_high"],
+                "tp_type": sig.get("tp_type", "fixed"),
+                "trigger_time": sig["trigger_time"],
+                **res,
+            }
+            day_trades.append(row)
+
+        # Circuit breakers intra-jour (chronologiquement, sur les fills)
+        filled = [t for t in day_trades if t["result"] != "NOT_FILLED"]
+        not_filled = [t for t in day_trades if t["result"] == "NOT_FILLED"]
+        filled.sort(key=lambda t: t["fill_time"] or "")
+
+        kept = []
+        cancelled_cb = []
+        running_pnl = 0.0
+        breaker_armed = False
+        for t in filled:
+            if breaker_armed:
+                cancelled_cb.append(t)
+                continue
+            kept.append(t)
+            running_pnl += t["pnl"]
+            if DAILY_STOP_AFTER_SL and t["result"] == "SL":
+                breaker_armed = True
+            elif DAILY_LOCKIN_THRESHOLD > 0 and running_pnl >= DAILY_LOCKIN_THRESHOLD:
+                breaker_armed = True
+
+        for t in cancelled_cb:
+            t["result"] = "NOT_FILLED"
+            t["pnl"] = 0
+            t["fill_time"] = None
+            t["exit_time"] = None
+            t["exit"] = None
+
+        trades_out.extend(kept)
+        trades_out.extend(not_filled)
+        trades_out.extend(cancelled_cb)
+
+        # Graphique d'analyse OPR (réutilise plot_day_analysis si activé)
+        if analysis_chart_dir is not None and (signals or opr_zone is not None):
+            try:
+                zones_for_chart = []
+                if opr_zone is not None:
+                    zones_for_chart.append({
+                        "low": opr_zone["low"],
+                        "high": opr_zone["high"],
+                        "mid": opr_zone["mid"],
+                        "quality": 100.0,
+                        "n_tf": 1,
+                        "touches": 1,
+                        "tfs": ["OPR"],
+                        "dominant_tf": "OPR",
+                        # `start_time` borne la zone à partir de l'ouverture
+                        # OPR — le chart ne dessinera rien avant. La valeur
+                        # est en UTC naïf (homogène avec df_15m.index).
+                        "start_time": opr_zone["time_utc"],
+                    })
+                day_pm = compute_pm_features(df_15m, cutoff)
+                day_vol = compute_volatility_features(df_15m, cutoff, ticker)
+                chart_path = analysis_chart_dir / f"{ds}.png"
+                plot_day_analysis(
+                    df_15m=df_15m,
+                    ticker=ticker,
+                    date_str=ds,
+                    cutoff=cutoff,
+                    us_end=us_end_utc,
+                    zones=zones_for_chart,
+                    signals=signals,
+                    trades=(kept + cancelled_cb + not_filled),
+                    regime=regime,
+                    alignment_score=None,
+                    pm_features=day_pm,
+                    vol_features=day_vol,
+                    output_path=str(chart_path),
+                )
+            except Exception as e:
+                print(f"  [!] analyse OPR {ds}: {e}")
+
+        day_pnl = sum(t["pnl"] for t in kept)
+        cum_pnl += day_pnl
+        if cum_pnl > peak_pnl:
+            peak_pnl = cum_pnl
+        if day_pnl < 0:
+            consec_loss_days += 1
+        elif day_pnl > 0:
+            consec_loss_days = 0
+
+    return pd.DataFrame(trades_out)
+
+
 def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
-    """Vérifie l'intégrité des trades."""
+    """
+    Vérifie l'intégrité des trades.
+
+    Les contrôles SL_MINIMUM et alignement régime ne s'appliquent qu'à la
+    stratégie composite — ils n'ont pas de sens pour la stratégie OPR
+    (SL fixe en points, prises de position à contre-tendance autorisées).
+    """
     dpp = INSTRUMENTS[ticker]["dollar_per_point"]
     sl_min = SL_MINIMUM[ticker]
     if len(df_trades) == 0 or "result" not in df_trades.columns:
         print(f"  AUDIT: ⚠ aucun trade généré (filtre composite trop strict ?)")
         return True
     filled = df_trades[df_trades["result"] != "NOT_FILLED"]
+    if len(filled) == 0:
+        print(f"  AUDIT: ⚠ aucun fill")
+        return True
+    is_opr = "strategy" in filled.columns and (filled["strategy"] == "OPR").all()
     errors = 0
 
-    # P&L
+    # P&L (toujours appliqué)
     for _, r in filled.iterrows():
         if r.get("scale_in", False):
-            # Scale-in : PnL calculé sur 2 entrées, audit simplifié (skip)
             continue
         if r["dir"] == "long":
             exp = r["n_ct"] * (r["exit"] - r["entry"]) * dpp
@@ -225,16 +406,15 @@ def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
         if abs(exp - r["pnl"]) > 1:
             errors += 1
 
-    # SL minimum
-    if (filled["sl_dist"] < sl_min - 0.01).any():
-        errors += 1
-
-    # Régime
-    for _, r in filled.iterrows():
-        if r["dir"] == "long" and r["regime"] == "BEAR":
+    # Contrôles spécifiques composite (skip pour OPR)
+    if not is_opr:
+        if (filled["sl_dist"] < sl_min - 0.01).any():
             errors += 1
-        if r["dir"] == "short" and r["regime"] == "BULL":
-            errors += 1
+        for _, r in filled.iterrows():
+            if r["dir"] == "long" and r["regime"] == "BEAR":
+                errors += 1
+            if r["dir"] == "short" and r["regime"] == "BULL":
+                errors += 1
 
     print(f"  AUDIT: {'✅ OK' if errors == 0 else f'❌ {errors} erreurs'}")
     return errors == 0
@@ -517,6 +697,53 @@ def format_backtest_report(results: list) -> str:
     return msg
 
 
+def _run_strategy_for_ticker(strategy: str, ticker: str, df_15m, tf,
+                             args, output_dir: Path) -> dict:
+    """
+    Exécute une stratégie ('composite' ou 'opr') pour un ticker, gère le
+    dossier de graphiques d'analyse, l'audit, les stats et la sauvegarde.
+    Retourne {df_trades, filled, label, version}.
+    """
+    is_opr = strategy == "opr"
+    label = "OPR" if is_opr else "COMPOSITE"
+    version = OPR_STRATEGY_VERSION if is_opr else STRATEGY_VERSION
+
+    analysis_dir = None
+    if ANALYSIS_CHARTS_ENABLED and not args.no_analysis_charts:
+        analysis_dir = output_dir / "analysis_charts" / version / ticker
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n  ▸ [{label}] Exécution...")
+    if is_opr:
+        df_trades = run_opr_backtest(df_15m, tf, ticker,
+                                     analysis_chart_dir=analysis_dir)
+    else:
+        df_trades = run_backtest(df_15m, tf, ticker,
+                                 analysis_chart_dir=analysis_dir)
+
+    if analysis_dir is not None:
+        n_charts = len(list(analysis_dir.glob("*.png")))
+        print(f"  ✓ [{label}] {n_charts} graphique(s) d'analyse → {analysis_dir}")
+
+    audit(df_trades, ticker)
+    print_stats(df_trades, ticker)
+    ts = validate_topstep(df_trades, n_bootstrap=1000)
+    print_topstep_report(ts, ticker)
+
+    if len(df_trades) > 0 and "result" in df_trades.columns:
+        filled = df_trades[df_trades["result"] != "NOT_FILLED"]
+    else:
+        filled = pd.DataFrame()
+
+    suffix = "_opr" if is_opr else ""
+    out_csv = output_dir / f"backtest_{ticker}{suffix}.csv"
+    df_trades.to_csv(out_csv, index=False)
+    print(f"  ✓ {out_csv}")
+
+    return {"df_trades": df_trades, "filled": filled,
+            "label": label, "version": version}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Backtest stratégie ordres limites")
     parser.add_argument("--csv-dir", type=str, required=True,
@@ -525,6 +752,10 @@ def main():
                         help="Actif unique (défaut: tous)")
     parser.add_argument("--output-dir", type=str, default="./output",
                         help="Répertoire de sortie")
+    parser.add_argument("--strategy", type=str, default="both",
+                        choices=["composite", "opr", "both"],
+                        help="Stratégie à backtester (défaut: both — lance "
+                             "composite + OPR en parallèle).")
     parser.add_argument("--plot", action="store_true",
                         help="Générer graphiques pour chaque trade rempli")
     parser.add_argument("--plot-filter", type=str, default="all",
@@ -545,12 +776,18 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
 
-    backtest_results = []
+    if args.strategy == "both":
+        strategies = ["composite", "opr"]
+    else:
+        strategies = [args.strategy]
+
+    # Résultats par stratégie : {strategy: [{ticker, filled}, ...]}
+    results_by_strategy = {s: [] for s in strategies}
     all_chart_files = []
 
     for ticker in tickers:
         print(f"\n{'='*60}")
-        print(f"  BACKTEST — {ticker} (RR={RR_TARGET[ticker]})")
+        print(f"  BACKTEST — {ticker} (composite RR={RR_TARGET[ticker]})")
         print(f"{'='*60}")
 
         csv_path = Path(args.csv_dir) / f"{ticker}_data_m15.csv"
@@ -562,39 +799,19 @@ def main():
         tf = build_timeframes(df_15m)
         print(f"  {len(df_15m):,} bougies")
 
-        # Dossier d'analyse journalière (1 PNG / jour tradé, voir CLAUDE.md)
-        analysis_dir = None
-        if ANALYSIS_CHARTS_ENABLED and not args.no_analysis_charts:
-            analysis_dir = (
-                output_dir / "analysis_charts" / STRATEGY_VERSION / ticker
-            )
-            analysis_dir.mkdir(parents=True, exist_ok=True)
+        df_trades = None  # référence vers le composite pour le bloc --plot
+        for strat in strategies:
+            res = _run_strategy_for_ticker(strat, ticker, df_15m, tf, args, output_dir)
+            results_by_strategy[strat].append({"ticker": ticker,
+                                               "filled": res["filled"]})
+            if strat == "composite":
+                df_trades = res["df_trades"]
+        if df_trades is None:
+            # --strategy opr seul → pas de chart per-trade composite à tracer
+            df_trades = pd.DataFrame()
 
-        print(f"  ▸ Exécution...")
-        df_trades = run_backtest(df_15m, tf, ticker,
-                                 analysis_chart_dir=analysis_dir)
-        if analysis_dir is not None:
-            n_charts = len(list(analysis_dir.glob("*.png")))
-            print(f"  ✓ {n_charts} graphique(s) d'analyse → {analysis_dir}")
-        audit(df_trades, ticker)
-        print_stats(df_trades, ticker)
-        ts = validate_topstep(df_trades, n_bootstrap=1000)
-        print_topstep_report(ts, ticker)
-
-        # Collecter les résultats pour le rapport Telegram
-        if len(df_trades) > 0 and "result" in df_trades.columns:
-            filled_trades = df_trades[df_trades["result"] != "NOT_FILLED"]
-        else:
-            filled_trades = pd.DataFrame()
-        backtest_results.append({"ticker": ticker, "filled": filled_trades})
-
-        # Sauvegarde
-        out_csv = output_dir / f"backtest_{ticker}.csv"
-        df_trades.to_csv(out_csv, index=False)
-        print(f"\n  ✓ {out_csv}")
-
-        # Graphiques des trades
-        if args.plot:
+        # Graphiques par trade (composite uniquement, conservés pour compat)
+        if args.plot and "composite" in strategies and len(df_trades) > 0:
             chart_dir = output_dir / "backtest_charts" / ticker
             chart_dir.mkdir(parents=True, exist_ok=True)
 
@@ -628,14 +845,30 @@ def main():
                         print(f"    {idx+1}/{total}...")
                 print(f"  ✓ {total} graphiques → {chart_dir}")
 
-    # Validation Topstep portefeuille (P&L journalier agrégé sur tous les tickers)
-    portfolio_topstep_report(backtest_results, n_bootstrap=1000)
+    # Validation Topstep portefeuille (par stratégie + combiné si both)
+    for strat in strategies:
+        print(f"\n{'#'*60}")
+        print(f"  PORTEFEUILLE — Stratégie {strat.upper()}")
+        print(f"{'#'*60}")
+        portfolio_topstep_report(results_by_strategy[strat], n_bootstrap=1000)
+
+    if len(strategies) > 1:
+        print(f"\n{'#'*60}")
+        print(f"  PORTEFEUILLE — STRATÉGIES COMBINÉES (composite + opr)")
+        print(f"{'#'*60}")
+        combined = []
+        for strat in strategies:
+            for r in results_by_strategy[strat]:
+                combined.append(r)
+        portfolio_topstep_report(combined, n_bootstrap=1000)
 
     print(f"\n{'='*60}")
     print(f"  ✅ BACKTEST TERMINÉ")
     print(f"{'='*60}")
 
-    # Envoi Telegram
+    # Envoi Telegram (utilise le composite par défaut, puis OPR si présent)
+    backtest_results = results_by_strategy.get("composite",
+                                               results_by_strategy.get("opr", []))
     if args.telegram:
         from core.telegram import get_chat_id, send_message, send_photo
 

@@ -45,6 +45,7 @@ TF_COLORS = {
     "H4":  "#a566ff",   # violet
     "H1":  "#42a5f5",   # bleu clair
     "15m": "#9e9e9e",   # gris
+    "OPR": "#ffd54f",   # jaune (zone OPR)
 }
 
 EXIT_COLORS = {"TP": TV_GREEN, "SL": TV_RED, "TE": TV_ORANGE}
@@ -203,18 +204,51 @@ def plot_day_analysis(
         dom_tf = z.get("dominant_tf", z.get("tfs", ["15m"])[0] if z.get("tfs") else "15m")
         clr = TF_COLORS.get(dom_tf, TV_DIM)
         used_tfs.add(dom_tf)
-        # Bande
-        ax.axhspan(z["low"], z["high"], color=clr, alpha=0.13, zorder=1)
+
+        # Borne X de la zone : par défaut toute la largeur visible. Si la
+        # zone porte un `start_time` (ex. zone OPR), on commence à l'index
+        # correspondant — la zone n'apparaît PAS avant son moment de
+        # création. Idem pour `end_time` (par défaut : fin de fenêtre).
+        x0, x1 = 0, n - 1
+        st = z.get("start_time")
+        et = z.get("end_time")
+        if st is not None:
+            st_ts = pd.Timestamp(st)
+            if data.index[0] <= st_ts <= data.index[-1]:
+                x0 = int(data.index.get_indexer([st_ts], method="pad")[0])
+            elif st_ts > data.index[-1]:
+                # zone démarrant hors fenêtre visible : on saute le tracé
+                continue
+        if et is not None:
+            et_ts = pd.Timestamp(et)
+            if data.index[0] <= et_ts <= data.index[-1]:
+                x1 = int(data.index.get_indexer([et_ts], method="pad")[0])
+
+        # Bande bornée (rectangle prix)
+        ax.fill_between([x0 - 0.5, x1 + 0.5],
+                        z["low"], z["high"],
+                        color=clr, alpha=0.18, zorder=1)
         # Bordures fines
-        ax.plot([0, n - 1], [z["low"], z["low"]], color=clr, lw=0.6, alpha=0.55, zorder=1)
-        ax.plot([0, n - 1], [z["high"], z["high"]], color=clr, lw=0.6, alpha=0.55, zorder=1)
-        # Étiquette à gauche
+        ax.plot([x0 - 0.5, x1 + 0.5], [z["low"], z["low"]],
+                color=clr, lw=0.7, alpha=0.7, zorder=1)
+        ax.plot([x0 - 0.5, x1 + 0.5], [z["high"], z["high"]],
+                color=clr, lw=0.7, alpha=0.7, zorder=1)
+
+        # Étiquette : à gauche pour zones full-width, sinon contre la
+        # bordure gauche de la zone bornée.
         tfs_str = "+".join(z.get("tfs", [dom_tf]))
-        ax.text(
-            -2, z["mid"],
-            f"{tfs_str} Q{z['quality']:.0f} ({z['touches']}t)",
-            fontsize=6.5, color=clr, va="center", ha="right", alpha=0.95,
-        )
+        if st is not None and x0 > 0:
+            ax.text(
+                x0, z["mid"],
+                f" {tfs_str} Q{z['quality']:.0f} ({z['touches']}t)",
+                fontsize=6.5, color=clr, va="center", ha="left", alpha=0.95,
+            )
+        else:
+            ax.text(
+                -2, z["mid"],
+                f"{tfs_str} Q{z['quality']:.0f} ({z['touches']}t)",
+                fontsize=6.5, color=clr, va="center", ha="right", alpha=0.95,
+            )
 
     # ── Marqueur cutoff (verticale) ──────────────────────────────────────
     ax.axvline(n_pre - 0.5, color=TV_FG, ls=":", lw=1.0, alpha=0.55, zorder=3)
@@ -229,13 +263,31 @@ def plot_day_analysis(
     label_x = n + 1
     sig_count = len(signals)
 
-    # Mapper trade par (entry, dir) si possible
+    # Mapper trade par signal — désambiguïsation par `trigger_time` quand
+    # plusieurs signaux partagent la même direction/entrée (cas OPR : tous
+    # les longs entrent au niveau opr_high). On consomme les trades au fur
+    # et à mesure pour garantir un mapping 1:1.
+    _consumed_ids = set()
+
     def _match_trade(sig):
-        for t in trades:
+        sig_trig = sig.get("trigger_time")
+        # 1) Match exact sur trigger_time (le plus fiable pour OPR)
+        if sig_trig is not None:
+            for i, t in enumerate(trades):
+                if i in _consumed_ids:
+                    continue
+                if t.get("trigger_time") == sig_trig:
+                    _consumed_ids.add(i)
+                    return t
+        # 2) Fallback : direction + entry (signaux composite uniques)
+        for i, t in enumerate(trades):
+            if i in _consumed_ids:
+                continue
             if (
                 t.get("dir") == sig["direction"]
                 and abs(float(t.get("entry", 0)) - float(sig["entry"])) < tick / 2
             ):
+                _consumed_ids.add(i)
                 return t
         return None
 
@@ -273,13 +325,21 @@ def plot_day_analysis(
                           pad=2, boxstyle="round,pad=0.25"),
                 zorder=5)
 
-        # Marqueur fill / exit si trade simulé
+        # Marqueur fill / exit si trade simulé.
+        # Les timestamps OPR sont tz-aware NY ; on les ramène à la même
+        # base que `data.index` (UTC naïf) pour pouvoir indexer.
+        def _to_naive_utc(ts):
+            t = pd.Timestamp(ts)
+            if t.tzinfo is not None:
+                t = t.tz_convert("UTC").tz_localize(None)
+            return t
+
         tr = _match_trade(sig)
         if tr and tr.get("result") and tr["result"] != "NOT_FILLED":
             ft = tr.get("fill_time")
             et = tr.get("exit_time")
             if ft is not None:
-                ft = pd.Timestamp(ft)
+                ft = _to_naive_utc(ft)
                 if data.index[0] <= ft <= data.index[-1]:
                     fx = int(data.index.get_indexer([ft], method="pad")[0])
                     marker = "^" if direction == "long" else "v"
@@ -291,7 +351,7 @@ def plot_day_analysis(
                             zorder=6)
             exit_price = tr.get("exit")
             if et is not None and exit_price is not None:
-                et = pd.Timestamp(et)
+                et = _to_naive_utc(et)
                 if data.index[0] <= et <= data.index[-1]:
                     ex = int(data.index.get_indexer([et], method="pad")[0])
                     ec = EXIT_COLORS.get(tr["result"], "#ffffff")
