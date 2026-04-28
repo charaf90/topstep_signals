@@ -263,13 +263,31 @@ def plot_day_analysis(
     label_x = n + 1
     sig_count = len(signals)
 
-    # Mapper trade par (entry, dir) si possible
+    # Mapper trade par signal — désambiguïsation par `trigger_time` quand
+    # plusieurs signaux partagent la même direction/entrée (cas OPR : tous
+    # les longs entrent au niveau opr_high). On consomme les trades au fur
+    # et à mesure pour garantir un mapping 1:1.
+    _consumed_ids = set()
+
     def _match_trade(sig):
-        for t in trades:
+        sig_trig = sig.get("trigger_time")
+        # 1) Match exact sur trigger_time (le plus fiable pour OPR)
+        if sig_trig is not None:
+            for i, t in enumerate(trades):
+                if i in _consumed_ids:
+                    continue
+                if t.get("trigger_time") == sig_trig:
+                    _consumed_ids.add(i)
+                    return t
+        # 2) Fallback : direction + entry (signaux composite uniques)
+        for i, t in enumerate(trades):
+            if i in _consumed_ids:
+                continue
             if (
                 t.get("dir") == sig["direction"]
                 and abs(float(t.get("entry", 0)) - float(sig["entry"])) < tick / 2
             ):
+                _consumed_ids.add(i)
                 return t
         return None
 
@@ -307,13 +325,21 @@ def plot_day_analysis(
                           pad=2, boxstyle="round,pad=0.25"),
                 zorder=5)
 
-        # Marqueur fill / exit si trade simulé
+        # Marqueur fill / exit si trade simulé.
+        # Les timestamps OPR sont tz-aware NY ; on les ramène à la même
+        # base que `data.index` (UTC naïf) pour pouvoir indexer.
+        def _to_naive_utc(ts):
+            t = pd.Timestamp(ts)
+            if t.tzinfo is not None:
+                t = t.tz_convert("UTC").tz_localize(None)
+            return t
+
         tr = _match_trade(sig)
         if tr and tr.get("result") and tr["result"] != "NOT_FILLED":
             ft = tr.get("fill_time")
             et = tr.get("exit_time")
             if ft is not None:
-                ft = pd.Timestamp(ft)
+                ft = _to_naive_utc(ft)
                 if data.index[0] <= ft <= data.index[-1]:
                     fx = int(data.index.get_indexer([ft], method="pad")[0])
                     marker = "^" if direction == "long" else "v"
@@ -325,7 +351,7 @@ def plot_day_analysis(
                             zorder=6)
             exit_price = tr.get("exit")
             if et is not None and exit_price is not None:
-                et = pd.Timestamp(et)
+                et = _to_naive_utc(et)
                 if data.index[0] <= et <= data.index[-1]:
                     ex = int(data.index.get_indexer([et], method="pad")[0])
                     ec = EXIT_COLORS.get(tr["result"], "#ffffff")
