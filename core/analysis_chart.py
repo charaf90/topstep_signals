@@ -204,18 +204,51 @@ def plot_day_analysis(
         dom_tf = z.get("dominant_tf", z.get("tfs", ["15m"])[0] if z.get("tfs") else "15m")
         clr = TF_COLORS.get(dom_tf, TV_DIM)
         used_tfs.add(dom_tf)
-        # Bande
-        ax.axhspan(z["low"], z["high"], color=clr, alpha=0.13, zorder=1)
+
+        # Borne X de la zone : par défaut toute la largeur visible. Si la
+        # zone porte un `start_time` (ex. zone OPR), on commence à l'index
+        # correspondant — la zone n'apparaît PAS avant son moment de
+        # création. Idem pour `end_time` (par défaut : fin de fenêtre).
+        x0, x1 = 0, n - 1
+        st = z.get("start_time")
+        et = z.get("end_time")
+        if st is not None:
+            st_ts = pd.Timestamp(st)
+            if data.index[0] <= st_ts <= data.index[-1]:
+                x0 = int(data.index.get_indexer([st_ts], method="pad")[0])
+            elif st_ts > data.index[-1]:
+                # zone démarrant hors fenêtre visible : on saute le tracé
+                continue
+        if et is not None:
+            et_ts = pd.Timestamp(et)
+            if data.index[0] <= et_ts <= data.index[-1]:
+                x1 = int(data.index.get_indexer([et_ts], method="pad")[0])
+
+        # Bande bornée (rectangle prix)
+        ax.fill_between([x0 - 0.5, x1 + 0.5],
+                        z["low"], z["high"],
+                        color=clr, alpha=0.18, zorder=1)
         # Bordures fines
-        ax.plot([0, n - 1], [z["low"], z["low"]], color=clr, lw=0.6, alpha=0.55, zorder=1)
-        ax.plot([0, n - 1], [z["high"], z["high"]], color=clr, lw=0.6, alpha=0.55, zorder=1)
-        # Étiquette à gauche
+        ax.plot([x0 - 0.5, x1 + 0.5], [z["low"], z["low"]],
+                color=clr, lw=0.7, alpha=0.7, zorder=1)
+        ax.plot([x0 - 0.5, x1 + 0.5], [z["high"], z["high"]],
+                color=clr, lw=0.7, alpha=0.7, zorder=1)
+
+        # Étiquette : à gauche pour zones full-width, sinon contre la
+        # bordure gauche de la zone bornée.
         tfs_str = "+".join(z.get("tfs", [dom_tf]))
-        ax.text(
-            -2, z["mid"],
-            f"{tfs_str} Q{z['quality']:.0f} ({z['touches']}t)",
-            fontsize=6.5, color=clr, va="center", ha="right", alpha=0.95,
-        )
+        if st is not None and x0 > 0:
+            ax.text(
+                x0, z["mid"],
+                f" {tfs_str} Q{z['quality']:.0f} ({z['touches']}t)",
+                fontsize=6.5, color=clr, va="center", ha="left", alpha=0.95,
+            )
+        else:
+            ax.text(
+                -2, z["mid"],
+                f"{tfs_str} Q{z['quality']:.0f} ({z['touches']}t)",
+                fontsize=6.5, color=clr, va="center", ha="right", alpha=0.95,
+            )
 
     # ── Marqueur cutoff (verticale) ──────────────────────────────────────
     ax.axvline(n_pre - 0.5, color=TV_FG, ls=":", lw=1.0, alpha=0.55, zorder=3)

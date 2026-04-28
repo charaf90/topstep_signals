@@ -214,46 +214,52 @@ CONSEC_LOSS_PAUSE_DAYS  = 5
 DAILY_LOCKIN_THRESHOLD  = 0
 
 # ==============================================================================
-# STRATÉGIE OPR (Opening Range Breakout) — exécutée en parallèle
+# STRATÉGIE OPR (Opening Range Breakout — pullback PineScript) — opr-v2
 # ==============================================================================
-# La 1ère bougie 15min de la session US (13:00 UTC) définit la zone OPR.
-# Voir core/opr.py pour la logique complète. Activable indépendamment de la
-# stratégie composite via --strategy {composite,opr,both} dans backtest.py.
+# Réécriture fidèle au PineScript fourni par l'utilisateur (avr. 2026) :
+#   • Zone OPR = 1ère bougie 15min de la session US ouvrant à 9h30 NY.
+#     L'heure est fixée en heure NY (America/New_York) afin que la stratégie
+#     soit invariante au passage été/hiver côté Paris.
+#   • Trigger pullback : une bougie qui OUVRE dans la zone OPR et CLÔTURE
+#     hors zone arme un ordre LIMIT au niveau OPR du sens de sortie
+#     (limit BUY @ OPR_high si close > OPR_high, limit SELL @ OPR_low
+#     si close < OPR_low).
+#   • Une seule position ouverte à la fois (pyramiding=0 dans le PineScript).
+#   • SL / TP en distance fixe (points), pas en RR de l'OPR.
+#   • Toutes les positions sont fermées à 16h30 NY.
+#
+# Voir core/opr.py.
 
 OPR_ENABLED = True
 
-# Risk-reward (TP_dist = SL_dist × OPR_RR).
-# Valeurs calibrées via optimize_opr.py (split walk-forward IS / OOS au
-# 2025-09-30). Sélection : meilleur PF × P&L sur l'OOS, sous contrainte
-# OOS PF ≥ 1.2 et n_trades OOS ≥ 8.
-#
-# Asset │ IS PF │ OOS PF │ OOS P&L │ OOS n
-# ──────┼───────┼────────┼─────────┼──────
-# MES1  │ 1.64  │ 1.61   │ +$5049  │ 158
-# NQ1   │ 1.34  │ 1.65   │ +$3812  │ 142
-# YM1   │ 1.67  │ 1.87   │ +$6012  │ 142
-OPR_RR = 1.5  # défaut si ticker absent du dict ci-dessous
-OPR_RR_BY_TICKER = {"MES1": 3.0, "NQ1": 3.0, "YM1": 2.5}
+# Fuseau horaire de référence pour la zone OPR et l'horaire de session.
+# `America/New_York` gère automatiquement DST (EST/EDT) — l'OPR reste à
+# 9h30 NY toute l'année, ce qui se traduit en 14h30 UTC (hiver) ou 13h30
+# UTC (été). C'est une exigence explicite : on ne hard-code plus l'heure UTC.
+OPR_TIMEZONE = "America/New_York"
 
-# Buffer en ticks ajouté de l'autre côté de la zone OPR pour positionner le SL.
-OPR_SL_BUFFER_TICKS = 2
+# Heures NY (h, m). La fenêtre OPR est [WINDOW_START, WINDOW_END) — soit la
+# bougie 15m unique 9h30 → 9h45 NY.
+OPR_WINDOW_START = (9, 30)
+OPR_WINDOW_END = (9, 45)
 
-# Plafond de signaux retournés par session (le 1er trigger + les
-# continuations valides). Garde la même borne que la strat composite.
-OPR_MAX_TRADES_PER_DAY = 2
+# Heure NY de fermeture forcée des positions (clôture session US).
+OPR_SESSION_END = (16, 30)
 
-# Filtres de range OPR (en % du mid-OPR). Évite les sessions trop calmes
-# (OPR ridiculement étroit) ou trop violentes (OPR énorme → 0 contrat).
-OPR_RANGE_MIN_PCT = 0.0005   # 0.05% (≈ 5pts sur ES @ 5000, 10pts sur NQ @ 20000)
-OPR_RANGE_MAX_PCT = 0.0150   # 1.5%
+# Stop-loss et take-profit en POINTS (distance fixe à l'entrée), par actif.
+# Reproduit `stopPerInput` / `takePerInput` du PineScript. Calibrables via
+# optimize_opr.py. Les valeurs initiales ($50 risque / $100 reward grosso
+# modo selon $/pt) servent de point de départ raisonnable.
+OPR_SL_POINTS = {"MES1": 10.0, "NQ1": 25.0, "YM1": 50.0}
+OPR_TP_POINTS = {"MES1": 20.0, "NQ1": 50.0, "YM1": 100.0}
 
-# Si True, refuse les longs en BEAR et les shorts en BULL (régime composite).
-# False par défaut : OPR fonctionne souvent à contre-tendance court terme.
-OPR_REQUIRE_TREND = False
+# Plafond de fills par jour (sécurité même si la logique "1 position à la
+# fois" rend ce plafond rarement atteint). Conservé pour homogénéité.
+OPR_MAX_TRADES_PER_DAY = 4
 
 # Tag de version OPR pour le dossier de graphiques d'analyse.
 # Bump à chaque modification significative des règles OPR.
-OPR_STRATEGY_VERSION = "opr-v1"
+OPR_STRATEGY_VERSION = "opr-v2"
 
 CHART_STYLE = {
     "figure.facecolor": "#131722",

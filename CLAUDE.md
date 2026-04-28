@@ -12,11 +12,12 @@ The codebase is **pure Python (~2,000 lines)**, file-based (no database), and ru
 - Consecutive-loss circuit breaker pauses trading 1 day after 5 consecutive losing days.
 - YM1 disabled globally (`YM1_ENABLED=False`) for the composite strategy — no OOS profitability proof yet.
 
-**Stratégie OPR (`opr-v1`)** tourne en parallèle du composite et est activée par
-défaut dans `backtest.py --strategy both`. C'est une approche
-breakout-pullback de la 1ère bougie 15min de la session US — voir section
-"Stratégie OPR" plus bas. Calibration walk-forward IS / OOS validée
-(MES1 OOS PF=1.61, NQ1 OOS PF=1.65, YM1 OOS PF=1.87).
+**Stratégie OPR (`opr-v2`)** tourne en parallèle du composite et est activée
+par défaut dans `backtest.py --strategy both`. C'est une réécriture fidèle
+au PineScript fourni par l'utilisateur (avr. 2026) : la fenêtre OPR est
+ancrée à **9h30 NY** (timezone `America/New_York`, DST-aware) et la logique
+trigger est un pullback (open dans la zone, close hors zone → ordre limite
+au niveau OPR). Voir section "Stratégie OPR" plus bas.
 
 ---
 
@@ -28,7 +29,7 @@ topstep_signals/
 ├── signals.py              # Main live signal generator & Telegram sender
 ├── backtest.py             # Historical backtesting engine + validate_topstep bootstrap
 ├── optimize.py             # Walk-forward IS/OOS optimizer (Phase A/B/C, composite)
-├── optimize_opr.py         # Walk-forward optimizer for OPR_RR per asset
+├── optimize_opr.py         # Walk-forward optimizer (OPR SL/TP points par actif)
 ├── run_phase_c.py          # Phase C alone (composite calibration only)
 ├── requirements.txt        # Python dependencies
 ├── README.md               # French user documentation
@@ -224,60 +225,104 @@ Topstep slack guardrail + `CONSEC_LOSS_PAUSE_DAYS=5` sit on top.
 
 ---
 
-## Stratégie OPR (`opr-v1`) — exécutée en parallèle du composite
+## Stratégie OPR (`opr-v2`) — exécutée en parallèle du composite
 
-Stratégie de breakout-pullback ancrée sur la 1ère bougie 15min de la
-session US (13:00 UTC). Implémentation : `core/opr.py`. Backtest dédié :
-`backtest.py --strategy opr` (ou `--strategy both` pour les deux).
+Réécriture fidèle au PineScript fourni par l'utilisateur (avr. 2026).
+Implémentation : `core/opr.py` → `run_opr_day(df_15m, ticker, day_ny)`.
+Backtest dédié : `backtest.py --strategy opr` (ou `--strategy both`).
 
-### Définition de la zone
-- **OPR_high** = high de la 1ère bougie 15min (13:00–13:15 UTC)
-- **OPR_low**  = low de cette bougie
+### Fuseau horaire — `America/New_York` (DST-aware)
+Toutes les heures de la stratégie OPR sont définies en **heure NY** afin
+que la logique soit invariante au passage été/hiver côté Paris :
 
-### Triggers
-- **Premier déclenchement** : la 1ère bougie qui clôture **hors** de la zone
-  → ordre limite au niveau OPR du sens de sortie (`limit BUY @ OPR_high`
-  si close au-dessus, `limit SELL @ OPR_low` si close en-dessous).
-- **Continuation intraday** : une bougie qui **ouvre dans l'OPR** puis
-  **clôture hors** de l'OPR replace l'ordre dans le sens de sortie. Cela
-  permet plusieurs entrées si le prix oscille autour de la zone.
-- Si la direction change entre deux triggers, l'ordre précédent encore en
-  attente est annulé et remplacé.
+| Heure NY | UTC en hiver (EST) | UTC en été (EDT) |
+|----------|-------------------|------------------|
+| 9h30     | 14h30             | 13h30            |
+| 16h30    | 21h30             | 20h30            |
+
+`zoneinfo.ZoneInfo(OPR_TIMEZONE)` gère automatiquement la transition. Le
+DataFrame source reste en UTC naïf (cohérent avec le reste du codebase) ;
+la conversion s'effectue à l'intérieur de `core/opr.py`.
+
+### Définition de la zone OPR
+- La 1ère bougie 15min qui ouvre à **9h30 NY** définit la zone.
+- `opr_high` = high de cette bougie, `opr_low` = low.
+- `OPR_WINDOW_START = (9, 30)`, `OPR_WINDOW_END = (9, 45)` dans config.
+
+### Triggers de pullback (PineScript-faithful)
+Vérifiés sur chaque bougie qui clôture **strictement après 9h45 NY** et
+**avant 16h30 NY**, et uniquement quand aucune position n'est ouverte ni
+qu'aucun ordre limite n'est en attente.
+
+- **LONG** : `bar.open < opr_high AND bar.close > opr_high` →
+  arme un ordre `limit BUY @ opr_high`.
+- **SHORT** : `bar.open > opr_low AND bar.close < opr_low` →
+  arme un ordre `limit SELL @ opr_low`.
+
+L'ordre limite est armé pour la bougie suivante. Il fait fill dès qu'une
+bougie ultérieure touche le niveau OPR (`bar.low ≤ opr_high ≤ bar.high`
+côté long, symétrique côté short). Une seule position à la fois — tant
+qu'une position est ouverte ou qu'un ordre limite est pendant, aucun
+nouveau trigger n'est armé. Si le prix s'éloigne sans fill, l'ordre reste
+actif jusqu'à 16h30 NY (puis annulé, marqué `NOT_FILLED`).
 
 ### Construction du trade
-- `entry`   = OPR_high (long) ou OPR_low (short)
-- `sl`      = autre côté de l'OPR ± `OPR_SL_BUFFER_TICKS` (2 ticks par défaut),
-  élargi à `SL_MINIMUM[ticker]` si nécessaire
-- `tp`      = entry ± `sl_dist` × `OPR_RR_BY_TICKER[ticker]`
-- `n_ct`    = `RISK_PER_TRADE_USD` / (`sl_dist` × $/pt) — risque fixe $100
-- Garde-fous : range OPR ∈ [`OPR_RANGE_MIN_PCT`, `OPR_RANGE_MAX_PCT`] du mid
+- `entry`   = `opr_high` (long) ou `opr_low` (short)
+- `sl`      = `entry ± OPR_SL_POINTS[ticker]` (distance fixe en points)
+- `tp`      = `entry ± OPR_TP_POINTS[ticker]` (distance fixe en points)
+- `n_ct`    = `RISK_PER_TRADE_USD / (OPR_SL_POINTS × $/pt)` — risque fixe $100
+- À 16h30 NY, toute position ouverte est fermée au close (`result=TE`).
+
+### Paramètres calibrables (`config.py`)
+| Param                  | Rôle                                             |
+|------------------------|--------------------------------------------------|
+| `OPR_TIMEZONE`         | `"America/New_York"` (ne pas modifier)           |
+| `OPR_WINDOW_START/END` | `(9,30) / (9,45)` — fenêtre de formation OPR     |
+| `OPR_SESSION_END`      | `(16,30)` — close all                            |
+| `OPR_SL_POINTS`        | distance SL en points par ticker                 |
+| `OPR_TP_POINTS`        | distance TP en points par ticker                 |
+| `OPR_MAX_TRADES_PER_DAY` | plafond fills/jour (sécurité, rarement atteint)|
+
+Valeurs initiales `opr-v2` (avant calibration utilisateur) :
+
+| Asset | OPR_SL_POINTS | OPR_TP_POINTS | RR (TP/SL) |
+|-------|---------------|---------------|------------|
+| MES1  | 10            | 20            | 2.00       |
+| NQ1   | 25            | 50            | 2.00       |
+| YM1   | 50            | 100           | 2.00       |
 
 ### Calibration walk-forward (IS Dec 2024 → Sep 2025, OOS Oct 2025 → Mar 2026)
 
-| Asset | RR retenu | IS PF | OOS PF | OOS P&L | OOS n |
-|-------|-----------|-------|--------|---------|-------|
-| MES1  | 3.0       | 1.64  | 1.61   | +$5,049 | 158   |
-| NQ1   | 3.0       | 1.34  | 1.65   | +$3,812 | 142   |
-| YM1   | 2.5       | 1.67  | **1.87** | **+$6,012** | 142   |
+`python optimize_opr.py --csv-dir ./data` balaye une grille
+(SL_pts × TP_pts) par actif. Le script applique le même critère
+qu'`optimize.py` Phase C : **OOS PF ≥ 1.2, n_trades OOS ≥ 8, P&L OOS > 0**.
 
-> YM1 est désactivé pour la stratégie composite mais **pleinement actif en
-> OPR** — l'OPR contourne le besoin d'un score composite et la calibration
-> walk-forward est validée largement.
+Premières combinaisons validées (à reporter manuellement après revue
+visuelle) :
 
-Pour ré-optimiser : `python optimize_opr.py --csv-dir ./data`. Le script
-applique le même critère qu'`optimize.py` Phase C (OOS PF ≥ 1.2,
-n_trades OOS ≥ 8, P&L OOS > 0).
+| Asset | SL | TP | RR  | IS PF | OOS PF | OOS P&L | OOS n |
+|-------|----|----|-----|-------|--------|---------|-------|
+| MES1  | 10 | 45 | 4.50 | 1.38 | 1.32   | +$2,108 | 108   |
+| NQ1   | 15 | 25 | 1.67 | 1.32 | 1.63   | +$3,180 | 112   |
+| YM1   | 50 | 60 | 1.20 | 1.29 | 1.54   | +$2,898 | 129   |
+
+> Les valeurs sont à ré-évaluer visuellement via les graphiques d'analyse
+> avant d'être adoptées. Le backtest brut peut sur-fitter sur l'IS — la
+> revue chart-par-chart prime sur le PF.
 
 ### Règles à respecter pour évoluer la stratégie OPR
-- **Bump `OPR_STRATEGY_VERSION`** dans `config.py` (ex. `opr-v2`) à chaque
+- **Bump `OPR_STRATEGY_VERSION`** dans `config.py` (ex. `opr-v3`) à chaque
   changement structurel (nouvelle règle de trigger, nouveau filtre).
   Cela isole les graphiques d'analyse et permet une comparaison versionnée.
-- **Re-calibrer `OPR_RR_BY_TICKER`** via `optimize_opr.py` quand la règle
-  de trigger change.
-- **Ne pas activer `OPR_REQUIRE_TREND` sans validation OOS** : la stratégie
-  fonctionne souvent à contre-tendance court terme.
+- **Re-calibrer `OPR_SL_POINTS` / `OPR_TP_POINTS`** via `optimize_opr.py`
+  quand la règle de trigger change.
+- **Ne pas hard-coder d'heure UTC** dans la logique OPR — toute heure doit
+  passer par `OPR_TIMEZONE` afin de gérer DST automatiquement.
 - **Garder le module `core/opr.py` indépendant** des modules composite
   (`zones.py`, `scoring.py`) — les deux stratégies cohabitent en parallèle.
+- **Backtests / optimisations sans charts par défaut** côté assistant
+  (ajouter `--no-analysis-charts` au CLI). L'utilisateur génère les charts
+  de revue de son côté pour ne pas allonger les itérations.
 
 ---
 

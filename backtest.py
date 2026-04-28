@@ -37,7 +37,9 @@ from core.analysis_chart import plot_day_analysis
 from core.zones import detect_zones
 from core.premarket import compute_features as compute_pm_features
 from core.scoring import compute_volatility_features
-from core.opr import generate_opr_signals, simulate_opr_trade, compute_opr
+from core.opr import run_opr_day
+from zoneinfo import ZoneInfo
+from config import OPR_TIMEZONE
 
 
 def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
@@ -207,37 +209,42 @@ def run_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
 
 def run_opr_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
                      topstep_guard: bool = True,
-                     analysis_chart_dir=None,
-                     rr: float = None) -> pd.DataFrame:
+                     analysis_chart_dir=None) -> pd.DataFrame:
     """
-    Backtest de la stratégie OPR jour par jour.
+    Backtest de la stratégie OPR `opr-v2` (PineScript pullback).
 
-    Logique : 1ère bougie 15m de la session US = zone OPR. Les bougies
-    suivantes qui clôturent hors zone (ou rentrent puis sortent) déclenchent
-    des ordres limites au niveau OPR. Voir core/opr.py.
+    La logique métier vit dans core/opr.run_opr_day() : 1ère bougie 15m de
+    la session NY (9h30-9h45) = zone OPR ; trigger pullback (open inside,
+    close outside) → ordre limite ; SL/TP en distance fixe ; 1 position à
+    la fois ; close all à 16h30 NY.
 
     Garde-fous Topstep et circuit breakers identiques au backtest composite
-    pour cohérence si les deux stratégies tournent en parallèle sur le même
-    compte.
+    pour cohérence si les deux stratégies tournent en parallèle.
     """
-    dpp = INSTRUMENTS[ticker]["dollar_per_point"]
+    tz = ZoneInfo(OPR_TIMEZONE)
     trend_scores = precompute_trends(tf_dict)
-    dates = df_15m.index.normalize().unique()
-    trades = []
 
+    # Construit la liste des jours de trading en référence NY pour éviter
+    # les ambiguïtés DST.
+    if df_15m.index.tz is None:
+        idx_ny = df_15m.index.tz_localize("UTC").tz_convert(tz)
+    else:
+        idx_ny = df_15m.index.tz_convert(tz)
+    ny_days = pd.DatetimeIndex(idx_ny.normalize().unique()).sort_values()
+
+    trades_out = []
     cum_pnl = 0.0
     peak_pnl = 0.0
     consec_loss_days = 0
 
-    for day in dates:
-        ds = day.strftime("%Y-%m-%d")
+    for day_ny in ny_days:
+        ds = day_ny.strftime("%Y-%m-%d")
         cutoff = pd.Timestamp(f"{ds} {CUTOFF_HOUR_UTC:02d}:00:00")
-        us_start = pd.Timestamp(f"{ds} {US_SESSION_START_UTC:02d}:00:00")
-        us_end = pd.Timestamp(f"{ds} {US_SESSION_END_UTC:02d}:00:00")
-
-        us_data = df_15m[(df_15m.index >= us_start) & (df_15m.index <= us_end)]
-        if len(us_data) < MIN_BARS_US_SESSION:
-            continue
+        # us_end pour le chart d'analyse : exprimé en UTC naïf comme l'index
+        # source. 16h30 NY (DST-aware) → UTC naïf.
+        h_close, m_close = 16, 30
+        us_end_utc = (day_ny.replace(hour=h_close, minute=m_close)
+                          .tz_convert("UTC").tz_localize(None))
 
         if CONSEC_LOSS_PAUSE_DAYS > 0 and consec_loss_days >= CONSEC_LOSS_PAUSE_DAYS:
             consec_loss_days = 0
@@ -248,18 +255,17 @@ def run_opr_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
             if not allowed:
                 continue
 
-        # Régime composite (utilisé seulement si OPR_REQUIRE_TREND=True)
+        # Régime composite (info contextuelle pour les charts/audit)
         regime, _ = get_regime_with_score(trend_scores, cutoff)
 
-        signals, opr_zone = generate_opr_signals(
-            us_data, ticker, regime=regime, rr=rr,
-            max_signals=OPR_MAX_TRADES_PER_DAY,
-        )
+        signals, sim_results, opr_zone = run_opr_day(df_15m, ticker, day_ny)
+        if not signals:
+            continue
 
+        # Convertit en lignes de trade pour le DataFrame de sortie
         day_trades = []
-        for sig in signals:
-            result = simulate_opr_trade(us_data, sig, dpp)
-            trade = {
+        for sig, res in zip(signals, sim_results):
+            row = {
                 "date": ds,
                 "strategy": "OPR",
                 "dir": sig["direction"],
@@ -280,49 +286,46 @@ def run_opr_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
                 "regime": regime or "?",
                 "zone_low": sig["zone_low"],
                 "zone_high": sig["zone_high"],
-                "tp_type": "rr",
+                "tp_type": sig.get("tp_type", "fixed"),
                 "trigger_time": sig["trigger_time"],
-                **result,
+                **res,
             }
-            day_trades.append(trade)
+            day_trades.append(row)
 
+        # Circuit breakers intra-jour (chronologiquement, sur les fills)
         filled = [t for t in day_trades if t["result"] != "NOT_FILLED"]
         not_filled = [t for t in day_trades if t["result"] == "NOT_FILLED"]
-        filled.sort(key=lambda t: t["fill_time"])
-        capped = filled[:OPR_MAX_TRADES_PER_DAY]
-        cancelled_late = filled[OPR_MAX_TRADES_PER_DAY:]
+        filled.sort(key=lambda t: t["fill_time"] or "")
 
-        kept_filled = []
+        kept = []
         cancelled_cb = []
         running_pnl = 0.0
         breaker_armed = False
-        for t in capped:
+        for t in filled:
             if breaker_armed:
                 cancelled_cb.append(t)
                 continue
-            kept_filled.append(t)
+            kept.append(t)
             running_pnl += t["pnl"]
             if DAILY_STOP_AFTER_SL and t["result"] == "SL":
                 breaker_armed = True
             elif DAILY_LOCKIN_THRESHOLD > 0 and running_pnl >= DAILY_LOCKIN_THRESHOLD:
                 breaker_armed = True
 
-        for t in cancelled_late + cancelled_cb:
+        for t in cancelled_cb:
             t["result"] = "NOT_FILLED"
             t["pnl"] = 0
             t["fill_time"] = None
             t["exit_time"] = None
             t["exit"] = None
 
-        trades.extend(kept_filled)
-        trades.extend(not_filled)
-        trades.extend(cancelled_late)
-        trades.extend(cancelled_cb)
+        trades_out.extend(kept)
+        trades_out.extend(not_filled)
+        trades_out.extend(cancelled_cb)
 
-        # Graphique d'analyse OPR (réutilise plot_day_analysis)
+        # Graphique d'analyse OPR (réutilise plot_day_analysis si activé)
         if analysis_chart_dir is not None and (signals or opr_zone is not None):
             try:
-                # Zone OPR encapsulée comme une "zone S/R" pour le chart
                 zones_for_chart = []
                 if opr_zone is not None:
                     zones_for_chart.append({
@@ -334,6 +337,10 @@ def run_opr_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
                         "touches": 1,
                         "tfs": ["OPR"],
                         "dominant_tf": "OPR",
+                        # `start_time` borne la zone à partir de l'ouverture
+                        # OPR — le chart ne dessinera rien avant. La valeur
+                        # est en UTC naïf (homogène avec df_15m.index).
+                        "start_time": opr_zone["time_utc"],
                     })
                 day_pm = compute_pm_features(df_15m, cutoff)
                 day_vol = compute_volatility_features(df_15m, cutoff, ticker)
@@ -343,10 +350,10 @@ def run_opr_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
                     ticker=ticker,
                     date_str=ds,
                     cutoff=cutoff,
-                    us_end=us_end,
+                    us_end=us_end_utc,
                     zones=zones_for_chart,
                     signals=signals,
-                    trades=(kept_filled + cancelled_late + cancelled_cb + not_filled),
+                    trades=(kept + cancelled_cb + not_filled),
                     regime=regime,
                     alignment_score=None,
                     pm_features=day_pm,
@@ -356,7 +363,7 @@ def run_opr_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
             except Exception as e:
                 print(f"  [!] analyse OPR {ds}: {e}")
 
-        day_pnl = sum(t["pnl"] for t in kept_filled)
+        day_pnl = sum(t["pnl"] for t in kept)
         cum_pnl += day_pnl
         if cum_pnl > peak_pnl:
             peak_pnl = cum_pnl
@@ -365,23 +372,32 @@ def run_opr_backtest(df_15m: pd.DataFrame, tf_dict: dict, ticker: str,
         elif day_pnl > 0:
             consec_loss_days = 0
 
-    return pd.DataFrame(trades)
+    return pd.DataFrame(trades_out)
 
 
 def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
-    """Vérifie l'intégrité des trades."""
+    """
+    Vérifie l'intégrité des trades.
+
+    Les contrôles SL_MINIMUM et alignement régime ne s'appliquent qu'à la
+    stratégie composite — ils n'ont pas de sens pour la stratégie OPR
+    (SL fixe en points, prises de position à contre-tendance autorisées).
+    """
     dpp = INSTRUMENTS[ticker]["dollar_per_point"]
     sl_min = SL_MINIMUM[ticker]
     if len(df_trades) == 0 or "result" not in df_trades.columns:
         print(f"  AUDIT: ⚠ aucun trade généré (filtre composite trop strict ?)")
         return True
     filled = df_trades[df_trades["result"] != "NOT_FILLED"]
+    if len(filled) == 0:
+        print(f"  AUDIT: ⚠ aucun fill")
+        return True
+    is_opr = "strategy" in filled.columns and (filled["strategy"] == "OPR").all()
     errors = 0
 
-    # P&L
+    # P&L (toujours appliqué)
     for _, r in filled.iterrows():
         if r.get("scale_in", False):
-            # Scale-in : PnL calculé sur 2 entrées, audit simplifié (skip)
             continue
         if r["dir"] == "long":
             exp = r["n_ct"] * (r["exit"] - r["entry"]) * dpp
@@ -390,16 +406,15 @@ def audit(df_trades: pd.DataFrame, ticker: str) -> bool:
         if abs(exp - r["pnl"]) > 1:
             errors += 1
 
-    # SL minimum
-    if (filled["sl_dist"] < sl_min - 0.01).any():
-        errors += 1
-
-    # Régime
-    for _, r in filled.iterrows():
-        if r["dir"] == "long" and r["regime"] == "BEAR":
+    # Contrôles spécifiques composite (skip pour OPR)
+    if not is_opr:
+        if (filled["sl_dist"] < sl_min - 0.01).any():
             errors += 1
-        if r["dir"] == "short" and r["regime"] == "BULL":
-            errors += 1
+        for _, r in filled.iterrows():
+            if r["dir"] == "long" and r["regime"] == "BEAR":
+                errors += 1
+            if r["dir"] == "short" and r["regime"] == "BULL":
+                errors += 1
 
     print(f"  AUDIT: {'✅ OK' if errors == 0 else f'❌ {errors} erreurs'}")
     return errors == 0
