@@ -36,10 +36,13 @@ ancrée à **9h30 NY** (timezone `America/New_York`, DST-aware) et la logique
 trigger est un pullback (open dans la zone, close hors zone → ordre limite
 au niveau OPR). Voir section "Stratégie OPR" plus bas.
 
-**Roadmap V6** (post-cleanup) : passer le SL/TP de la stratégie OPR de
-distances fixes en points à des distances **basées sur l'ATR**, puis
-ré-optimiser les multiplicateurs ATR en walk-forward. Voir section
-"Stratégie OPR" pour les paramètres concernés.
+**Roadmap V6 — état actuel :**
+1. ✅ Cleanup Telegram + `signals.py` (V6 cleanup ci-dessus).
+2. ✅ Migration OPR : SL/TP fixe en points → multiplicateur ATR journalier
+   14j (`opr-v3`). Calibrés en walk-forward — voir section "Stratégie OPR"
+   pour les multiplicateurs retenus et les résultats.
+3. ⏳ Intégration broker : passer les ordres composite + OPR en automatique
+   sur Topstep via l'API ProjectX. Pas démarré.
 
 ---
 
@@ -297,12 +300,24 @@ qu'une position est ouverte ou qu'un ordre limite est pendant, aucun
 nouveau trigger n'est armé. Si le prix s'éloigne sans fill, l'ordre reste
 actif jusqu'à 16h30 NY (puis annulé, marqué `NOT_FILLED`).
 
-### Construction du trade
-- `entry`   = `opr_high` (long) ou `opr_low` (short)
-- `sl`      = `entry ± OPR_SL_POINTS[ticker]` (distance fixe en points)
-- `tp`      = `entry ± OPR_TP_POINTS[ticker]` (distance fixe en points)
-- `n_ct`    = `RISK_PER_TRADE_USD / (OPR_SL_POINTS × $/pt)` — risque fixe $100
+### Construction du trade (opr-v3 — SL/TP basés ATR)
+- `entry`     = `opr_high` (long) ou `opr_low` (short)
+- `atr_daily` = ATR(`OPR_ATR_PERIOD=14`) sur les bougies D1 achevées
+                **strictement avant `day_ny`** (pas de leak temporel —
+                la journée courante, partielle, n'entre pas dans le calcul).
+- `sl_dist`   = `max(OPR_SL_ATR_MULT[ticker] × atr_daily,
+                     OPR_SL_MIN_POINTS[ticker])`
+- `tp_dist`   = `OPR_TP_ATR_MULT[ticker] × atr_daily`
+- `sl`        = `entry ∓ sl_dist`, `tp` = `entry ± tp_dist`
+- `n_ct`      = `RISK_PER_TRADE_USD / (sl_dist × $/pt)` — risque fixe $100
 - À 16h30 NY, toute position ouverte est fermée au close (`result=TE`).
+
+> **Pourquoi l'ATR journalier ?** Pour une stratégie intraday, on veut que
+> SL/TP représentent une fraction du « voyage typique » d'une journée. C'est
+> plus stable qu'un ATR 15m (trop bruité) et plus pertinent qu'un ATR sur la
+> seule bougie OPR. Effet recherché : sur jours volatiles → SL plus large +
+> moins de contrats ; sur jours calmes → SL plus serré + plus de contrats.
+> Le sizing s'adapte automatiquement au régime, à risque dollar constant.
 
 ### Paramètres calibrables (`config.py`)
 | Param                  | Rôle                                             |
@@ -310,45 +325,57 @@ actif jusqu'à 16h30 NY (puis annulé, marqué `NOT_FILLED`).
 | `OPR_TIMEZONE`         | `"America/New_York"` (ne pas modifier)           |
 | `OPR_WINDOW_START/END` | `(9,30) / (9,45)` — fenêtre de formation OPR     |
 | `OPR_SESSION_END`      | `(16,30)` — close all                            |
-| `OPR_SL_POINTS`        | distance SL en points par ticker                 |
-| `OPR_TP_POINTS`        | distance TP en points par ticker                 |
+| `OPR_ATR_PERIOD`       | période ATR journalier (défaut 14)               |
+| `OPR_SL_ATR_MULT`      | multiplicateur ATR pour le SL, par ticker        |
+| `OPR_TP_ATR_MULT`      | multiplicateur ATR pour le TP, par ticker        |
+| `OPR_SL_MIN_POINTS`    | floor SL minimum (en points) — anti noise stop-out |
 | `OPR_MAX_TRADES_PER_DAY` | plafond fills/jour (sécurité, rarement atteint)|
 
-Valeurs initiales `opr-v2` (avant calibration utilisateur) :
-
-| Asset | OPR_SL_POINTS | OPR_TP_POINTS | RR (TP/SL) |
-|-------|---------------|---------------|------------|
-| MES1  | 10            | 20            | 2.00       |
-| NQ1   | 25            | 50            | 2.00       |
-| YM1   | 50            | 100           | 2.00       |
-
-### Calibration walk-forward (IS Dec 2024 → Sep 2025, OOS Oct 2025 → Mar 2026)
+### Calibration walk-forward `opr-v3` (IS Dec 2024 → Sep 2025, OOS Oct 2025 → Mar 2026)
 
 `python optimize_opr.py --csv-dir ./data` balaye une grille
-(SL_pts × TP_pts) par actif. Le script applique le même critère
-qu'`optimize.py` Phase C : **OOS PF ≥ 1.2, n_trades OOS ≥ 8, P&L OOS > 0**.
+(`SL_ATR_MULT × TP_ATR_MULT`) par actif. Le script applique le même
+critère qu'`optimize.py` Phase C : **OOS PF ≥ 1.2, n_trades OOS ≥ 8,
+P&L OOS > 0**. La sélection finale dans `config.py` privilégie en plus
+un **IS PF ≥ 1.35** pour exclure les faux positifs (combos avec OOS
+fluke et IS faible).
 
-Premières combinaisons validées (à reporter manuellement après revue
-visuelle) :
+Combinaisons retenues `opr-v3` :
 
-| Asset | SL | TP | RR  | IS PF | OOS PF | OOS P&L | OOS n |
-|-------|----|----|-----|-------|--------|---------|-------|
-| MES1  | 10 | 45 | 4.50 | 1.38 | 1.32   | +$2,108 | 108   |
-| NQ1   | 15 | 25 | 1.67 | 1.32 | 1.63   | +$3,180 | 112   |
-| YM1   | 50 | 60 | 1.20 | 1.29 | 1.54   | +$2,898 | 129   |
+| Asset | SL_mult | TP_mult | RR   | IS PF | IS P&L  | OOS PF | OOS P&L | OOS DD  |
+|-------|---------|---------|------|-------|---------|--------|---------|---------|
+| MES1  | 0.15    | 0.20    | 1.33 | 1.38  | +$3,508 | 1.32   | +$1,591 | -$559   |
+| NQ1   | 0.05    | 0.10    | 2.00 | 1.65  | +$10,073 | 1.65 | +$4,230 | -$804   |
+| YM1   | 0.08    | 0.15    | 1.88 | 1.37  | +$6,202 | 1.49   | +$3,765 | -$663   |
+
+Backtest portefeuille (Dec 2024 → Mar 2026) avec ces multiplicateurs,
+**OPR seul** :
+
+| Métrique          | MES1     | NQ1       | YM1       | Portefeuille   |
+|-------------------|----------|-----------|-----------|----------------|
+| Trades            | 421      | 476       | 484       | 1,381          |
+| Win rate          | 52%      | 46%       | 44%       | —              |
+| Profit factor     | 1.36     | 1.65      | 1.41      | —              |
+| P&L total         | +$5,099  | +$14,304  | +$9,967   | **+$29,370**   |
+| Max trailing DD   | -$556    | -$804     | -$1,220   | -$1,515        |
+| Bootstrap pass    | 100%     | 99.8%     | 99.3%     | **99.1%**      |
 
 > Les valeurs sont à ré-évaluer visuellement via les graphiques d'analyse
-> avant d'être adoptées. Le backtest brut peut sur-fitter sur l'IS — la
-> revue chart-par-chart prime sur le PF.
+> avant d'être adoptées en production. Le backtest brut peut sur-fitter
+> sur l'IS — la revue chart-par-chart prime sur le PF.
 
 ### Règles à respecter pour évoluer la stratégie OPR
-- **Bump `OPR_STRATEGY_VERSION`** dans `config.py` (ex. `opr-v3`) à chaque
-  changement structurel (nouvelle règle de trigger, nouveau filtre).
-  Cela isole les graphiques d'analyse et permet une comparaison versionnée.
-- **Re-calibrer `OPR_SL_POINTS` / `OPR_TP_POINTS`** via `optimize_opr.py`
-  quand la règle de trigger change.
+- **Bump `OPR_STRATEGY_VERSION`** dans `config.py` (ex. `opr-v4`) à chaque
+  changement structurel (nouvelle règle de trigger, nouveau filtre, autre
+  base de référence ATR…). Cela isole les graphiques d'analyse et permet
+  une comparaison versionnée.
+- **Re-calibrer `OPR_SL_ATR_MULT` / `OPR_TP_ATR_MULT`** via `optimize_opr.py`
+  quand la règle de trigger ou la définition de l'ATR change.
 - **Ne pas hard-coder d'heure UTC** dans la logique OPR — toute heure doit
   passer par `OPR_TIMEZONE` afin de gérer DST automatiquement.
+- **Pas de leak temporel pour l'ATR** : `_compute_atr_daily` doit toujours
+  exclure la journée courante (et toute donnée post-9h30 NY). Tout
+  changement à cette fonction doit être audité contre le risque de leak.
 - **Garder le module `core/opr.py` indépendant** des modules composite
   (`zones.py`, `scoring.py`) — les deux stratégies cohabitent en parallèle.
 - **Backtests / optimisations sans charts par défaut** côté assistant

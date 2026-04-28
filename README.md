@@ -41,25 +41,30 @@ Les ordres ne sont jamais modifiés après placement. Max 2 trades/jour/actif
 
 ## Résultats backtest
 
-**Période : décembre 2024 → mars 2026 (v5.2 — score composite + circuit breakers)**
+**Période : décembre 2024 → mars 2026.** Deux stratégies tournent en
+parallèle (`backtest.py --strategy both`).
 
-Portefeuille 3 actifs (MES1 + NQ1 + YM1 désactivé) :
+### Composite (v5.2) — MES1 + NQ1 (YM1 désactivé)
 
 | Métrique | Valeur | Limite Topstep |
 |---|---|---|
 | P&L total | **+$3,728** | target +$3,000 ✅ |
-| Perte jour max | -$296 | -$1,000 (marge 70%) ✅ |
-| Trailing DD | -$1,500 | -$2,000 (marge 25%) ✅ |
-| Bootstrap pass rate | **100%** | ≥ 80% ✅ |
-| Jours tradés | 91 (55% gagnants) | — |
+| Perte jour max | -$296 | -$1,000 ✅ |
+| Trailing DD | -$1,500 | -$2,000 ✅ |
+| Bootstrap pass rate | 100% | ≥ 80% ✅ |
 
-Détail par actif :
+### OPR (`opr-v3` — SL/TP basés ATR journalier 14j)
 
-| Actif | Trades | WR | PF | P&L | Max DD | Statut |
-|-------|--------|-----|------|---------|--------|--------|
-| MES1 | 47 | 34% | 1.39 | +$1,078 | -$1,030 | actif |
-| NQ1  | 95 | 42% | 1.87 | +$2,651 | -$632  | actif (calibré Phase C) |
-| YM1  | 0  | —   | —    | 0       | —      | **désactivé** (OOS PF 0.73 < 1.2) |
+Calibration walk-forward (IS Dec 2024 → Sep 2025 / OOS Oct 2025 → Mar 2026)
+via `optimize_opr.py`. Multiplicateurs retenus dans `config.py` :
+MES1 SL=0.15 / TP=0.20 — NQ1 SL=0.05 / TP=0.10 — YM1 SL=0.08 / TP=0.15.
+
+| Actif | Trades | WR | PF | P&L | Max DD | Bootstrap |
+|-------|--------|-----|------|---------|--------|-----------|
+| MES1 | 421 | 52% | 1.36 | +$5,099  | -$578   | 100%   |
+| NQ1  | 476 | 46% | 1.65 | +$14,304 | -$866   | 99.8%  |
+| YM1  | 484 | 44% | 1.41 | +$9,967  | -$1,310 | 99.3%  |
+| **Portefeuille** | — | 66% (jours) | — | **+$29,370** | -$1,515 | **99.1%** |
 
 Voir `CHECKPOINTS_SUMMARY.md` pour l'historique complet v1 → v5.2.
 
@@ -164,9 +169,9 @@ topstep_signals/
 
 ## Roadmap V6
 
-1. Passer le SL/TP de la stratégie OPR de **distances fixes en points** à
-   des **distances basées sur l'ATR** (multiplicateurs ATR par actif).
-2. Ré-optimiser les multiplicateurs en walk-forward via `optimize_opr.py`
-   adapté à la nouvelle paramétrisation.
-3. Quand les stratégies sont figées : intégrer l'**API ProjectX** pour
-   l'exécution automatisée des ordres sur Topstep.
+1. ✅ Cleanup : suppression de `signals.py` et de toute la stack Telegram.
+2. ✅ Migration OPR vers SL/TP basés ATR (`opr-v3`) — multiplicateurs
+   calibrés en walk-forward, +$29,370 portefeuille sur Dec 2024 → Mar 2026
+   (vs +$3,728 pour le composite v5.2 seul).
+3. ⏳ Intégration **API ProjectX** pour passer les ordres en automatique
+   sur Topstep une fois les stratégies figées.

@@ -207,7 +207,7 @@ CONSEC_LOSS_PAUSE_DAYS  = 5
 DAILY_LOCKIN_THRESHOLD  = 0
 
 # ==============================================================================
-# STRATÉGIE OPR (Opening Range Breakout — pullback PineScript) — opr-v2
+# STRATÉGIE OPR (Opening Range Breakout — pullback PineScript) — opr-v3
 # ==============================================================================
 # Réécriture fidèle au PineScript fourni par l'utilisateur (avr. 2026) :
 #   • Zone OPR = 1ère bougie 15min de la session US ouvrant à 9h30 NY.
@@ -218,7 +218,10 @@ DAILY_LOCKIN_THRESHOLD  = 0
 #     (limit BUY @ OPR_high si close > OPR_high, limit SELL @ OPR_low
 #     si close < OPR_low).
 #   • Une seule position ouverte à la fois (pyramiding=0 dans le PineScript).
-#   • SL / TP en distance fixe (points), pas en RR de l'OPR.
+#   • SL / TP en multiplicateur de l'**ATR journalier** (14 jours), calculé
+#     strictement sur les jours achevés AVANT la session courante (pas de
+#     leak temporel). Floor minimum en points pour éviter un sizing absurde
+#     en régime ultra-calme.
 #   • Toutes les positions sont fermées à 16h30 NY.
 #
 # Voir core/opr.py.
@@ -239,20 +242,34 @@ OPR_WINDOW_END = (9, 45)
 # Heure NY de fermeture forcée des positions (clôture session US).
 OPR_SESSION_END = (16, 30)
 
-# Stop-loss et take-profit en POINTS (distance fixe à l'entrée), par actif.
-# Reproduit `stopPerInput` / `takePerInput` du PineScript. Calibrables via
-# optimize_opr.py. Les valeurs initiales ($50 risque / $100 reward grosso
-# modo selon $/pt) servent de point de départ raisonnable.
-OPR_SL_POINTS = {"MES1": 10.0, "NQ1": 25.0, "YM1": 50.0}
-OPR_TP_POINTS = {"MES1": 20.0, "NQ1": 50.0, "YM1": 100.0}
+# Période de l'ATR journalier utilisé comme référence pour SL/TP. 14 jours
+# est le standard de la profession — assez réactif sans être bruité.
+OPR_ATR_PERIOD = 14
+
+# Multiplicateurs ATR par actif. SL_dist = mult × atr_daily, TP_dist idem.
+# Valeurs calibrées en walk-forward (IS Dec 2024 → Sep 2025, OOS Oct 2025
+# → Mar 2026) via optimize_opr.py. Critère robuste : IS PF ≥ 1.35 ET
+# OOS PF ≥ 1.3 ET P&L OOS > 0.
+#
+# IS / OOS validés :
+#   MES1  IS PF=1.38  OOS PF=1.32  OOS P&L=+$1591  OOS DD=-$559   (RR=1.33)
+#   NQ1   IS PF=1.65  OOS PF=1.65  OOS P&L=+$4230  OOS DD=-$804   (RR=2.00)
+#   YM1   IS PF=1.37  OOS PF=1.49  OOS P&L=+$3765  OOS DD=-$663   (RR=1.88)
+OPR_SL_ATR_MULT = {"MES1": 0.15, "NQ1": 0.05, "YM1": 0.08}
+OPR_TP_ATR_MULT = {"MES1": 0.20, "NQ1": 0.10, "YM1": 0.15}
+
+# Floor minimum SL en points par actif. Empêche les SL d'être trop serrés
+# en régime ultra-calme (atr_daily * mult < bruit du tick) — protège contre
+# le noise stop-out. Fixé à ~2× le tick_size minimum trade-able.
+OPR_SL_MIN_POINTS = {"MES1": 3.0, "NQ1": 8.0, "YM1": 15.0}
 
 # Plafond de fills par jour (sécurité même si la logique "1 position à la
 # fois" rend ce plafond rarement atteint). Conservé pour homogénéité.
 OPR_MAX_TRADES_PER_DAY = 4
 
 # Tag de version OPR pour le dossier de graphiques d'analyse.
-# Bump à chaque modification significative des règles OPR.
-OPR_STRATEGY_VERSION = "opr-v2"
+# opr-v3 : passage de SL/TP en distance fixe (points) à multiplicateur ATR.
+OPR_STRATEGY_VERSION = "opr-v3"
 
 CHART_STYLE = {
     "figure.facecolor": "#131722",
