@@ -278,10 +278,22 @@ que la logique soit invariante au passage été/hiver côté Paris :
 DataFrame source reste en UTC naïf (cohérent avec le reste du codebase) ;
 la conversion s'effectue à l'intérieur de `core/opr.py`.
 
-### Définition de la zone OPR
-- La 1ère bougie 15min qui ouvre à **9h30 NY** définit la zone.
+### Définition de la zone OPR (anchor par pic de volume)
+- La bougie OPR est identifiée comme la **bougie de volume max** dans la
+  fenêtre `[OPR_WINDOW_START, OPR_WINDOW_END[ NY` (par défaut
+  `[9h15, 9h45[`). En pratique, c'est presque toujours la bougie 9h30 NY
+  pile — l'ouverture cash NY est marquée par une explosion de volume
+  (typiquement 5-30× les bougies pré-marché).
 - `opr_high` = high de cette bougie, `opr_low` = low.
-- `OPR_WINDOW_START = (9, 30)`, `OPR_WINDOW_END = (9, 45)` dans config.
+- Pourquoi le volume plutôt que l'horaire strict ? **Robustesse** :
+  indépendant des dérives mineures de timestamp (broker, data provider) et
+  des éventuelles sessions écourtées. Ça gère aussi automatiquement le
+  passage DST EST/EDT : 9h30 NY reste 9h30 NY toute l'année, c'est l'UTC
+  qui bouge — et la fenêtre est exprimée en NY.
+- Sur 320 jours actifs testés (MES1 Dec 2024 → Mar 2026), **320/320**
+  voient leur pic de volume tomber sur la bougie 9h30 NY pile dans la
+  fenêtre [9h15, 9h45[. Aucun cas de drift observé en historique, mais la
+  marge ±15min protège la stratégie en live.
 
 ### Triggers de pullback (PineScript-faithful)
 Vérifiés sur chaque bougie qui clôture **strictement après 9h45 NY** et
@@ -526,6 +538,12 @@ correspondant, et comprendre toute la décision sans relancer le code.
    de volatilité (`atr_daily`, `atr_ratio`, `gap_atr`, `vol_score`).
 8. **Légende TF** + entry/SL/TP en haut à droite.
 9. **Titre** : ticker, date, nombre de signaux, nombre de fills, P&L jour.
+10. **Sous-plot volume** (style TradingView) — bandes verticales colorées
+    vert/rouge selon la direction de la bougie, alignées avec le prix. Sert
+    surtout à confirmer visuellement l'ancrage de l'OPR sur l'explosion de
+    volume cash open.
+11. **Heures sur l'axe X en heure NY** (DST-aware) — la bougie 9h30 NY
+    s'affiche toujours à 09:30, indépendamment du saisonnier UTC.
 
 ### Implémentation actuelle
 

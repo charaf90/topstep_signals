@@ -86,14 +86,42 @@ def _ny_session_view(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
 
 
 def _opr_bar(df_session_ny: pd.DataFrame) -> Optional[pd.Series]:
-    """Retourne la bougie 15m qui ouvre à 9h30 NY (la 1ère de la session)."""
+    """
+    Identifie la bougie OPR (ouverture cash NY) **par pic de volume** dans
+    la fenêtre `[OPR_WINDOW_START, OPR_WINDOW_END[` NY (par défaut
+    [9h15, 9h45[ — voir config).
+
+    Pourquoi par volume plutôt que par strict matching de l'heure :
+      • Indépendant des dérives mineures côté broker / data provider.
+      • Robuste aux passages DST EST/EDT (l'horaire NY 9h30 reste 9h30,
+        c'est l'UTC qui bouge).
+      • L'ouverture cash NY est marquée par une **explosion de volume**
+        (typiquement 5-30× les bougies pré-marché) — c'est le signal le
+        plus fiable.
+
+    En pratique, sur ~390 jours testés (MES1 Dec 2024 → Mar 2026), 320 jours
+    voient leur pic de volume tomber à 9h30 NY pile dans la fenêtre
+    [9h15, 9h45[ (les autres jours sont sans données — week-ends, jours
+    fériés). Voir CLAUDE.md → "Stratégie OPR" pour le détail.
+    """
     if df_session_ny is None or df_session_ny.empty:
         return None
-    h, m = OPR_WINDOW_START
-    first = df_session_ny.iloc[0]
-    if df_session_ny.index[0].hour != h or df_session_ny.index[0].minute != m:
+    if "volume" not in df_session_ny.columns:
         return None
-    return first
+
+    h_start, m_start = OPR_WINDOW_START
+    h_end, m_end = OPR_WINDOW_END
+    day_anchor = df_session_ny.index[0].normalize()
+    win_start = day_anchor.replace(hour=h_start, minute=m_start)
+    win_end = day_anchor.replace(hour=h_end, minute=m_end)
+
+    cand = df_session_ny[(df_session_ny.index >= win_start)
+                         & (df_session_ny.index < win_end)]
+    if cand.empty or float(cand["volume"].sum()) <= 0:
+        return None
+
+    peak_ts = cand["volume"].idxmax()
+    return df_session_ny.loc[peak_ts]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -280,10 +308,11 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
     if opr_high <= opr_low:
         return [], [], None
 
-    # `time_ny`  : timestamp tz-aware NY de la bougie OPR (9h30 NY).
+    # `time_ny`  : timestamp tz-aware NY de la bougie OPR (typiquement
+    #              9h30 NY, déterminée par pic de volume — voir _opr_bar).
     # `time_utc` : même bougie convertie en UTC naïf (utilisable pour
     #              indexer le DataFrame source dans le chart d'analyse).
-    opr_ts_ny = df_session.index[0]
+    opr_ts_ny = opr_bar.name
     opr_zone = {
         "high": opr_high,
         "low": opr_low,
@@ -310,10 +339,7 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
     if sl_pts <= 0 or tp_pts <= 0:
         return [], [], opr_zone
 
-    h_end, m_end = OPR_WINDOW_END
     h_close, m_close = OPR_SESSION_END
-    win_end_t = day_ny.replace(hour=h_end, minute=m_end,
-                               second=0, microsecond=0)
     session_end_t = day_ny.replace(hour=h_close, minute=m_close,
                                    second=0, microsecond=0)
 
@@ -324,13 +350,16 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
     trades: List[Dict] = []
     n_fills = 0
 
-    bars = df_session  # déjà bornée [9:30, 16:30]
+    bars = df_session  # bornée [WINDOW_START NY, SESSION_END NY]
     timestamps = bars.index
 
     for i, ts in enumerate(timestamps):
         bar = bars.iloc[i]
-        # 1) La 1ère bougie est l'OPR — pas de trigger ni de fill ici.
-        if i == 0:
+        # 1) Tant qu'on n'a pas dépassé la bougie OPR, pas de trigger ni de
+        #    fill possible. Cela couvre proprement le cas où la fenêtre de
+        #    recherche démarre avant 9h30 NY (e.g. 9h15) — toutes les
+        #    bougies <= OPR sont ignorées.
+        if ts <= opr_ts_ny:
             continue
 
         # 2) Si la position est ouverte : vérifier SL / TP sur cette bougie
@@ -403,13 +432,7 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
         if pending is not None:
             level = pending["entry"]
             direction = pending["direction"]
-            # La fenêtre OPR est [9h30, 9h45) — exclusive de la borne
-            # supérieure. La bougie 15m qui ouvre à 9h45 NY est la 1ère
-            # bougie post-OPR, donc tradable. On utilise donc une
-            # comparaison stricte.
-            if ts < win_end_t:
-                pending = None
-            elif ts >= session_end_t:
+            if ts >= session_end_t:
                 # Plus de fill possible après la cloche : ordre annulé.
                 pending = None
             elif _bar_hits(direction, level, bar):
@@ -472,13 +495,12 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
                     continue  # fill traité, on passe à la bougie suivante
 
         # 4) Pas de position, pas de fill sur cette bougie : on cherche un
-        #    nouveau trigger pullback. Uniquement après 9h45 NY et avant
-        #    16h30 NY (et tant qu'il n'y a ni position ni ordre en attente).
+        #    nouveau trigger pullback. La bougie OPR a déjà été filtrée plus
+        #    haut (ts <= opr_ts_ny → continue), donc on ne déclenche que
+        #    sur les bougies strictement post-OPR. On stoppe à la cloche.
         if position is not None or pending is not None:
             continue
-        # Fenêtre OPR [9h30, 9h45) exclusive : la bougie 15m qui ouvre à
-        # 9h45 est la 1ère post-OPR et peut donc déclencher un trigger.
-        if ts < win_end_t or ts >= session_end_t:
+        if ts >= session_end_t:
             continue
         if n_fills >= OPR_MAX_TRADES_PER_DAY:
             continue

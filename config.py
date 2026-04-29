@@ -234,9 +234,18 @@ OPR_ENABLED = True
 # UTC (été). C'est une exigence explicite : on ne hard-code plus l'heure UTC.
 OPR_TIMEZONE = "America/New_York"
 
-# Heures NY (h, m). La fenêtre OPR est [WINDOW_START, WINDOW_END) — soit la
-# bougie 15m unique 9h30 → 9h45 NY.
-OPR_WINDOW_START = (9, 30)
+# Fenêtre de RECHERCHE de la bougie OPR par pic de volume — heures NY (h, m).
+# Depuis opr-v3.1 la bougie OPR n'est plus prise en strict matching à 9h30
+# NY mais identifiée comme la bougie de volume max dans `[WINDOW_START,
+# WINDOW_END[` NY. Ça gère DST (heure été/hiver) et les éventuelles dérives
+# de timestamp côté data provider, tout en restant verrouillé à l'ouverture
+# cash NY (qui se traduit par une explosion de volume systématique).
+#
+# Largeur 30min ([9h15, 9h45[) = ±15min de tolérance autour de 9h30 NY.
+# Sur ~390 jours testés (MES1 Dec 2024 → Mar 2026), 320/320 jours actifs
+# placent leur pic de volume sur la bougie 9h30 NY, et la fenêtre couvre
+# proprement les rares cas de drift broker ou de session écourtée.
+OPR_WINDOW_START = (9, 15)
 OPR_WINDOW_END = (9, 45)
 
 # Heure NY de fermeture forcée des positions (clôture session US).

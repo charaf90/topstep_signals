@@ -22,9 +22,12 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 
+from zoneinfo import ZoneInfo
+
 from config import (
     INSTRUMENTS, CHART_STYLE,
     ANALYSIS_CHART_CONTEXT_BEFORE,
+    OPR_TIMEZONE,
 )
 
 
@@ -74,8 +77,15 @@ def _draw_candles(ax, data, x):
                    width=bw, color=clr, edgecolor=clr, lw=0, zorder=2)
 
 
-def _draw_x_axis(ax, data, n):
-    """Axe X avec date + heure (tick toutes ~n/10 bougies)."""
+def _draw_x_axis(ax, data, n, tz=None):
+    """
+    Axe X avec date + heure (tick toutes ~n/10 bougies).
+
+    Si `tz` est fourni, les heures sont affichées dans ce fuseau (typiquement
+    America/New_York) — l'index `data` est attendu en UTC naïf et on
+    convertit pour l'affichage seulement, pas pour l'indexation. Ça gère
+    DST proprement : 9h30 NY reste 9h30 NY toute l'année sur le graphique.
+    """
     step = max(1, n // 10)
     ticks = list(range(0, n, step))
     if ticks[-1] != n - 1:
@@ -84,12 +94,42 @@ def _draw_x_axis(ax, data, n):
     labels = []
     for t in ticks:
         dt = data.index[t]
+        if tz is not None:
+            ts = pd.Timestamp(dt)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            dt = ts.tz_convert(tz)
         d = dt.strftime("%d/%m")
         tm = dt.strftime("%H:%M")
         labels.append(f"{d}\n{tm}" if d != prev_d else tm)
         prev_d = d
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels, fontsize=7)
+
+
+def _draw_volume_bars(ax, data, x):
+    """
+    Sous-plot volume style TradingView : barres verticales colorées
+    (vert quand close >= open, rouge sinon), avec marge supérieure pour
+    aérer le graphique.
+    """
+    if "volume" not in data.columns:
+        return
+    o = data["open"].values
+    c = data["close"].values
+    v = data["volume"].values.astype(float)
+    bull = c >= o
+    n = len(data)
+    bw = max(0.35, min(0.7, 120 / max(n, 1)))
+    colors = np.where(bull, TV_GREEN, TV_RED)
+    ax.bar(x, v, width=bw, color=colors, alpha=0.55,
+           edgecolor=colors, linewidth=0, zorder=2)
+    vmax = float(v.max()) if v.size else 1.0
+    ax.set_ylim(0, vmax * 1.15)
+    ax.set_yticks([])
+    ax.set_ylabel("vol", color=TV_DIM, fontsize=7, rotation=0,
+                  ha="right", va="center")
+    ax.grid(True, alpha=0.4, color="#1e222d", zorder=0)
 
 
 def _format_pm(pm: Optional[Dict]) -> str:
@@ -176,10 +216,18 @@ def plot_day_analysis(
     n_pre = len(pre)
     x = np.arange(n)
 
-    fig, ax = plt.subplots(1, 1, figsize=(18, 9))
+    # Layout : prix (large) + volume (compact) — style TradingView.
+    # `gridspec_kw` donne 4 fois plus de hauteur au prix qu'au volume.
+    fig, (ax, ax_vol) = plt.subplots(
+        2, 1, figsize=(18, 10), sharex=True,
+        gridspec_kw={"height_ratios": [4, 1], "hspace": 0.05},
+    )
 
     # ── Bougies ──────────────────────────────────────────────────────────
     _draw_candles(ax, data, x)
+
+    # ── Volume (sous-plot) ───────────────────────────────────────────────
+    _draw_volume_bars(ax_vol, data, x)
 
     # ── Échelle Y basée sur le PRIX (pas les zones) ──────────────────────
     price_min = float(data["low"].min())
@@ -252,6 +300,8 @@ def plot_day_analysis(
 
     # ── Marqueur cutoff (verticale) ──────────────────────────────────────
     ax.axvline(n_pre - 0.5, color=TV_FG, ls=":", lw=1.0, alpha=0.55, zorder=3)
+    ax_vol.axvline(n_pre - 0.5, color=TV_FG, ls=":", lw=1.0,
+                   alpha=0.55, zorder=3)
     ax.text(
         n_pre - 0.5, y_hi, "  cutoff",
         fontsize=7.5, color=TV_FG, va="top", ha="left", alpha=0.65,
@@ -431,9 +481,16 @@ def plot_day_analysis(
         )
 
     # ── Axe X ────────────────────────────────────────────────────────────
-    _draw_x_axis(ax, data, n)
+    # Heures affichées en heure NY (DST-aware) — l'index source est en UTC
+    # naïf, on convertit uniquement pour le rendu. 9h30 NY reste 9h30 toute
+    # l'année, indépendant du saisonnier UTC.
+    ny_tz = ZoneInfo(OPR_TIMEZONE)
+    _draw_x_axis(ax_vol, data, n, tz=ny_tz)
+    ax.tick_params(labelbottom=False)
     ax.set_xlim(-2, n + n * 0.18)
+    ax_vol.set_xlim(-2, n + n * 0.18)
     ax.yaxis.tick_right()
+    ax_vol.yaxis.tick_right()
     ax.grid(True, alpha=0.5, color="#1e222d", zorder=0)
 
     # ── Titre ────────────────────────────────────────────────────────────
