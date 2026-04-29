@@ -12,22 +12,16 @@ INSTRUMENTS = {
         "dollar_per_point": 5.0,
         "tick_size": 0.25,
         "name": "Micro E-mini S&P 500",
-        "tv_symbol": "MES1!",
-        "tv_exchange": "CME_MINI",
     },
     "NQ1": {
         "dollar_per_point": 2.0,
         "tick_size": 0.25,
         "name": "Micro E-mini Nasdaq 100",
-        "tv_symbol": "MNQ1!",
-        "tv_exchange": "CME_MINI",
     },
     "YM1": {
         "dollar_per_point": 0.5,
         "tick_size": 1.0,
         "name": "Micro E-mini Dow Jones",
-        "tv_symbol": "MYM1!",
-        "tv_exchange": "CBOT_MINI",
     },
 }
 

@@ -6,8 +6,6 @@ Usage :
   python backtest.py --csv-dir ./data                    # Backtest 3 actifs (CSV)
   python backtest.py --csv-dir ./data --ticker NQ1       # 1 actif
   python backtest.py --csv-dir ./data --plot             # Avec graphiques
-  python backtest.py --live                              # Données récentes via TradingView
-  python backtest.py --live --bars 20000                 # Profondeur live custom
 """
 
 import argparse
@@ -28,7 +26,7 @@ from config import (
     STRATEGY_VERSION, ANALYSIS_CHARTS_ENABLED,
     OPR_ENABLED, OPR_STRATEGY_VERSION, OPR_MAX_TRADES_PER_DAY,
 )
-from core.data import load_csv, fetch_live, build_timeframes
+from core.data import load_csv, build_timeframes
 from core.strategy import generate_signals, simulate_trade
 from core.trend import precompute_trends, get_regime_with_score
 from core.risk_topstep import trade_allowed
@@ -701,15 +699,8 @@ def _run_strategy_for_ticker(strategy: str, ticker: str, df_15m, tf,
 
 def main():
     parser = argparse.ArgumentParser(description="Backtest stratégie ordres limites")
-    src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument("--csv-dir", type=str, default=None,
-                     help="Répertoire des fichiers CSV 15m (mode offline)")
-    src.add_argument("--live", action="store_true",
-                     help="Récupère les données récentes via TradingView "
-                          "(tvDatafeed) au lieu des CSV locaux.")
-    parser.add_argument("--bars", type=int, default=10000,
-                        help="Nombre de bougies 15m à récupérer en mode --live "
-                             "(défaut: 10000).")
+    parser.add_argument("--csv-dir", type=str, required=True,
+                        help="Répertoire des fichiers CSV 15m")
     parser.add_argument("--ticker", type=str, default=None,
                         help="Actif unique (défaut: tous)")
     parser.add_argument("--output-dir", type=str, default="./output",
@@ -745,18 +736,11 @@ def main():
         print(f"  BACKTEST — {ticker} (composite RR={RR_TARGET[ticker]})")
         print(f"{'='*60}")
 
-        if args.live:
-            print(f"  ▸ {ticker} — récupération live TradingView ({args.bars} bougies)...")
-            df_15m = fetch_live(ticker, bars=args.bars)
-            if df_15m.empty:
-                print(f"  [!] Aucune donnée live pour {ticker}")
-                continue
-        else:
-            csv_path = Path(args.csv_dir) / f"{ticker}_data_m15.csv"
-            if not csv_path.exists():
-                print(f"  [!] Fichier introuvable: {csv_path}")
-                continue
-            df_15m = load_csv(str(csv_path))
+        csv_path = Path(args.csv_dir) / f"{ticker}_data_m15.csv"
+        if not csv_path.exists():
+            print(f"  [!] Fichier introuvable: {csv_path}")
+            continue
+        df_15m = load_csv(str(csv_path))
 
         tf = build_timeframes(df_15m)
         print(f"  {len(df_15m):,} bougies "
