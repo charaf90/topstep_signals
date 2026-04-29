@@ -1,53 +1,70 @@
 # Topstep Signals
 
-Signaux intraday automatisés sur futures micro (MES, NQ, YM) pour le challenge Topstep 50K.
+Laboratoire de stratégies intraday sur futures micro (MES, NQ, YM) pour le
+challenge Topstep 50K. Backtests + optimisation walk-forward, en attendant
+l'intégration broker (ProjectX) qui fera l'exécution automatisée.
+
+> **Branche V6** — la couche d'envoi de signaux Telegram et le runner live
+> (`signals.py`) ont été supprimés pour concentrer le projet sur la
+> recherche de stratégies et le backtest. L'exécution automatique sur
+> Topstep passera par l'API ProjectX (à venir, hors de ce dépôt pour
+> l'instant).
 
 ---
 
 ## Comment ça marche
 
-Chaque jour à midi (Paris), le système :
+Pipeline d'analyse appliqué jour par jour dans `backtest.py` :
 
-1. Analyse les données 15min sur 4 timeframes (15m, H1, H4, D1)
-2. Détecte les zones support/résistance (pivots + clustering multi-TF)
-3. Évalue la tendance (EMA triple → régime BULL / BEAR / RANGE + alignment_score)
-4. Calcule les features pré-market + volatilité (ATR journalier, gap, overnight range)
-5. Score composite 0-100 (zone 40% / trend 25% / pm 20% / vol 15%) — filtrage
-   ultra-sélectif par actif (`COMPOSITE_SCORE_MIN`)
-6. Génère des ordres limites avec SL et TP fixés (risque fixe $100/trade)
-7. Envoie les signaux et graphiques sur Telegram
+1. Charge les données 15min (CSV ou TradingView via `--live`) et resample
+   sur 4 timeframes (15m, H1, H4, D1).
+2. Détecte les zones support/résistance (pivots + clustering multi-TF).
+3. Évalue la tendance (EMA triple → régime BULL / BEAR / RANGE +
+   `alignment_score`).
+4. Calcule les features pré-market + volatilité (ATR journalier, gap,
+   overnight range).
+5. Score composite 0-100 (zone 40% / trend 25% / pm 20% / vol 15%) —
+   filtrage ultra-sélectif par actif (`COMPOSITE_SCORE_MIN`).
+6. Génère les signaux composite + OPR (PineScript pullback à 9h30 NY) en
+   parallèle, avec SL/TP fixés et risque fixe $100/trade.
 
-**Garde-fous Topstep** : refus de trade si le slack journalier ou trailing
-DD ne couvre pas le risque nominal × 1.1.
+**Garde-fous Topstep** : refus de trade si le slack journalier ou
+trailing DD ne couvre pas le risque nominal × 1.1.
 
 **Circuit breakers intra-jour** :
 - `CONSEC_LOSS_PAUSE_DAYS=5` — pause 1 jour après 5 jours perdants consécutifs.
 
-Les ordres ne sont jamais modifiés après placement. Max 2 trades/jour/actif.
+Les ordres ne sont jamais modifiés après placement. Max 2 trades/jour/actif
+(composite). Une seule position à la fois côté OPR.
 
 ---
 
 ## Résultats backtest
 
-**Période : décembre 2024 → mars 2026 (v5.2 — score composite + circuit breakers)**
+**Période : décembre 2024 → mars 2026.** Deux stratégies tournent en
+parallèle (`backtest.py --strategy both`).
 
-Portefeuille 3 actifs (MES1 + NQ1 + YM1 désactivé) :
+### Composite (v5.2) — MES1 + NQ1 (YM1 désactivé)
 
 | Métrique | Valeur | Limite Topstep |
 |---|---|---|
 | P&L total | **+$3,728** | target +$3,000 ✅ |
-| Perte jour max | -$296 | -$1,000 (marge 70%) ✅ |
-| Trailing DD | -$1,500 | -$2,000 (marge 25%) ✅ |
-| Bootstrap pass rate | **100%** | ≥ 80% ✅ |
-| Jours tradés | 91 (55% gagnants) | — |
+| Perte jour max | -$296 | -$1,000 ✅ |
+| Trailing DD | -$1,500 | -$2,000 ✅ |
+| Bootstrap pass rate | 100% | ≥ 80% ✅ |
 
-Détail par actif :
+### OPR (`opr-v3` — SL/TP basés ATR journalier 14j)
 
-| Actif | Trades | WR | PF | P&L | Max DD | Statut |
-|-------|--------|-----|------|---------|--------|--------|
-| MES1 | 47 | 34% | 1.39 | +$1,078 | -$1,030 | actif |
-| NQ1  | 95 | 42% | 1.87 | +$2,651 | -$632  | actif (calibré Phase C) |
-| YM1  | 0  | —   | —    | 0       | —      | **désactivé** (OOS PF 0.73 < 1.2) |
+Calibration walk-forward (IS Dec 2024 → Sep 2025 / OOS Oct 2025 → Mar 2026)
+via `optimize_opr.py`. Multiplicateurs retenus dans `config.py` :
+MES1 SL=0.15 / TP=0.20 — NQ1 SL=0.05 / TP=0.10 — YM1 SL=0.08 / TP=0.15.
+
+| Actif | Trades | WR | PF | P&L | Max DD | Bootstrap |
+|-------|--------|-----|------|---------|--------|-----------|
+| MES1 | 421 | 52% | 1.36 | +$5,099  | -$578   | 100%   |
+| NQ1  | 476 | 46% | 1.65 | +$14,304 | -$866   | 99.8%  |
+| YM1  | 484 | 44% | 1.41 | +$9,967  | -$1,310 | 99.3%  |
+| **Portefeuille** | — | 66% (jours) | — | **+$29,370** | -$1,515 | **99.1%** |
 
 Voir `CHECKPOINTS_SUMMARY.md` pour l'historique complet v1 → v5.2.
 
@@ -59,33 +76,42 @@ Voir `CHECKPOINTS_SUMMARY.md` pour l'historique complet v1 → v5.2.
 pip install -r requirements.txt
 ```
 
-Données requises : fichiers CSV 15min nommés `MES1_data_m15.csv`, `NQ1_data_m15.csv`, `YM1_data_m15.csv` dans un dossier `data/`.
+Données requises pour le mode CSV : fichiers 15min nommés
+`MES1_data_m15.csv`, `NQ1_data_m15.csv`, `YM1_data_m15.csv` dans `data/`.
 
 Format CSV : `datetime, symbol, open, high, low, close, volume`
+
+Le mode `--live` télécharge directement depuis TradingView via
+[`tvDatafeed`](https://github.com/rongardF/tvdatafeed) (déjà épinglé dans
+`requirements.txt`) et n'a pas besoin de fichier local.
 
 ---
 
 ## Usage
 
-### Signaux live → Telegram
+### Backtest sur CSV locaux (par défaut)
 
 ```bash
-python signals.py                                          # Live TradingView + Telegram
-python signals.py --dry-run                                # Live sans envoyer
-python signals.py --csv-dir ./data                         # Depuis fichiers CSV
-python signals.py --date 2026-01-29 --csv-dir ./data       # Simuler une date passée
-```
-
-### Backtest
-
-```bash
-python backtest.py --csv-dir ./data                        # 3 actifs
+python backtest.py --csv-dir ./data                        # 3 actifs, composite + OPR
 python backtest.py --csv-dir ./data --ticker NQ1           # 1 actif
+python backtest.py --csv-dir ./data --strategy opr         # OPR seul
+python backtest.py --csv-dir ./data --strategy composite   # Composite seul
 ```
 
-### Backtest avec graphiques
+### Backtest sur données TradingView récentes
 
-Chaque trade rempli génère un graphique OHLC avec zones S/R, niveaux SL/TP, marqueurs d'entrée/sortie et résultat.
+`--live` récupère les bougies 15m fraîches via TradingView au lieu de lire
+un CSV local. Pratique pour tester un nouvel actif ou rejouer la dernière
+semaine sans extraire de CSV.
+
+```bash
+python backtest.py --live                                  # 10 000 bougies par actif
+python backtest.py --live --bars 20000 --ticker NQ1        # Profondeur custom
+```
+
+`--csv-dir` et `--live` sont mutuellement exclusifs (un des deux est requis).
+
+### Backtest avec graphiques par trade
 
 ```bash
 python backtest.py --csv-dir ./data --plot                           # Tous les trades
@@ -94,19 +120,20 @@ python backtest.py --csv-dir ./data --plot --plot-filter win         # Trades ga
 python backtest.py --csv-dir ./data --ticker MES1 --plot --plot-filter loss  # Perdants MES1
 ```
 
-Filtres disponibles : `all`, `tp`, `sl`, `te`, `win`, `loss`
+Filtres disponibles : `all`, `tp`, `sl`, `te`, `win`, `loss`. Sortie :
+`output/backtest_charts/{TICKER}/`.
 
-Les graphiques sont sauvegardés dans `output/backtest_charts/{TICKER}/`.
+Les graphiques d'analyse journaliers (1 PNG / jour / actif) sont générés
+par défaut sous `output/analysis_charts/{STRATEGY_VERSION}/{TICKER}/`. Désactivable
+avec `--no-analysis-charts`.
 
-### Backtest avec envoi Telegram
+### Optimisation walk-forward
 
 ```bash
-python backtest.py --csv-dir ./data --telegram                      # Rapport + tous les graphiques
-python backtest.py --csv-dir ./data --ticker NQ1 --telegram         # 1 actif sur Telegram
-python backtest.py --csv-dir ./data --telegram --plot-filter sl     # Uniquement les SL
+python optimize.py --csv-dir ./data         # Phase A/B/C composite (multi-heures)
+python run_phase_c.py --csv-dir ./data      # Phase C seule (seuils composite)
+python optimize_opr.py --csv-dir ./data     # Stratégie OPR (SL/TP en points)
 ```
-
-`--telegram` active automatiquement `--plot`. Le bot envoie un résumé HTML (stats par ticker) suivi de chaque graphique avec caption.
 
 ---
 
@@ -114,21 +141,22 @@ python backtest.py --csv-dir ./data --telegram --plot-filter sl     # Uniquement
 
 ```
 topstep_signals/
-├── config.py              # Tous les paramètres (SL, RR, composite, breakers, Topstep)
-├── signals.py             # Signaux live + envoi Telegram
+├── config.py              # Tous les paramètres (SL, RR, composite, breakers, Topstep, OPR)
 ├── backtest.py            # Backtest + validate_topstep (bootstrap 1000 perms)
-├── optimize.py            # Walk-forward IS/OOS (Phase A/B/C)
+├── optimize.py            # Walk-forward IS/OOS (Phase A/B/C composite)
+├── optimize_opr.py        # Walk-forward OPR (SL/TP en points)
 ├── run_phase_c.py         # Calibration composite seule (Phase C uniquement)
 ├── core/
-│   ├── data.py            # Chargement CSV ou TradingView
+│   ├── data.py            # Chargement CSV ou TradingView (fetch_live)
 │   ├── zones.py           # Détection pivots + clustering zones S/R
 │   ├── trend.py           # Score EMA triple + alignment_score
 │   ├── premarket.py       # Features pré-market + filtre
 │   ├── scoring.py         # Score composite 0-100 + features volatilité ATR
 │   ├── risk_topstep.py    # Garde-fou slack journalier / trailing DD
-│   ├── strategy.py        # Génération signaux (filtrage composite) + simulation
-│   ├── chart.py           # Graphiques OHLC style TradingView
-│   └── telegram.py        # Fonctions d'envoi Telegram (texte + images)
+│   ├── strategy.py        # Génération signaux composite (filtrage) + simulation
+│   ├── opr.py             # Stratégie OPR (PineScript pullback) — opr-v2
+│   ├── chart.py           # Graphiques OHLC style TradingView (par trade)
+│   └── analysis_chart.py  # Graphique d'analyse journalier (1 PNG / jour / actif)
 ├── data/                  # Fichiers CSV 15min (gitignored)
 ├── output/                # Graphiques et rapports générés (gitignored)
 ├── CHECKPOINTS_SUMMARY.md # Historique v1 → v5.2 + résultats par version
@@ -139,17 +167,11 @@ topstep_signals/
 
 ---
 
-## Configuration Telegram
+## Roadmap V6
 
-Au premier lancement, envoyer `/start` au bot `@MyTopStep_bot`. Le chat_id est sauvegardé automatiquement dans `.chat_id`.
-
-Les identifiants du bot sont dans `config.py` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
-
----
-
-## Lancement automatique (cron)
-
-```bash
-# Chaque jour à 11h UTC (midi Paris), du lundi au vendredi
-0 11 * * 1-5 cd /path/to/topstep_signals && python signals.py >> logs/signals.log 2>&1
-```
+1. ✅ Cleanup : suppression de `signals.py` et de toute la stack Telegram.
+2. ✅ Migration OPR vers SL/TP basés ATR (`opr-v3`) — multiplicateurs
+   calibrés en walk-forward, +$29,370 portefeuille sur Dec 2024 → Mar 2026
+   (vs +$3,728 pour le composite v5.2 seul).
+3. ⏳ Intégration **API ProjectX** pour passer les ordres en automatique
+   sur Topstep une fois les stratégies figées.
