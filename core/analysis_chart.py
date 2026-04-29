@@ -509,7 +509,6 @@ def plot_day_analysis(
     ax.set_title(title, fontsize=11, pad=10, loc="left",
                  color=TV_FG, fontweight="bold")
 
-    fig.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight", facecolor=TV_BG)
     plt.close(fig)
     return True
