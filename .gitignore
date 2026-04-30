@@ -5,3 +5,5 @@ data/
 *.csv
 .env
 .venv/
+analyse/data/
+analyse/charts/

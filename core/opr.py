@@ -1,6 +1,12 @@
 """
-Stratégie OPR `opr-v3` — réécriture fidèle au PineScript de l'utilisateur,
-avec SL/TP basés sur l'ATR journalier (au lieu de distances fixes en points).
+Stratégie OPR `opr-v4` — ajout de filtres au moment du trigger.
+
+Basé sur opr-v3 (SL/TP multiplicateur ATR journalier), avec en plus un filtre
+appliqué juste après la détection du trigger et avant l'armement de l'ordre
+limite. Les filtres sont calibrés en walk-forward IS/OOS (analyse/03_filter_backtest.py) :
+  MES1 : rejet des triggers sur volume anormalement élevé (spike = news/émotionnel)
+  YM1  : exige une excursion minimale vers l'OPR (pullback ordonné vs test immédiat)
+  NQ1  : aucun filtre (baseline PF OOS 1.62 déjà robuste)
 
 Logique exacte (cf. CLAUDE.md → "Stratégie OPR") :
 
@@ -41,11 +47,14 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+import numpy as np
+
 from config import (
     INSTRUMENTS, RISK_PER_TRADE_USD, OPR_ENABLED,
     OPR_TIMEZONE, OPR_WINDOW_START, OPR_WINDOW_END, OPR_SESSION_END,
     OPR_ATR_PERIOD, OPR_SL_ATR_MULT, OPR_TP_ATR_MULT, OPR_SL_MIN_POINTS,
     OPR_MAX_TRADES_PER_DAY,
+    OPR_MIN_EXCURSION_ATR, OPR_MAX_VOL_ZSCORE, OPR_VOL_ZSCORE_WINDOW,
 )
 
 
@@ -264,6 +273,63 @@ def _check_trigger(bar: pd.Series, opr_high: float, opr_low: float
     if o > opr_low and c < opr_low:
         return "short"
     return None
+
+
+def _passes_trigger_filter(
+    bar: pd.Series,
+    direction: str,
+    bars: pd.DataFrame,
+    opr_ts_ny,
+    opr_high: float,
+    opr_low: float,
+    atr_daily: float,
+    ticker: str,
+) -> bool:
+    """
+    Filtre appliqué après la détection du trigger et avant l'armement de
+    l'ordre limite. Retourne False pour rejeter le signal.
+
+    Filtres actifs par actif (calibrés walk-forward IS/OOS — voir config.py) :
+      MES1 : OPR_MAX_VOL_ZSCORE — rejette bougie trigger à volume anormalement
+             élevé (spike = move émotionnel, pas un retour technique propre).
+      YM1  : OPR_MIN_EXCURSION_ATR — exige une excursion minimale du prix
+             vers l'OPR avant le trigger (pullback ordonné vs test immédiat).
+      NQ1  : aucun filtre (baseline OPR déjà robuste — PF OOS 1.62).
+
+    `bar` et `bars` sont en heure NY (tz-aware) — cohérent avec df_session.
+    """
+    ts = bar.name   # timestamp tz-aware NY de la bougie trigger
+
+    # ── Filtre 1 : excursion minimale vers l'OPR ──────────────────────────
+    min_excursion = OPR_MIN_EXCURSION_ATR.get(ticker)
+    if min_excursion is not None and atr_daily > 0:
+        opr_level = opr_high if direction == "long" else opr_low
+        # Bougies strictement après l'OPR jusqu'au trigger (inclus)
+        window = bars[(bars.index > opr_ts_ny) & (bars.index <= ts)]
+        if window.empty:
+            return False
+        if direction == "long":
+            excursion = float(window["high"].max()) - opr_level
+        else:
+            excursion = opr_level - float(window["low"].min())
+        if max(excursion, 0.0) / atr_daily < min_excursion:
+            return False
+
+    # ── Filtre 2 : z-score volume de la bougie trigger ────────────────────
+    max_vol_z = OPR_MAX_VOL_ZSCORE.get(ticker)
+    if max_vol_z is not None and "volume" in bars.columns:
+        bar_vol = float(bar.get("volume", 0.0))
+        preceding = bars[bars.index < ts]
+        last_n = preceding.iloc[-OPR_VOL_ZSCORE_WINDOW:]
+        if len(last_n) >= 2:
+            mu_v = float(last_n["volume"].mean())
+            std_v = float(last_n["volume"].std(ddof=1))
+            if std_v > 0:
+                vol_z = (bar_vol - mu_v) / std_v
+                if vol_z > max_vol_z:
+                    return False
+
+    return True
 
 
 def _bar_hits(direction: str, level: float, bar: pd.Series) -> bool:
@@ -507,6 +573,13 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
 
         trig = _check_trigger(bar, opr_high, opr_low)
         if trig is None:
+            continue
+
+        if not _passes_trigger_filter(
+            bar=bar, direction=trig, bars=bars,
+            opr_ts_ny=opr_ts_ny, opr_high=opr_high, opr_low=opr_low,
+            atr_daily=atr_daily, ticker=ticker,
+        ):
             continue
 
         entry_level = opr_high if trig == "long" else opr_low

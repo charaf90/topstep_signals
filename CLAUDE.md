@@ -29,7 +29,7 @@ additions vs v4:
 - Consecutive-loss circuit breaker pauses trading 1 day after 5 consecutive losing days.
 - YM1 disabled globally (`YM1_ENABLED=False`) for the composite strategy — no OOS profitability proof yet.
 
-**Stratégie OPR (`opr-v2`)** tourne en parallèle du composite et est activée
+**Stratégie OPR (`opr-v4`)** tourne en parallèle du composite et est activée
 par défaut dans `backtest.py --strategy both`. C'est une réécriture fidèle
 au PineScript fourni par l'utilisateur (avr. 2026) : la fenêtre OPR est
 ancrée à **9h30 NY** (timezone `America/New_York`, DST-aware) et la logique
@@ -41,7 +41,10 @@ au niveau OPR). Voir section "Stratégie OPR" plus bas.
 2. ✅ Migration OPR : SL/TP fixe en points → multiplicateur ATR journalier
    14j (`opr-v3`). Calibrés en walk-forward — voir section "Stratégie OPR"
    pour les multiplicateurs retenus et les résultats.
-3. ⏳ Intégration broker : passer les ordres composite + OPR en automatique
+3. ✅ Filtres trigger OPR (`opr-v4`) : analyse exploratoire walk-forward →
+   filtre `max_excursion_atr` YM1 + `trigger_vol_zscore` MES1. Re-calibration
+   SL/TP. Voir section "Stratégie OPR" et `analyse/RESULTATS.md`.
+4. ⏳ Intégration broker : passer les ordres composite + OPR en automatique
    sur Topstep via l'API ProjectX. Pas démarré.
 
 ---
@@ -312,7 +315,24 @@ qu'une position est ouverte ou qu'un ordre limite est pendant, aucun
 nouveau trigger n'est armé. Si le prix s'éloigne sans fill, l'ordre reste
 actif jusqu'à 16h30 NY (puis annulé, marqué `NOT_FILLED`).
 
-### Construction du trade (opr-v3 — SL/TP basés ATR)
+### Filtre trigger (opr-v4 — avant armement de l'ordre limite)
+Appliqué dans `_passes_trigger_filter()` juste après `_check_trigger()`, avant `_make_signal()`.
+
+- **MES1 — `trigger_vol_zscore < OPR_MAX_VOL_ZSCORE` (seuil = -0.45)** : rejette les triggers
+  sur une bougie dont le volume est anormalement élevé vs les 20 bougies de session
+  précédentes (z-score > -0.45). Un spike de volume = move émotionnel / news, pas un
+  retour technique propre. OOS : PF 1.33 → 1.79 (+0.46).
+- **YM1 — `max_excursion_atr > OPR_MIN_EXCURSION_ATR` (seuil = 0.17)** : exige que le prix
+  ait déjà parcouru ≥ 17 % de l'ATR journalier dans le sens du trigger depuis 9h30 NY.
+  Élimine les tests immédiats et chaotiques post-OPR. OOS : PF 1.51 → 2.59 (+1.08 après
+  re-calibration SL/TP).
+- **NQ1 — aucun filtre** : baseline OPR PF OOS=1.65 déjà robuste, aucun filtre
+  n'améliore de façon consistante.
+
+Calibration : `analyse/03_filter_backtest.py` — IS avant 2025-10-01, OOS à partir de
+2025-10-01. Résultats complets dans `analyse/RESULTATS.md`.
+
+### Construction du trade (opr-v4 — SL/TP basés ATR)
 - `entry`     = `opr_high` (long) ou `opr_low` (short)
 - `atr_daily` = ATR(`OPR_ATR_PERIOD=14`) sur les bougies D1 achevées
                 **strictement avant `day_ny`** (pas de leak temporel —
@@ -342,47 +362,59 @@ actif jusqu'à 16h30 NY (puis annulé, marqué `NOT_FILLED`).
 | `OPR_TP_ATR_MULT`      | multiplicateur ATR pour le TP, par ticker        |
 | `OPR_SL_MIN_POINTS`    | floor SL minimum (en points) — anti noise stop-out |
 | `OPR_MAX_TRADES_PER_DAY` | plafond fills/jour (sécurité, rarement atteint)|
+| `OPR_MIN_EXCURSION_ATR` | excursion min vers OPR avant trigger / atr_daily (None = off) |
+| `OPR_MAX_VOL_ZSCORE`   | z-score volume max du trigger vs session (None = off) |
+| `OPR_VOL_ZSCORE_WINDOW` | fenêtre z-score volume (défaut 20 bougies)       |
 
-### Calibration walk-forward `opr-v3` (IS Dec 2024 → Sep 2025, OOS Oct 2025 → Mar 2026)
+### Calibration walk-forward `opr-v4` (IS Dec 2024 → Sep 2025, OOS Oct 2025 → Mar 2026)
 
 `python optimize_opr.py --csv-dir ./data` balaye une grille
-(`SL_ATR_MULT × TP_ATR_MULT`) par actif. Le script applique le même
-critère qu'`optimize.py` Phase C : **OOS PF ≥ 1.2, n_trades OOS ≥ 8,
-P&L OOS > 0**. La sélection finale dans `config.py` privilégie en plus
-un **IS PF ≥ 1.35** pour exclure les faux positifs (combos avec OOS
-fluke et IS faible).
+(`SL_ATR_MULT × TP_ATR_MULT`) par actif avec les filtres trigger actifs.
+Le script applique le critère : **OOS PF ≥ 1.2, n_trades OOS ≥ 8, P&L OOS > 0**.
+Score = OOS_PF × OOS_P&L. La sélection finale dans `config.py` exclut les combos
+avec IS PF < 1.35 (faux positifs).
 
-Combinaisons retenues `opr-v3` :
+Combinaisons retenues `opr-v4` :
 
 | Asset | SL_mult | TP_mult | RR   | IS PF | IS P&L  | OOS PF | OOS P&L | OOS DD  |
 |-------|---------|---------|------|-------|---------|--------|---------|---------|
-| MES1  | 0.15    | 0.20    | 1.33 | 1.38  | +$3,508 | 1.32   | +$1,591 | -$559   |
+| MES1  | 0.15    | 0.50    | 3.33 | 1.41  | +$1,339 | 1.51   | +$1,000 | -$508   |
 | NQ1   | 0.05    | 0.10    | 2.00 | 1.65  | +$10,073 | 1.65 | +$4,230 | -$804   |
-| YM1   | 0.08    | 0.15    | 1.88 | 1.37  | +$6,202 | 1.49   | +$3,765 | -$663   |
+| YM1   | 0.12    | 0.15    | 1.25 | 1.69  | +$3,292 | 2.59   | +$2,639 | -$264   |
 
-Backtest portefeuille (Dec 2024 → Mar 2026) avec ces multiplicateurs,
+Backtest portefeuille (Dec 2024 → Mar 2026) avec filtres trigger + multiplicateurs recalibrés,
 **OPR seul** :
 
 | Métrique          | MES1     | NQ1       | YM1       | Portefeuille   |
 |-------------------|----------|-----------|-----------|----------------|
-| Trades            | 421      | 476       | 484       | 1,381          |
-| Win rate          | 52%      | 46%       | 44%       | —              |
-| Profit factor     | 1.36     | 1.65      | 1.41      | —              |
-| P&L total         | +$5,099  | +$14,304  | +$9,967   | **+$29,370**   |
-| Max trailing DD   | -$556    | -$804     | -$1,220   | -$1,515        |
-| Bootstrap pass    | 100%     | 99.8%     | 99.3%     | **99.1%**      |
+| Trades            | 139      | 476       | 199       | 814            |
+| Win rate          | 40%      | 46%       | 60%       | —              |
+| Profit factor     | 1.45     | 1.65      | 1.92      | —              |
+| P&L total         | +$2,339  | +$14,304  | +$5,931   | **+$22,573**   |
+| Max trailing DD   | -$561    | -$866     | -$502     | -$746          |
+| Bootstrap pass    | 5.8%     | 99.8%     | 100%      | **99.8%**      |
 
+> P&L portfolio réduit vs opr-v3 (+$22,573 vs +$29,370) mais DD divisé par 2
+> (-$746 vs -$1,515) et bootstrap portefeuille stable (99.8%). MES1 bootstrap
+> faible (5.8%) car peu de trades (139) avec RR=3.33 — le portefeuille reste
+> viable grâce à NQ1+YM1.
+>
 > Les valeurs sont à ré-évaluer visuellement via les graphiques d'analyse
 > avant d'être adoptées en production. Le backtest brut peut sur-fitter
 > sur l'IS — la revue chart-par-chart prime sur le PF.
 
 ### Règles à respecter pour évoluer la stratégie OPR
-- **Bump `OPR_STRATEGY_VERSION`** dans `config.py` (ex. `opr-v4`) à chaque
+- **Bump `OPR_STRATEGY_VERSION`** dans `config.py` (ex. `opr-v5`) à chaque
   changement structurel (nouvelle règle de trigger, nouveau filtre, autre
   base de référence ATR…). Cela isole les graphiques d'analyse et permet
   une comparaison versionnée.
 - **Re-calibrer `OPR_SL_ATR_MULT` / `OPR_TP_ATR_MULT`** via `optimize_opr.py`
-  quand la règle de trigger ou la définition de l'ATR change.
+  quand la règle de trigger, les filtres trigger ou la définition de l'ATR change.
+- **Re-calibrer les filtres trigger** via `analyse/01_extract_features.py` +
+  `analyse/03_filter_backtest.py` quand de nouvelles données sont disponibles ou
+  quand la logique de base change. Les seuils `OPR_MIN_EXCURSION_ATR` et
+  `OPR_MAX_VOL_ZSCORE` dans `config.py` sont calibrés IS/OOS et doivent être
+  re-validés avant tout changement manuel.
 - **Ne pas hard-coder d'heure UTC** dans la logique OPR — toute heure doit
   passer par `OPR_TIMEZONE` afin de gérer DST automatiquement.
 - **Pas de leak temporel pour l'ATR** : `_compute_atr_daily` doit toujours

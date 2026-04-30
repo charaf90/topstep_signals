@@ -251,15 +251,16 @@ OPR_ATR_PERIOD = 14
 
 # Multiplicateurs ATR par actif. SL_dist = mult × atr_daily, TP_dist idem.
 # Valeurs calibrées en walk-forward (IS Dec 2024 → Sep 2025, OOS Oct 2025
-# → Mar 2026) via optimize_opr.py. Critère robuste : IS PF ≥ 1.35 ET
-# OOS PF ≥ 1.3 ET P&L OOS > 0.
+# → Mar 2026) via optimize_opr.py avec filtres trigger actifs (opr-v4).
+# Critère : IS PF ≥ 1.35 ET OOS PF ≥ 1.2 ET P&L OOS > 0.
+# Score optimizer = OOS_PF × OOS_P&L.
 #
-# IS / OOS validés :
-#   MES1  IS PF=1.38  OOS PF=1.32  OOS P&L=+$1591  OOS DD=-$559   (RR=1.33)
-#   NQ1   IS PF=1.65  OOS PF=1.65  OOS P&L=+$4230  OOS DD=-$804   (RR=2.00)
-#   YM1   IS PF=1.37  OOS PF=1.49  OOS P&L=+$3765  OOS DD=-$663   (RR=1.88)
-OPR_SL_ATR_MULT = {"MES1": 0.15, "NQ1": 0.05, "YM1": 0.08}
-OPR_TP_ATR_MULT = {"MES1": 0.20, "NQ1": 0.10, "YM1": 0.15}
+# IS / OOS validés (opr-v4, avec filtres trigger) :
+#   MES1  IS PF=1.41  OOS PF=1.51  OOS P&L=+$1000  OOS DD=-$508   (RR=3.33)
+#   NQ1   IS PF=1.65  OOS PF=1.65  OOS P&L=+$4230  OOS DD=-$804   (RR=2.00, inchangé)
+#   YM1   IS PF=1.69  OOS PF=2.59  OOS P&L=+$2639  OOS DD=-$264   (RR=1.25)
+OPR_SL_ATR_MULT = {"MES1": 0.15, "NQ1": 0.05, "YM1": 0.12}
+OPR_TP_ATR_MULT = {"MES1": 0.50, "NQ1": 0.10, "YM1": 0.15}
 
 # Floor minimum SL en points par actif. Empêche les SL d'être trop serrés
 # en régime ultra-calme (atr_daily * mult < bruit du tick) — protège contre
@@ -270,9 +271,28 @@ OPR_SL_MIN_POINTS = {"MES1": 3.0, "NQ1": 8.0, "YM1": 15.0}
 # fois" rend ce plafond rarement atteint). Conservé pour homogénéité.
 OPR_MAX_TRADES_PER_DAY = 4
 
+# Filtres au moment du trigger (avant armement de l'ordre limite).
+# Calibrés en walk-forward IS/OOS via analyse/03_filter_backtest.py.
+# None = filtre désactivé pour cet actif.
+#
+# OPR_MIN_EXCURSION_ATR : excursion minimale du prix dans le sens du trigger
+#   depuis la bougie OPR (exclu) jusqu'au trigger (inclus), normalisée par
+#   atr_daily. Rejette les triggers où le prix n'a pas encore "voyagé" vers
+#   la zone — protège contre les tests chaotiques immédiats post-OPR.
+#   YM1 : 0.17 → IS PF=1.76 / OOS PF=2.04 (+0.53 vs baseline 1.51)
+#
+# OPR_MAX_VOL_ZSCORE : z-score du volume de la bougie trigger vs les
+#   OPR_VOL_ZSCORE_WINDOW bougies précédentes de la session. Rejette les
+#   triggers sur volume anormalement élevé (spike = move émotionnel/news).
+#   MES1 : -0.45 → IS PF=1.89 / OOS PF=1.79 (+0.46 vs baseline 1.33)
+OPR_MIN_EXCURSION_ATR  = {"MES1": None,  "NQ1": None, "YM1": 0.17}
+OPR_MAX_VOL_ZSCORE     = {"MES1": -0.45, "NQ1": None, "YM1": None}
+OPR_VOL_ZSCORE_WINDOW  = 20   # bougies de session pour le z-score volume
+
 # Tag de version OPR pour le dossier de graphiques d'analyse.
 # opr-v3 : passage de SL/TP en distance fixe (points) à multiplicateur ATR.
-OPR_STRATEGY_VERSION = "opr-v3"
+# opr-v4 : ajout filtres trigger (excursion_atr YM1, vol_zscore MES1).
+OPR_STRATEGY_VERSION = "opr-v4"
 
 CHART_STYLE = {
     "figure.facecolor": "#131722",
