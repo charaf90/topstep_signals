@@ -7,3 +7,4 @@ data/
 .venv/
 analyse/data/
 analyse/charts/
+draft_fibo_50/output/
