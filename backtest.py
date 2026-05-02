@@ -25,6 +25,7 @@ from config import (
     DAILY_STOP_AFTER_SL, CONSEC_LOSS_PAUSE_DAYS, DAILY_LOCKIN_THRESHOLD,
     STRATEGY_VERSION, ANALYSIS_CHARTS_ENABLED,
     OPR_ENABLED, OPR_STRATEGY_VERSION, OPR_MAX_TRADES_PER_DAY,
+    FIB_ENABLED, FIB_STRATEGY_VERSION,
 )
 from core.data import load_csv, build_timeframes
 from core.strategy import generate_signals, simulate_trade
@@ -36,6 +37,7 @@ from core.zones import detect_zones
 from core.premarket import compute_features as compute_pm_features
 from core.scoring import compute_volatility_features
 from core.opr import run_opr_day
+from core.strategy_fib import run_fib_backtest
 from zoneinfo import ZoneInfo
 from config import OPR_TIMEZONE
 
@@ -650,26 +652,44 @@ def portfolio_topstep_report(results: list, n_bootstrap: int = 1000):
     print(f"  Bootstrap pass: {boot*100:.1f}%  (cible ≥ 80%, target $+{TOPSTEP_PROFIT_TARGET})")
 
 
+_STRATEGY_META = {
+    "composite": {"label": "COMPOSITE", "version_const": "STRATEGY_VERSION", "suffix": ""},
+    "opr":       {"label": "OPR",       "version_const": "OPR_STRATEGY_VERSION", "suffix": "_opr"},
+    "fib":       {"label": "FIB",       "version_const": "FIB_STRATEGY_VERSION", "suffix": "_fib"},
+}
+
+
 def _run_strategy_for_ticker(strategy: str, ticker: str, df_15m, tf,
                              args, output_dir: Path) -> dict:
     """
-    Exécute une stratégie ('composite' ou 'opr') pour un ticker, gère le
-    dossier de graphiques d'analyse, l'audit, les stats et la sauvegarde.
+    Exécute une stratégie pour un ticker. Stratégies supportées :
+      - 'composite' : multi-TF zones + scoring composite (core/strategy.py)
+      - 'opr'       : Opening Range Breakout pullback (core/opr.py)
+      - 'fib'       : Fibonacci 50% retracement (core/strategy_fib.py)
     Retourne {df_trades, filled, label, version}.
     """
-    is_opr = strategy == "opr"
-    label = "OPR" if is_opr else "COMPOSITE"
-    version = OPR_STRATEGY_VERSION if is_opr else STRATEGY_VERSION
+    if strategy not in _STRATEGY_META:
+        raise ValueError(f"Stratégie inconnue : {strategy}")
+    meta = _STRATEGY_META[strategy]
+    label = meta["label"]
+    version_map = {"STRATEGY_VERSION": STRATEGY_VERSION,
+                   "OPR_STRATEGY_VERSION": OPR_STRATEGY_VERSION,
+                   "FIB_STRATEGY_VERSION": FIB_STRATEGY_VERSION}
+    version = version_map[meta["version_const"]]
 
     analysis_dir = None
-    if ANALYSIS_CHARTS_ENABLED and not args.no_analysis_charts:
+    # Pour Fib, pas de chart d'analyse journalier (logique non liée à un cutoff jour)
+    if (ANALYSIS_CHARTS_ENABLED and not args.no_analysis_charts
+            and strategy != "fib"):
         analysis_dir = output_dir / "analysis_charts" / version / ticker
         analysis_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n  ▸ [{label}] Exécution...")
-    if is_opr:
+    if strategy == "opr":
         df_trades = run_opr_backtest(df_15m, tf, ticker,
                                      analysis_chart_dir=analysis_dir)
+    elif strategy == "fib":
+        df_trades = run_fib_backtest(df_15m, ticker)
     else:
         df_trades = run_backtest(df_15m, tf, ticker,
                                  analysis_chart_dir=analysis_dir)
@@ -678,7 +698,8 @@ def _run_strategy_for_ticker(strategy: str, ticker: str, df_15m, tf,
         n_charts = len(list(analysis_dir.glob("*.png")))
         print(f"  ✓ [{label}] {n_charts} graphique(s) d'analyse → {analysis_dir}")
 
-    audit(df_trades, ticker)
+    if strategy != "fib":
+        audit(df_trades, ticker)
     print_stats(df_trades, ticker)
     ts = validate_topstep(df_trades, n_bootstrap=1000)
     print_topstep_report(ts, ticker)
@@ -688,8 +709,7 @@ def _run_strategy_for_ticker(strategy: str, ticker: str, df_15m, tf,
     else:
         filled = pd.DataFrame()
 
-    suffix = "_opr" if is_opr else ""
-    out_csv = output_dir / f"backtest_{ticker}{suffix}.csv"
+    out_csv = output_dir / f"backtest_{ticker}{meta['suffix']}.csv"
     df_trades.to_csv(out_csv, index=False)
     print(f"  ✓ {out_csv}")
 
@@ -705,10 +725,10 @@ def main():
                         help="Actif unique (défaut: tous)")
     parser.add_argument("--output-dir", type=str, default="./output",
                         help="Répertoire de sortie")
-    parser.add_argument("--strategy", type=str, default="both",
-                        choices=["composite", "opr", "both"],
-                        help="Stratégie à backtester (défaut: both — lance "
-                             "composite + OPR en parallèle).")
+    parser.add_argument("--strategy", type=str, default="all",
+                        choices=["composite", "opr", "fib", "both", "all"],
+                        help="Stratégie à backtester. 'both' = composite+opr "
+                             "(legacy) ; 'all' = composite+opr+fib (défaut).")
     parser.add_argument("--plot", action="store_true",
                         help="Générer graphiques pour chaque trade rempli")
     parser.add_argument("--plot-filter", type=str, default="all",
@@ -723,7 +743,9 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
 
-    if args.strategy == "both":
+    if args.strategy == "all":
+        strategies = ["composite", "opr", "fib"]
+    elif args.strategy == "both":
         strategies = ["composite", "opr"]
     else:
         strategies = [args.strategy]

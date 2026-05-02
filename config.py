@@ -294,6 +294,61 @@ OPR_VOL_ZSCORE_WINDOW  = 20   # bougies de session pour le z-score volume
 # opr-v4 : ajout filtres trigger (excursion_atr YM1, vol_zscore MES1).
 OPR_STRATEGY_VERSION = "opr-v4"
 
+# ==============================================================================
+# STRATÉGIE FIBONACCI 50% RETRACEMENT (`fib-v1`)
+# ==============================================================================
+# Promotion depuis draft_fibo_50/ après validation walk-forward IS/OOS :
+#   • Tendance multi-critères : EMA50/EMA200 stack + ADX(14) > 20
+#   • Impulse = pivot_low → pivot_high (ou inverse), validé par taille ATR + durée
+#   • Entrée LIMIT à fib_50 = swing_low + 0.5 × (swing_high − swing_low)
+#   • SL/TP en multiplicateurs ATR per-ticker
+#   • Filtre trigger walk-forward per-ticker (analyse Sharpe)
+#   • Position fermée au timeout (MAX_HOLD_BARS) si SL/TP non atteint
+#
+# Voir core/strategy_fib.py.
+
+FIB_ENABLED = True
+
+# Indicateurs (cohérents avec draft validé)
+FIB_ATR_PERIOD = 14
+FIB_EMA_FAST_PERIOD = 50
+FIB_EMA_SLOW_PERIOD = 200
+FIB_ADX_PERIOD = 14
+FIB_ADX_TREND_THRESHOLD = 20.0
+
+# Pivots (= 4h M15 de chaque côté — sweep validé robuste)
+FIB_PIVOT_LEFT = 8
+FIB_PIVOT_RIGHT = 8
+
+# Impulse — défauts globaux (peuvent être surchargés per-ticker)
+FIB_MIN_IMPULSE_ATR = 1.5
+FIB_MAX_IMPULSE_BARS = 25
+FIB_IMPULSE_LOOKBACK = 60
+
+# Vie d'ordre / position
+FIB_ORDER_TIMEOUT_BARS = 12         # ordre limite annulé après ~3h
+FIB_MAX_HOLD_BARS = 32              # fermeture forcée après ~8h
+
+# SL/TP/IMP per-ticker — calibrés walk-forward via draft_fibo_50/optimize.py
+# Performance OOS validée :
+#   MES1  IS Sharpe=4.53  OOS Sharpe=3.28  OOS PF=1.55  OOS P&L=+$180  (n=9)
+#   NQ1   IS Sharpe=3.33  OOS Sharpe=3.78  OOS PF=1.73  OOS P&L=+$284  (n=9)
+#   YM1   IS Sharpe=6.08  OOS Sharpe=7.30  OOS PF=2.63  OOS P&L=+$664  (n=20)
+FIB_SL_ATR_MULT_PER_TICKER     = {"MES1": 1.25, "NQ1": 1.50, "YM1": 1.50}
+FIB_TP_ATR_MULT_PER_TICKER     = {"MES1": 1.50, "NQ1": 3.00, "YM1": 1.50}
+FIB_MIN_IMPULSE_ATR_PER_TICKER = {"MES1": 1.50, "NQ1": 1.00, "YM1": 2.00}
+
+# Filtres trigger walk-forward (calibrés via draft_fibo_50/analyze_filters.py)
+# Format : {"feature": <nom>, "direction": "gt"|"lt", "threshold": <float>}
+# None = pas de filtre actif.
+FIB_TRIGGER_FILTERS_PER_TICKER = {
+    "MES1": {"feature": "impulse_velocity_atr", "direction": "gt", "threshold": 0.670},
+    "NQ1":  {"feature": "recent_vol_atr",       "direction": "gt", "threshold": 0.811},
+    "YM1":  {"feature": "price_extension_atr",  "direction": "gt", "threshold": 1.118},
+}
+
+FIB_STRATEGY_VERSION = "fib-v1"
+
 CHART_STYLE = {
     "figure.facecolor": "#131722",
     "axes.facecolor": "#131722",
