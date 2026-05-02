@@ -77,6 +77,26 @@ TP_ATR_MULT_PER_TICKER     = {"MES1": 1.50, "NQ1": 3.00, "YM1": 1.50}
 MIN_IMPULSE_ATR_PER_TICKER = {"MES1": 1.50, "NQ1": 1.00, "YM1": 2.00}
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Filtres trigger (appliqués à l'armement de l'ordre limite)
+# ─────────────────────────────────────────────────────────────────────────────
+# Calibrés walk-forward IS/OOS via analyze_filters.py.
+# Chaque filtre rejette le signal si feature {direction} threshold est faux.
+# None = pas de filtre actif pour ce ticker.
+#
+# Performance OOS validée (vs baseline OOS Sharpe par ticker) :
+#   MES1 : impulse_velocity_atr > 0.670  → Sharpe 1.65 → 3.28 (Δ +1.62), n=9
+#   NQ1  : recent_vol_atr        > 0.811 → Sharpe 1.99 → 3.78 (Δ +1.78), n=9
+#   YM1  : price_extension_atr   > 1.118 → Sharpe 1.95 → 7.89 (Δ +5.94), n=21
+#
+# Caveat : MES1 et NQ1 ont n=9 OOS — sample size faible, intervalle de
+# confiance large. YM1 le plus robuste (n=21).
+TRIGGER_FILTERS_PER_TICKER = {
+    "MES1": {"feature": "impulse_velocity_atr", "direction": "gt", "threshold": 0.670},
+    "NQ1":  {"feature": "recent_vol_atr",       "direction": "gt", "threshold": 0.811},
+    "YM1":  {"feature": "price_extension_atr",  "direction": "gt", "threshold": 1.118},
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Walk-forward IS/OOS
 # ─────────────────────────────────────────────────────────────────────────────
 

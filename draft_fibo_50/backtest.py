@@ -29,6 +29,7 @@ from config import (
     MIN_IMPULSE_ATR, MAX_IMPULSE_BARS, IMPULSE_LOOKBACK,
     ORDER_TIMEOUT_BARS, MAX_HOLD_BARS, SL_ATR_MULT, TP_ATR_MULT,
     SL_ATR_MULT_PER_TICKER, TP_ATR_MULT_PER_TICKER, MIN_IMPULSE_ATR_PER_TICKER,
+    TRIGGER_FILTERS_PER_TICKER,
     US_SESSION_START_UTC, US_SESSION_END_UTC,
     IS_END, SHARPE_ANNUALIZATION,
 )
@@ -297,8 +298,64 @@ def run_backtest(df: pd.DataFrame, ticker: str,
         sig["pending_time"] = str(df.index[i])
         sig["impulse_confirm_idx"] = impulse["confirm_idx"]
         sig["trend"] = trend
-        pending = sig
+
+        # ── Features additionnelles au moment de l'armement (analyse filtres) ──
+        # Toutes calculables AVANT le fill — pas de leak temporel.
+        sig["bars_since_confirm"] = int(i - impulse["confirm_idx"])
+        sig["adx_at_arm"] = float(bar["adx"]) if not pd.isna(bar["adx"]) else float("nan")
+        # Pente ADX 3 bougies : positive = tendance qui se renforce
+        if i >= 3 and not pd.isna(df["adx"].iloc[i - 3]):
+            sig["adx_slope_3"] = float(bar["adx"] - df["adx"].iloc[i - 3])
+        else:
+            sig["adx_slope_3"] = float("nan")
+        # Distance EMA50-EMA200 normalisée par ATR (force du EMA stack)
+        sig["ema_stack_atr"] = float(
+            (bar["ema_fast"] - bar["ema_slow"]) / atr_now
+        )
+        # Extension du prix au-dessus/dessous de fib_50 (signed, dans le sens du trade)
+        if impulse["direction"] == "long":
+            sig["price_extension_atr"] = float(
+                (bar["close"] - impulse["fib_50"]) / atr_now
+            )
+        else:
+            sig["price_extension_atr"] = float(
+                (impulse["fib_50"] - bar["close"]) / atr_now
+            )
+        # Vitesse de l'impulse (ATR/bar)
+        sig["impulse_velocity_atr"] = float(
+            impulse["impulse_size"] / max(impulse["impulse_bars"], 1) / atr_now
+        )
+        # Heure de session (UTC), heure NY = UTC - 4 ou -5 selon DST
+        sig["session_hour_utc"] = int(df.index[i].hour)
+        # Volatilité récente (10 bougies) normalisée
+        if i >= 10:
+            recent_std = float(df["close"].iloc[i - 10:i].std())
+            sig["recent_vol_atr"] = recent_std / atr_now if atr_now > 0 else float("nan")
+        else:
+            sig["recent_vol_atr"] = float("nan")
+        # Taille de l'impulse en multiples d'ATR (au moment du pivot final)
+        sig["impulse_size_atr"] = float(
+            impulse["impulse_size"] / impulse["atr_at_pivot"]
+        )
+
+        # ── Filtre trigger (calibré walk-forward via analyze_filters.py) ──
+        # Marque l'impulse comme "vue" même si rejetée — évite de re-vérifier
+        # cette même impulse à la bougie suivante (pas de spam de logs).
         last_impulse_key = impulse_key
+        filter_cfg = TRIGGER_FILTERS_PER_TICKER.get(ticker)
+        if filter_cfg is not None:
+            feat_val = sig.get(filter_cfg["feature"])
+            if feat_val is None or pd.isna(feat_val):
+                continue
+            thresh = float(filter_cfg["threshold"])
+            if filter_cfg["direction"] == "gt":
+                if feat_val <= thresh:
+                    continue
+            else:  # lt
+                if feat_val >= thresh:
+                    continue
+
+        pending = sig
 
     return pd.DataFrame(trades)
 
