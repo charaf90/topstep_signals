@@ -29,23 +29,27 @@ additions vs v4:
 - Consecutive-loss circuit breaker pauses trading 1 day after 5 consecutive losing days.
 - YM1 disabled globally (`YM1_ENABLED=False`) for the composite strategy — no OOS profitability proof yet.
 
-**Stratégie OPR (`opr-v4`)** tourne en parallèle du composite et est activée
-par défaut dans `backtest.py --strategy both`. C'est une réécriture fidèle
-au PineScript fourni par l'utilisateur (avr. 2026) : la fenêtre OPR est
-ancrée à **9h30 NY** (timezone `America/New_York`, DST-aware) et la logique
-trigger est un pullback (open dans la zone, close hors zone → ordre limite
-au niveau OPR). Voir section "Stratégie OPR" plus bas.
+**Trois stratégies coexistent dans le projet** (toutes lancées par défaut
+via `backtest.py --strategy all`) :
+- **Composite v5.2** (`core/strategy.py`) — trade de zones S/R multi-TF + score composite
+- **OPR opr-v4** (`core/opr.py`) — Opening Range Breakout pullback à 9h30 NY (PineScript)
+- **Fib fib-v1** (`core/strategy_fib.py`) — Retracement Fibonacci 50% post-impulse
+
+Chaque stratégie a son propre garde-fou Topstep et ses paramètres per-ticker.
+Sizing risque dollar fixe ($100/trade) commun aux trois.
 
 **Roadmap V6 — état actuel :**
 1. ✅ Cleanup Telegram + `signals.py` (V6 cleanup ci-dessus).
 2. ✅ Migration OPR : SL/TP fixe en points → multiplicateur ATR journalier
-   14j (`opr-v3`). Calibrés en walk-forward — voir section "Stratégie OPR"
-   pour les multiplicateurs retenus et les résultats.
-3. ✅ Filtres trigger OPR (`opr-v4`) : analyse exploratoire walk-forward →
-   filtre `max_excursion_atr` YM1 + `trigger_vol_zscore` MES1. Re-calibration
-   SL/TP. Voir section "Stratégie OPR" et `analyse/RESULTATS.md`.
-4. ⏳ Intégration broker : passer les ordres composite + OPR en automatique
-   sur Topstep via l'API ProjectX. Pas démarré.
+   14j (`opr-v3`). Calibrés en walk-forward.
+3. ✅ Filtres trigger OPR (`opr-v4`) : `max_excursion_atr` YM1 +
+   `trigger_vol_zscore` MES1. Voir `analyse/RESULTATS.md`.
+4. ✅ Intégration **Fibonacci 50%** (`fib-v1`) : retracement Fib post-impulse
+   avec filtres trigger walk-forward. Promotion depuis `draft_fibo_50/`.
+5. ✅ **Évaluation portefeuille combiné** (`compare_portfolios.py`) : 7
+   combinaisons testées, recommandation = triplet (Composite + OPR + Fib).
+6. ⏳ Intégration broker : passer les ordres composite + OPR + Fib en
+   automatique sur Topstep via l'API ProjectX. Pas démarré.
 
 ---
 
@@ -106,11 +110,14 @@ optimizations. No live signal generation, no Telegram, no broker layer yet.
 
 ### Backtesting (CSV — default)
 ```bash
-python backtest.py --csv-dir ./data                       # All 3 assets, both strategies
+python backtest.py --csv-dir ./data                       # 3 actifs × 3 stratégies (default = "all")
 python backtest.py --csv-dir ./data --ticker NQ1          # Single asset
 python backtest.py --csv-dir ./data --plot                # + per-trade charts
 python backtest.py --csv-dir ./data --strategy opr        # OPR only
 python backtest.py --csv-dir ./data --strategy composite  # Composite only
+python backtest.py --csv-dir ./data --strategy fib        # Fib only
+python backtest.py --csv-dir ./data --strategy both       # legacy : composite + OPR
+python compare_portfolios.py                              # post-backtest : compare 7 combos
 ```
 
 ### Backtesting (TradingView live data)
@@ -127,13 +134,24 @@ python backtest.py --live --bars 20000 --ticker NQ1    # Deeper history, single 
 ```bash
 python optimize.py --csv-dir ./data           # Phase A/B/C composite (multi-hour)
 python run_phase_c.py --csv-dir ./data        # Phase C only (composite thresholds)
-python optimize_opr.py --csv-dir ./data       # OPR SL/TP points (per asset)
+python optimize_opr.py --csv-dir ./data       # OPR SL/TP × ATR (per asset)
+python optimize_zones.py --csv-dir ./data     # Zone detection (TOL × MW × REC)
+```
+
+Pour Fib (sandbox de recherche conservée pour traçabilité) :
+```bash
+cd draft_fibo_50/
+python optimize.py --csv-dir ../data          # SL × TP × IMP per ticker
+python optimize_pivot.py --csv-dir ../data    # PIVOT_LEFT/RIGHT
+python analyze_filters.py                     # Filtres trigger walk-forward
 ```
 
 ### Output
 - Daily analysis charts: `./output/analysis_charts/{STRATEGY_VERSION}/{TICKER}/{YYYY-MM-DD}.png`
 - Per-trade charts (`--plot`): `./output/backtest_charts/{TICKER}/...png`
-- Backtest results: `./output/backtest_{TICKER}.csv` (composite) and `./output/backtest_{TICKER}_opr.csv` (OPR)
+- Backtest results : `output/backtest_{TICKER}.csv` (composite),
+  `output/backtest_{TICKER}_opr.csv` (OPR), `output/backtest_{TICKER}_fib.csv` (Fib)
+- Comparaison portefeuilles : `output/portfolio_comparison.csv`
 
 ---
 
@@ -262,7 +280,7 @@ Topstep slack guardrail + `CONSEC_LOSS_PAUSE_DAYS=5` sit on top.
 
 ---
 
-## Stratégie OPR (`opr-v2`) — exécutée en parallèle du composite
+## Stratégie OPR (`opr-v4`) — exécutée en parallèle du composite et de Fib
 
 Réécriture fidèle au PineScript fourni par l'utilisateur (avr. 2026).
 Implémentation : `core/opr.py` → `run_opr_day(df_15m, ticker, day_ny)`.
@@ -428,12 +446,89 @@ Backtest portefeuille (Dec 2024 → Mar 2026) avec filtres trigger + multiplicat
 
 ---
 
+## Stratégie Fibonacci 50% (`fib-v1`) — promotion depuis `draft_fibo_50/`
+
+Troisième stratégie du portefeuille, indépendante de Composite et OPR.
+Logique métier : voir `core/strategy_fib.py` (et `draft_fibo_50/README_LOGIC.md`
+pour la justification technique complète).
+
+### Pipeline (M15)
+1. Tendance multi-critères : `EMA50 > EMA200 + ADX(14) > 20` → BULL/BEAR/RANGE
+2. Détection impulse : pivots `LEFT=RIGHT=8` + filtres ATR + durée +
+   alignement avec la tendance
+3. Entrée LIMIT à `fib_50 = swing_low + 0.5 × (swing_high − swing_low)`
+   (long, inverse short)
+4. SL = entry ∓ `FIB_SL_ATR_MULT × ATR`, TP = entry ± `FIB_TP_ATR_MULT × ATR`
+5. Filtre trigger walk-forward (per-ticker)
+6. Position fermée au timeout (`FIB_MAX_HOLD_BARS = 32` bougies = ~8h)
+
+### Calibration walk-forward (IS Dec 2024 → Sep 2025, OOS Oct 2025 → Mar 2026)
+| Asset | SL_mult | TP_mult | IMP_min | RR | Filtre trigger | OOS Sharpe | OOS PF |
+|-------|---------|---------|---------|------|----------------|------------|--------|
+| MES1 | 1.25 | 1.50 | 1.50 | 1.20 | `impulse_velocity_atr > 0.670` | 3.28 | 1.55 |
+| NQ1 | 1.50 | 3.00 | 1.00 | 2.00 | `recent_vol_atr > 0.811` | 3.78 | 1.73 |
+| YM1 | 1.50 | 1.50 | 2.00 | 1.00 | `price_extension_atr > 1.118` | **7.30** | 2.63 |
+
+Backtest portefeuille Fib seul (Dec 2024 → Mar 2026) :
+- 128 trades, P&L=+$3,600, DD=-$467, Sharpe=5.29, Bootstrap=100%
+
+### Règles à respecter pour évoluer Fib
+- **Bump `FIB_STRATEGY_VERSION`** dans `config.py` à chaque changement structurel.
+- Re-calibration via `draft_fibo_50/optimize.py` quand la logique change
+  (la sandbox est conservée pour traçabilité historique).
+- Aucun chart d'analyse journalier pour Fib (pas de cutoff jour pertinent —
+  les triggers sont étalés sur la session).
+
+---
+
+## Portefeuille combiné — analyse 3 stratégies
+
+`compare_portfolios.py` charge les CSVs de sortie de
+`backtest.py --strategy all` et calcule les métriques pour les 7
+combinaisons non vides de {Composite, OPR, Fib} :
+- Concaténation chronologique des trades sur les 3 actifs
+- Agrégation journalière du P&L
+- Sharpe annualisé (sur returns journaliers, sqrt(252))
+- Bootstrap Topstep (1000 permutations) — target $3K, max DD $2K, daily $1K
+
+### Résultats (Dec 2024 → Mar 2026)
+| Combinaison | Trades | P&L | Max DD | Sharpe | Bootstrap |
+|-------------|--------|------|---------|--------|-----------|
+| Composite seul | 142 | +$3 728 | -$1 500 | 4.05 | 100 % |
+| OPR seul | 814 | +$22 573 | -$746 | 6.45 | 99.9 % |
+| Fib seul | 128 | +$3 600 | -$467 | 5.29 | 100 % |
+| Composite + OPR | 956 | +$26 302 | -$852 | 6.46 | 98.5 % |
+| OPR + Fib | 942 | +$26 174 | -$924 | 6.90 | 99.6 % |
+| **Composite + OPR + Fib** | **1 084** | **+$29 902** | **-$845** | **6.90** | **99.5 %** |
+
+**Recommandation production : triplet Composite + OPR + Fib.**
+Maximise P&L (+$29 902) avec DD parmi les plus bas (-$845), Sharpe annualisé
+6.90, bootstrap 99.5 %. La diversification entre les 3 logiques de signal
+(zones S/R / OPR / pullback Fib) lisse la courbe d'equity.
+
+> **Caveat pour la prod broker** : actuellement chaque stratégie applique
+> son propre garde-fou Topstep PAR TICKER. En production multi-stratégies,
+> il faudra un garde-fou GLOBAL qui voit tous les trades en chronologique
+> (sinon risque de dépassement du daily $1K si 3 trades simultanés). À
+> traiter au moment de l'intégration ProjectX.
+
+---
+
 ## Key Modules: What They Do
 
 ### `core/data.py`
 - `load_csv(path)` → pandas DataFrame with DatetimeIndex
 - `fetch_live(ticker, n_bars)` → DataFrame from TradingView (5 retries, 2s backoff)
 - Deduplication and sorting on load
+
+### `core/strategy_fib.py` (fib-v1)
+- `compute_ema/atr/adx` — indicateurs standalone (pas de TA-Lib)
+- `detect_pivots(df, left, right)` — pivots high/low confirmés
+- `detect_trend(close, ema_f, ema_s, adx, threshold)` → BULL/BEAR/RANGE
+- `find_last_impulse(...)` → dict décrivant l'impulse alignée tendance
+- `build_signal(impulse, atr, ticker, sl_mult, tp_mult)` → signal trade
+- `run_fib_backtest(df_15m, ticker)` → DataFrame de trades clos
+- Filtre trigger walk-forward appliqué inline (per-ticker via config.py)
 
 ### `core/zones.py`
 - `detect_pivots(df, window)` → swing high/low indices
