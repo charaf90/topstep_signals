@@ -28,6 +28,7 @@ from config import (
     FIB_PIVOT_LEFT, FIB_PIVOT_RIGHT,
     FIB_MIN_IMPULSE_ATR, FIB_MAX_IMPULSE_BARS, FIB_IMPULSE_LOOKBACK,
     FIB_ORDER_TIMEOUT_BARS, FIB_MAX_HOLD_BARS,
+    FIB_LEVEL_PER_TICKER,
     FIB_SL_ATR_MULT_PER_TICKER, FIB_TP_ATR_MULT_PER_TICKER,
     FIB_MIN_IMPULSE_ATR_PER_TICKER,
     FIB_TRIGGER_FILTERS_PER_TICKER,
@@ -141,8 +142,15 @@ def find_last_impulse(
     atr_series: pd.Series, trend: str,
     pivot_right: int, min_impulse_atr: float,
     max_impulse_bars: int, impulse_lookback: int,
+    fib_level: float = 0.50,
 ) -> Optional[Dict]:
-    """Cherche la dernière impulse VALIDE alignée avec la tendance."""
+    """
+    Cherche la dernière impulse VALIDE alignée avec la tendance.
+
+    `fib_level` = niveau de retracement Fibonacci pour le calcul de l'entrée.
+    Valeurs typiques : 0.382, 0.50, 0.618. La clé "fib_50" du dict retourné
+    contient le prix au niveau choisi (nom hérité de la version originale).
+    """
     if trend not in ("BULL", "BEAR"):
         return None
 
@@ -172,7 +180,8 @@ def find_last_impulse(
             return None
         if impulse_bars > max_impulse_bars:
             return None
-        fib_50 = swing_low + 0.5 * impulse_size
+        # Niveau Fib paramétrable (38.2 / 50 / 61.8…). 0.5 = mid, 0.618 = retracement profond.
+        fib_price = swing_low + fib_level * impulse_size
         return {
             "direction": "long",
             "pivot_low_idx": int(pl_idx),
@@ -180,7 +189,8 @@ def find_last_impulse(
             "swing_low": swing_low, "swing_high": swing_high,
             "impulse_size": float(impulse_size),
             "impulse_bars": int(impulse_bars),
-            "fib_50": float(fib_50),
+            "fib_50": float(fib_price),    # clé conservée pour compat — contient le prix au niveau choisi
+            "fib_level": float(fib_level),
             "atr_at_pivot": float(atr_at_pivot),
             "confirm_idx": int(ph_idx + pivot_right),
         }
@@ -209,7 +219,7 @@ def find_last_impulse(
         return None
     if impulse_bars > max_impulse_bars:
         return None
-    fib_50 = swing_high - 0.5 * impulse_size
+    fib_price = swing_high - fib_level * impulse_size
     return {
         "direction": "short",
         "pivot_high_idx": int(ph_idx),
@@ -217,7 +227,8 @@ def find_last_impulse(
         "swing_low": swing_low, "swing_high": swing_high,
         "impulse_size": float(impulse_size),
         "impulse_bars": int(impulse_bars),
-        "fib_50": float(fib_50),
+        "fib_50": float(fib_price),
+        "fib_level": float(fib_level),
         "atr_at_pivot": float(atr_at_pivot),
         "confirm_idx": int(pl_idx + pivot_right),
     }
@@ -279,18 +290,36 @@ def build_signal(
 # Moteur de backtest (boucle barre par barre)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def run_fib_backtest(df_15m: pd.DataFrame, ticker: str) -> pd.DataFrame:
+def run_fib_backtest(df_15m: pd.DataFrame, ticker: str,
+                     fib_level: Optional[float] = None,
+                     sl_mult: Optional[float] = None,
+                     tp_mult: Optional[float] = None,
+                     min_imp: Optional[float] = None,
+                     apply_filter: bool = True) -> pd.DataFrame:
     """
     Backtest complet de la stratégie Fib pour un ticker.
     Retourne un DataFrame de trades clos (mêmes colonnes que les autres
     stratégies pour cohérence d'agrégation portefeuille).
+
+    Paramètres surchargeables (sinon valeurs config.py per-ticker) :
+      fib_level   : niveau Fibonacci. None → FIB_LEVEL_PER_TICKER[ticker]
+                    (défaut 0.382). Alternatives explicites : 0.50, 0.618…
+      sl_mult     : SL en multiples d'ATR
+      tp_mult     : TP en multiples d'ATR
+      min_imp     : taille minimale impulse en multiples d'ATR
+      apply_filter: appliquer le filtre trigger configuré (défaut True)
     """
     if not FIB_ENABLED:
         return pd.DataFrame()
 
-    sl_mult = FIB_SL_ATR_MULT_PER_TICKER[ticker]
-    tp_mult = FIB_TP_ATR_MULT_PER_TICKER[ticker]
-    min_imp = FIB_MIN_IMPULSE_ATR_PER_TICKER.get(ticker, FIB_MIN_IMPULSE_ATR)
+    if fib_level is None:
+        fib_level = FIB_LEVEL_PER_TICKER.get(ticker, 0.50)
+    if sl_mult is None:
+        sl_mult = FIB_SL_ATR_MULT_PER_TICKER[ticker]
+    if tp_mult is None:
+        tp_mult = FIB_TP_ATR_MULT_PER_TICKER[ticker]
+    if min_imp is None:
+        min_imp = FIB_MIN_IMPULSE_ATR_PER_TICKER.get(ticker, FIB_MIN_IMPULSE_ATR)
 
     df = df_15m.copy()
     df["atr"] = compute_atr(df, FIB_ATR_PERIOD)
@@ -431,6 +460,7 @@ def run_fib_backtest(df_15m: pd.DataFrame, ticker: str) -> pd.DataFrame:
         impulse = find_last_impulse(
             df, i, pivot_highs, pivot_lows, df["atr"], trend,
             FIB_PIVOT_RIGHT, min_imp, FIB_MAX_IMPULSE_BARS, FIB_IMPULSE_LOOKBACK,
+            fib_level=fib_level,
         )
         if impulse is None:
             continue
@@ -479,9 +509,10 @@ def run_fib_backtest(df_15m: pd.DataFrame, ticker: str) -> pd.DataFrame:
 
         # Marque l'impulse comme vue (même si rejetée par le filtre)
         last_impulse_key = impulse_key
+        sig["fib_level"] = float(fib_level)
 
         # ── Filtre trigger walk-forward (per-ticker) ──
-        if filter_cfg is not None:
+        if apply_filter and filter_cfg is not None:
             feat_val = sig.get(filter_cfg["feature"])
             if feat_val is None or pd.isna(feat_val):
                 continue

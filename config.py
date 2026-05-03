@@ -329,25 +329,47 @@ FIB_IMPULSE_LOOKBACK = 60
 FIB_ORDER_TIMEOUT_BARS = 12         # ordre limite annulé après ~3h
 FIB_MAX_HOLD_BARS = 32              # fermeture forcée après ~8h
 
-# SL/TP/IMP per-ticker — calibrés walk-forward via draft_fibo_50/optimize.py
-# Performance OOS validée :
-#   MES1  IS Sharpe=4.53  OOS Sharpe=3.28  OOS PF=1.55  OOS P&L=+$180  (n=9)
-#   NQ1   IS Sharpe=3.33  OOS Sharpe=3.78  OOS PF=1.73  OOS P&L=+$284  (n=9)
-#   YM1   IS Sharpe=6.08  OOS Sharpe=7.30  OOS PF=2.63  OOS P&L=+$664  (n=20)
-FIB_SL_ATR_MULT_PER_TICKER     = {"MES1": 1.25, "NQ1": 1.50, "YM1": 1.50}
-FIB_TP_ATR_MULT_PER_TICKER     = {"MES1": 1.50, "NQ1": 3.00, "YM1": 1.50}
-FIB_MIN_IMPULSE_ATR_PER_TICKER = {"MES1": 1.50, "NQ1": 1.00, "YM1": 2.00}
+# Niveau Fibonacci utilisé pour le calcul du prix d'entrée par ticker.
+# Calibré walk-forward via draft_fibo_50/optimize_fib_levels.py + comparaison
+# portefeuille via compare_fib_levels.py.
+#
+# Choix retenu : 0.382 (uniforme sur les 3 actifs).
+# Justification (Dec 2024 → Mar 2026, sans filtres trigger) :
+#   38.2 seul        : 483 trades, P&L=+$8 718, DD=-$1 141, Sharpe=3.00, BS=93.1 %
+#   50  seul         : 488 trades, P&L=+$4 662, DD=-$1 212, Sharpe=2.24, BS=96.7 %
+#   61.8 seul        : 574 trades, P&L=+$956,   DD=-$4 496, Sharpe=0.37, BS=0.0 %  (rejeté)
+#   38.2 + 50        : 971 trades, P&L=+$13 380, DD=-$2 218, BS=41.6 %  (DD trop lourd)
+#   Triplet 38.2+50+61.8 : 1 545 trades, P&L=+$14 336, BS=4.6 %   (inacceptable Topstep)
+FIB_LEVEL_PER_TICKER = {"MES1": 0.382, "NQ1": 0.382, "YM1": 0.382}
 
-# Filtres trigger walk-forward (calibrés via draft_fibo_50/analyze_filters.py)
+# SL/TP/IMP per-ticker — calibrés walk-forward via draft_fibo_50/optimize_fib_levels.py
+# Performance OOS validée pour le niveau 38.2 % (sans filtres trigger) :
+#   MES1  IS Sharpe=2.99  OOS Sharpe=1.66  OOS PF=1.27  OOS P&L=+$1 156  (n=77)
+#   NQ1   IS Sharpe=5.52  OOS Sharpe=4.52  OOS PF=1.79  OOS P&L=+$765   (n=35)
+#   YM1   IS Sharpe=1.04  OOS Sharpe=1.44  OOS PF=1.22  OOS P&L=+$640   (n=57)
+FIB_SL_ATR_MULT_PER_TICKER     = {"MES1": 0.75, "NQ1": 1.50, "YM1": 1.00}
+FIB_TP_ATR_MULT_PER_TICKER     = {"MES1": 2.00, "NQ1": 1.50, "YM1": 2.00}
+FIB_MIN_IMPULSE_ATR_PER_TICKER = {"MES1": 2.00, "NQ1": 1.00, "YM1": 2.00}
+
+# Filtres trigger walk-forward (calibrés pour fib-v2, niveau 38.2 %)
+# via draft_fibo_50/analyze_filters_v2.py.
 # Format : {"feature": <nom>, "direction": "gt"|"lt", "threshold": <float>}
 # None = pas de filtre actif.
+#
+# Sélection : compromis Sharpe / robustesse (OOS n).
+#   MES1 : bars_since_confirm < 10 (OOS Sharpe 4.51 vs baseline 1.66, n=44 robuste)
+#   NQ1  : adx_at_arm > 44.035     (OOS Sharpe 18.67 vs baseline 4.52, n=10 limite)
+#   YM1  : bars_since_confirm < 2  (OOS Sharpe 7.11 vs baseline 1.44, n=12 limite)
+#
+# Caveat : NQ1 et YM1 ont des samples OOS faibles (n=10/12) → IC large.
+# À re-valider sur 2026-Q2/Q3 dès données disponibles.
 FIB_TRIGGER_FILTERS_PER_TICKER = {
-    "MES1": {"feature": "impulse_velocity_atr", "direction": "gt", "threshold": 0.670},
-    "NQ1":  {"feature": "recent_vol_atr",       "direction": "gt", "threshold": 0.811},
-    "YM1":  {"feature": "price_extension_atr",  "direction": "gt", "threshold": 1.118},
+    "MES1": {"feature": "bars_since_confirm", "direction": "lt", "threshold": 10.0},
+    "NQ1":  {"feature": "adx_at_arm",         "direction": "gt", "threshold": 44.035},
+    "YM1":  {"feature": "bars_since_confirm", "direction": "lt", "threshold": 2.0},
 }
 
-FIB_STRATEGY_VERSION = "fib-v1"
+FIB_STRATEGY_VERSION = "fib-v2"
 
 CHART_STYLE = {
     "figure.facecolor": "#131722",
