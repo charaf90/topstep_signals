@@ -19,7 +19,7 @@ l'intégration broker (ProjectX) qui fera l'exécution automatisée.
 |-----------|--------|---------|--------|
 | **Composite** | `core/strategy.py` | Trade de zones S/R multi-TF + score composite | v5.2 |
 | **OPR** | `core/opr.py` | Opening Range Breakout (pullback à 9h30 NY) | opr-v4 |
-| **Fib** | `core/strategy_fib.py` | Retracement Fibonacci 50% post-impulse | fib-v1 |
+| **Fib** | `core/strategy_fib.py` | Retracement Fibonacci 38.2 % post-impulse | fib-v2 |
 
 Chaque stratégie applique son propre garde-fou Topstep (`risk_topstep.py`).
 Sizing risque dollar fixe ($100/trade) commun aux trois.
@@ -35,15 +35,16 @@ Sizing risque dollar fixe ($100/trade) commun aux trois.
 |-------------|--------|------|---------|--------|-----------|
 | Composite seul | 142 | +$3,728 | -$1,500 | 4.05 | 100% |
 | OPR seul | 814 | +$22,573 | -$746 | 6.45 | 99.9% |
-| Fib seul | 128 | +$3,600 | -$467 | 5.29 | 100% |
+| Fib seul (fib-v2) | 182 | +$6,891 | -$494 | 5.13 | 100% |
 | Composite + OPR | 956 | +$26,302 | -$852 | 6.46 | 98.5% |
-| Composite + Fib | 270 | +$7,329 | -$1,701 | 4.79 | 100% |
-| OPR + Fib | 942 | +$26,174 | -$924 | 6.90 | 99.6% |
-| **Composite + OPR + Fib** | **1 084** | **+$29,902** | **-$845** | **6.90** | **99.5%** |
+| Composite + Fib | 324 | +$10,619 | -$875 | 5.01 | 99.8% |
+| OPR + Fib | 996 | +$29,464 | -$756 | **7.01** | 99.1% |
+| **Composite + OPR + Fib** | **1 138** | **+$33,193** | -$904 | 6.96 | 99.2% |
 
-**Recommandation production : triplet (Composite + OPR + Fib).**
-Maximise P&L (+$29,902) avec le DD le plus bas parmi les portefeuilles
-multi-stratégies (-$845), Sharpe annualisé 6.90, bootstrap Topstep 99.5%.
+**Recommandation production : triplet (Composite + OPR + Fib-v2).**
+Maximise P&L (+$33,193) avec DD contenu (-$904), Sharpe annualisé 6.96,
+bootstrap Topstep 99.2 %. Alternative Sharpe-max : OPR + Fib (-$3,729 sur
+P&L mais DD -$756 et Sharpe 7.01).
 
 ---
 
@@ -170,9 +171,11 @@ topstep_signals/
 1. ✅ **Cleanup** : suppression de `signals.py` et de la stack Telegram.
 2. ✅ **OPR opr-v3** : SL/TP en multiplicateurs ATR journalier 14j.
 3. ✅ **OPR opr-v4** : ajout filtres trigger walk-forward (PF +0.46 sur MES1, etc.).
-4. ✅ **Fib fib-v1** : retracement Fibonacci 50% intégré (Sharpe OOS 5.10).
+4. ✅ **Fib fib-v1** : retracement Fibonacci 50 % intégré (Sharpe OOS 5.29).
 5. ✅ **Évaluation portefeuilles 3 stratégies** : triplet recommandé en
-   production (P&L +$29,902, DD -$845, Sharpe 6.90, bootstrap 99.5%).
-6. ⏳ **Intégration API ProjectX** pour exécution automatisée sur Topstep.
+   production.
+6. ✅ **Fib fib-v2** : test 38.2 / 50 / 61.8 + combinaisons → niveau 38.2 %
+   retenu (P&L +91 % vs fib-v1) + filtres trigger re-calibrés.
+7. ⏳ **Intégration API ProjectX** pour exécution automatisée sur Topstep.
 
 Voir `CLAUDE.md` pour le détail technique de chaque stratégie.

@@ -463,14 +463,24 @@ pour la justification technique complète).
 6. Position fermée au timeout (`FIB_MAX_HOLD_BARS = 32` bougies = ~8h)
 
 ### Calibration walk-forward (IS Dec 2024 → Sep 2025, OOS Oct 2025 → Mar 2026)
-| Asset | SL_mult | TP_mult | IMP_min | RR | Filtre trigger | OOS Sharpe | OOS PF |
-|-------|---------|---------|---------|------|----------------|------------|--------|
-| MES1 | 1.25 | 1.50 | 1.50 | 1.20 | `impulse_velocity_atr > 0.670` | 3.28 | 1.55 |
-| NQ1 | 1.50 | 3.00 | 1.00 | 2.00 | `recent_vol_atr > 0.811` | 3.78 | 1.73 |
-| YM1 | 1.50 | 1.50 | 2.00 | 1.00 | `price_extension_atr > 1.118` | **7.30** | 2.63 |
 
-Backtest portefeuille Fib seul (Dec 2024 → Mar 2026) :
-- 128 trades, P&L=+$3,600, DD=-$467, Sharpe=5.29, Bootstrap=100%
+**Niveau Fibonacci (`FIB_LEVEL_PER_TICKER`) :** test des 3 niveaux 38.2 / 50 / 61.8 %
+en walk-forward via `draft_fibo_50/optimize_fib_levels.py` + `compare_fib_levels.py`.
+Retenu : **38.2 % uniforme sur les 3 actifs**. Toutes combinaisons multi-niveaux
+dégradent le bootstrap Topstep (DDs additifs).
+
+| Asset | Level | SL_mult | TP_mult | IMP_min | RR | Filtre trigger | OOS Sharpe |
+|-------|-------|---------|---------|---------|------|----------------|------------|
+| MES1 | 0.382 | 0.75 | 2.00 | 2.00 | 2.67 | `bars_since_confirm < 10` | 4.51 |
+| NQ1  | 0.382 | 1.50 | 1.50 | 1.00 | 1.00 | `adx_at_arm > 44.035`     | 18.67 |
+| YM1  | 0.382 | 1.00 | 2.00 | 2.00 | 2.00 | `bars_since_confirm < 2`  | 7.11 |
+
+> Caveat : NQ1 et YM1 ont des samples OOS faibles (n=10/12) — Sharpe spectaculaires
+> en partie un artefact de small sample. À re-valider sur 2026-Q2/Q3.
+
+Backtest portefeuille Fib seul (fib-v2, Dec 2024 → Mar 2026) :
+- 182 trades, P&L=+$6,891, DD=-$494, Sharpe=5.13, Bootstrap=100%
+- vs fib-v1 (50 %) : 128 trades, P&L=+$3,600 → +91 % de P&L pour DD comparable
 
 ### Règles à respecter pour évoluer Fib
 - **Bump `FIB_STRATEGY_VERSION`** dans `config.py` à chaque changement structurel.
@@ -491,20 +501,21 @@ combinaisons non vides de {Composite, OPR, Fib} :
 - Sharpe annualisé (sur returns journaliers, sqrt(252))
 - Bootstrap Topstep (1000 permutations) — target $3K, max DD $2K, daily $1K
 
-### Résultats (Dec 2024 → Mar 2026)
+### Résultats (Dec 2024 → Mar 2026, Fib en version fib-v2 / 38.2 %)
 | Combinaison | Trades | P&L | Max DD | Sharpe | Bootstrap |
 |-------------|--------|------|---------|--------|-----------|
 | Composite seul | 142 | +$3 728 | -$1 500 | 4.05 | 100 % |
 | OPR seul | 814 | +$22 573 | -$746 | 6.45 | 99.9 % |
-| Fib seul | 128 | +$3 600 | -$467 | 5.29 | 100 % |
+| Fib seul (fib-v2) | 182 | +$6 891 | -$494 | 5.13 | 100 % |
 | Composite + OPR | 956 | +$26 302 | -$852 | 6.46 | 98.5 % |
-| OPR + Fib | 942 | +$26 174 | -$924 | 6.90 | 99.6 % |
-| **Composite + OPR + Fib** | **1 084** | **+$29 902** | **-$845** | **6.90** | **99.5 %** |
+| OPR + Fib | 996 | +$29 464 | -$756 | **7.01** | 99.1 % |
+| **Composite + OPR + Fib** | **1 138** | **+$33 193** | -$904 | 6.96 | 99.2 % |
 
-**Recommandation production : triplet Composite + OPR + Fib.**
-Maximise P&L (+$29 902) avec DD parmi les plus bas (-$845), Sharpe annualisé
-6.90, bootstrap 99.5 %. La diversification entre les 3 logiques de signal
-(zones S/R / OPR / pullback Fib) lisse la courbe d'equity.
+**Recommandation production : triplet Composite + OPR + Fib-v2.**
+Maximise P&L (+$33 193) avec DD contenu (-$904), Sharpe annualisé 6.96,
+bootstrap 99.2 %. Alternative Sharpe-max : OPR + Fib (P&L -$3 729 mais
+DD -$756 et Sharpe 7.01). La diversification entre les 3 logiques de signal
+(zones S/R / OPR / pullback Fib 38.2) lisse la courbe d'equity.
 
 > **Caveat pour la prod broker** : actuellement chaque stratégie applique
 > son propre garde-fou Topstep PAR TICKER. En production multi-stratégies,
