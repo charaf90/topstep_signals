@@ -385,6 +385,27 @@ FIB_TRIGGER_FILTERS_PER_TICKER = {
 
 FIB_STRATEGY_VERSION = "fib-v2"
 
+# ==============================================================================
+# BROKER PROJECTX / TOPSTEPX
+# ==============================================================================
+# Mapping tickers internes → symboles ProjectX (recherche de contrats).
+# Utilisé par broker/projectx_client.py et broker/live_runner.py.
+PROJECTX_BASE_URL  = "https://api.topstepx.com"
+PROJECTX_SYMBOLS   = {"MES1": "MES", "NQ1": "MNQ", "YM1": "MYM"}
+
+# live=False : compte de simulation (challenge Topstep).
+# live=True  : compte financé (après validation du challenge).
+# Tous les appels API (search_contract, get_bars, place_order) utilisent cette valeur.
+PROJECTX_LIVE_MODE = False
+
+# Nombre de barres 15m à fetcher pour garantir le warmup des indicateurs
+# (ATR journalier OPR = 14 jours × 80 bougies = 1120 ; Fib warmup = 250).
+# 2000 barres ≈ 25 jours de trading → confortable.
+PROJECTX_BARS_WARMUP = 2000
+
+# Fichier d'état persistant du live runner
+LIVE_STATE_FILE = "state/live_state.json"
+
 CHART_STYLE = {
     "figure.facecolor": "#131722",
     "axes.facecolor": "#131722",

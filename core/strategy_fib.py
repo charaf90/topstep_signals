@@ -527,3 +527,212 @@ def run_fib_backtest(df_15m: pd.DataFrame, ticker: str,
         pending = sig
 
     return pd.DataFrame(trades)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# État live — utilisé par broker/live_runner.py
+# ═════════════════════════════════════════════════════════════════════════════
+
+def get_fib_live_signal(df_15m: pd.DataFrame, ticker: str) -> Optional[Dict]:
+    """
+    Rejoue la stratégie Fib sur l'historique fourni et retourne l'état courant.
+
+    Différence vs run_fib_backtest :
+      • Retourne l'état LIVE (ordre armé ou position ouverte) au lieu de la
+        liste des trades clos.
+      • À appeler avec ≥ 2 000 barres 15m pour garantir le warmup.
+
+    Retourne None si aucun signal actif, sinon un dict :
+      {
+        "state":           "PENDING" | "ACTIVE",
+        "signal":          dict (entry/sl/tp/n_ct/…),
+        "impulse_key":     str  — clé unique par impulse (déduplication),
+        "bars_remaining":  int  — barres avant timeout (seulement si PENDING),
+      }
+
+    "PENDING"  → un ordre limite doit être armé au broker.
+    "ACTIVE"   → une position est ouverte (gérée par le broker via brackets).
+    """
+    if not FIB_ENABLED:
+        return None
+
+    fib_level = FIB_LEVEL_PER_TICKER.get(ticker, 0.50)
+    sl_mult   = FIB_SL_ATR_MULT_PER_TICKER[ticker]
+    tp_mult   = FIB_TP_ATR_MULT_PER_TICKER[ticker]
+    min_imp   = FIB_MIN_IMPULSE_ATR_PER_TICKER.get(ticker, FIB_MIN_IMPULSE_ATR)
+
+    df = df_15m.copy()
+    df["atr"]      = compute_atr(df, FIB_ATR_PERIOD)
+    df["ema_fast"] = compute_ema(df["close"], FIB_EMA_FAST_PERIOD)
+    df["ema_slow"] = compute_ema(df["close"], FIB_EMA_SLOW_PERIOD)
+    df["adx"]      = compute_adx(df, FIB_ADX_PERIOD)
+
+    pivot_highs, pivot_lows = detect_pivots(df, FIB_PIVOT_LEFT, FIB_PIVOT_RIGHT)
+    hours      = df.index.hour
+    in_session = (hours >= US_SESSION_START_UTC) & (hours < US_SESSION_END_UTC)
+
+    n       = len(df)
+    warmup  = max(FIB_EMA_SLOW_PERIOD, 250)
+    pending  = None
+    position = None
+    last_impulse_key = None
+    filter_cfg = FIB_TRIGGER_FILTERS_PER_TICKER.get(ticker)
+
+    for i in range(warmup, n):
+        bar = df.iloc[i]
+
+        # 1. Position ouverte — vérifier SL/TP/timeout
+        if position is not None:
+            if position["direction"] == "long":
+                hit_sl = bar["low"]  <= position["sl"]
+                hit_tp = bar["high"] >= position["tp"]
+            else:
+                hit_sl = bar["high"] >= position["sl"]
+                hit_tp = bar["low"]  <= position["tp"]
+            bull_bar = bar["close"] >= bar["open"]
+            if hit_sl and hit_tp:
+                exit_r = ("TP" if (position["direction"] == "long") == bull_bar
+                          else "SL")
+            elif hit_sl:
+                exit_r = "SL"
+            elif hit_tp:
+                exit_r = "TP"
+            else:
+                exit_r = None
+            if exit_r is None and (i - position["fill_idx"]) >= FIB_MAX_HOLD_BARS:
+                exit_r = "TE"
+            if exit_r is not None:
+                position = None
+            continue
+
+        # 2. Ordre limite en attente — vérifier fill ou timeout
+        if pending is not None:
+            level = pending["entry"]
+            if bar["low"] <= level <= bar["high"]:
+                position = {**pending, "fill_idx": int(i),
+                            "fill_time": str(df.index[i])}
+                pending  = None
+                # Vérif immédiate SL/TP sur la bougie de fill
+                if position["direction"] == "long":
+                    hit_sl = bar["low"]  <= position["sl"]
+                    hit_tp = bar["high"] >= position["tp"]
+                else:
+                    hit_sl = bar["high"] >= position["sl"]
+                    hit_tp = bar["low"]  <= position["tp"]
+                if hit_sl or hit_tp:
+                    position = None
+                continue
+            if (i - pending["pending_idx"]) >= FIB_ORDER_TIMEOUT_BARS:
+                pending = None
+
+        # 3. Génération d'un nouveau signal
+        if pending is not None or position is not None:
+            continue
+        if not bool(in_session[i]):
+            continue
+        atr_now = bar["atr"]
+        if pd.isna(atr_now) or atr_now <= 0:
+            continue
+
+        trend = detect_trend(
+            float(bar["close"]), float(bar["ema_fast"]), float(bar["ema_slow"]),
+            float(bar["adx"]) if not pd.isna(bar["adx"]) else np.nan,
+            FIB_ADX_TREND_THRESHOLD,
+        )
+        if trend == "RANGE":
+            continue
+
+        impulse = find_last_impulse(
+            df, i, pivot_highs, pivot_lows, df["atr"], trend,
+            FIB_PIVOT_RIGHT, min_imp, FIB_MAX_IMPULSE_BARS, FIB_IMPULSE_LOOKBACK,
+            fib_level=fib_level,
+        )
+        if impulse is None:
+            continue
+
+        imp_key = (impulse["direction"], impulse["pivot_low_idx"],
+                   impulse["pivot_high_idx"])
+        if imp_key == last_impulse_key:
+            continue
+        if impulse["direction"] == "long"  and bar["close"] <= impulse["fib_50"]:
+            continue
+        if impulse["direction"] == "short" and bar["close"] >= impulse["fib_50"]:
+            continue
+
+        sig = build_signal(impulse, float(atr_now), ticker, sl_mult, tp_mult)
+        if sig is None:
+            continue
+
+        # Features additionnelles (même calcul que run_fib_backtest)
+        sig["bars_since_confirm"] = int(i - impulse["confirm_idx"])
+        sig["adx_at_arm"] = (float(bar["adx"]) if not pd.isna(bar["adx"])
+                             else float("nan"))
+        if i >= 3 and not pd.isna(df["adx"].iloc[i - 3]):
+            sig["adx_slope_3"] = float(bar["adx"] - df["adx"].iloc[i - 3])
+        else:
+            sig["adx_slope_3"] = float("nan")
+        sig["ema_stack_atr"] = float((bar["ema_fast"] - bar["ema_slow"]) / atr_now)
+        if impulse["direction"] == "long":
+            sig["price_extension_atr"] = float(
+                (bar["close"] - impulse["fib_50"]) / atr_now)
+        else:
+            sig["price_extension_atr"] = float(
+                (impulse["fib_50"] - bar["close"]) / atr_now)
+        sig["impulse_velocity_atr"] = float(
+            impulse["impulse_size"] / max(impulse["impulse_bars"], 1) / atr_now)
+        sig["impulse_size_atr"] = float(
+            impulse["impulse_size"] / impulse["atr_at_pivot"])
+        if i >= 10:
+            sig["recent_vol_atr"] = float(
+                df["close"].iloc[i - 10:i].std() / atr_now)
+        else:
+            sig["recent_vol_atr"] = float("nan")
+        sig["session_hour_utc"]    = int(df.index[i].hour)
+        sig["pending_idx"]         = int(i)
+        sig["pending_time"]        = str(df.index[i])
+        sig["impulse_confirm_idx"] = impulse["confirm_idx"]
+        sig["trend"]               = trend
+        sig["fib_level"]           = float(fib_level)
+        last_impulse_key = imp_key
+
+        # Filtre trigger walk-forward
+        if filter_cfg is not None:
+            feat_val = sig.get(filter_cfg["feature"])
+            if feat_val is None or pd.isna(feat_val):
+                continue
+            thresh = float(filter_cfg["threshold"])
+            if filter_cfg["direction"] == "gt":
+                if feat_val <= thresh:
+                    continue
+            else:
+                if feat_val >= thresh:
+                    continue
+
+        pending = sig
+
+    # ── Retour de l'état final ────────────────────────────────────────────
+    def _imp_key_str(sig: Dict) -> str:
+        return (f"{sig['direction']}"
+                f"_{sig.get('pivot_low_idx', 0)}"
+                f"_{sig.get('pivot_high_idx', 0)}")
+
+    if position is not None:
+        return {
+            "state":       "ACTIVE",
+            "signal":      position,
+            "impulse_key": _imp_key_str(position),
+        }
+
+    if pending is not None:
+        bars_elapsed   = (n - 1) - pending["pending_idx"]
+        bars_remaining = FIB_ORDER_TIMEOUT_BARS - bars_elapsed
+        if bars_remaining <= 0:
+            return None
+        return {
+            "state":          "PENDING",
+            "signal":         pending,
+            "impulse_key":    _imp_key_str(pending),
+            "bars_remaining": int(bars_remaining),
+        }
+
+    return None
