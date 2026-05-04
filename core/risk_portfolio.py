@@ -34,6 +34,7 @@ from typing import Dict, Optional, Tuple
 from config import (
     TOPSTEP_DAILY_LOSS_MAX, TOPSTEP_TRAILING_DD, TOPSTEP_PROFIT_TARGET,
     TOPSTEP_SAFETY_MULT, RISK_PER_TRADE_USD, CONSEC_LOSS_PAUSE_DAYS,
+    USER_DAILY_LOSS_MAX, USER_MAX_TRADES_PER_DAY, USER_MAX_OPEN_POSITIONS,
 )
 
 
@@ -70,6 +71,9 @@ class PortfolioRiskManager:
     # Streak de jours perdants consécutifs (mêmes règles que risk_topstep.py)
     consec_loss_days: int = 0
 
+    # Compteur de fills sur la journée courante (cap MAX_TRADES_PER_DAY)
+    daily_trades_count: int = 0
+
     # Trades / orders ouverts (par identifiant unique)
     open_trades: Dict[str, _OpenTrade] = field(default_factory=dict)
 
@@ -79,6 +83,11 @@ class PortfolioRiskManager:
     profit_target: float = float(TOPSTEP_PROFIT_TARGET)
     safety_mult: float = float(TOPSTEP_SAFETY_MULT)
     consec_loss_pause_days: int = int(CONSEC_LOSS_PAUSE_DAYS)
+
+    # Contraintes UTILISATEUR (plus strictes que Topstep)
+    user_daily_loss_max: float = float(USER_DAILY_LOSS_MAX)
+    user_max_trades_per_day: int = int(USER_MAX_TRADES_PER_DAY)
+    user_max_open_positions: int = int(USER_MAX_OPEN_POSITIONS)
 
     # ────────────────────────────────────────────────────────────────────
     # Helpers internes
@@ -105,6 +114,7 @@ class PortfolioRiskManager:
             self.consec_loss_days = 0
         # day_pnl == 0 (pas de trade) : streak inchangé
         self.realized_day_pnl = 0.0
+        self.daily_trades_count = 0
         self.current_day = d
 
     # ────────────────────────────────────────────────────────────────────
@@ -116,21 +126,54 @@ class PortfolioRiskManager:
                  ) -> Tuple[bool, str]:
         """
         Retourne (autorise, raison) avant d'armer un nouvel ordre / position.
+
+        Ordre des checks :
+          1. Cap positions ouvertes simultanément (USER_MAX_OPEN_POSITIONS)
+          2. Cap nombre de fills journaliers (USER_MAX_TRADES_PER_DAY)
+          3. Cap perte journalière utilisateur (USER_DAILY_LOSS_MAX) — déjà atteinte
+          4. Streak perdant (CONSEC_LOSS_PAUSE_DAYS)
+          5. Slack daily Topstep + slack trailing DD
         """
         self._maybe_roll_day(when)
 
-        # Circuit breaker streak perdant
+        # 1. Cap positions ouvertes simultanément
+        n_open = len(self.open_trades)
+        if (self.user_max_open_positions > 0
+                and n_open >= self.user_max_open_positions):
+            return False, (
+                f"max_open_positions_{n_open}"
+                f"/{self.user_max_open_positions}"
+            )
+
+        # 2. Cap trades/jour (compteur des fills déjà effectués + des armements
+        #    en attente — un ordre limite arme une "trade slot")
+        if (self.user_max_trades_per_day > 0
+                and self.daily_trades_count >= self.user_max_trades_per_day):
+            return False, (
+                f"daily_trades_cap_{self.daily_trades_count}"
+                f"/{self.user_max_trades_per_day}"
+            )
+
+        # 2. Cap perte journalière utilisateur — sur P&L RÉALISÉ uniquement
+        # (interprétation classique "stop-loss journée" : on arrête quand on a
+        # effectivement perdu N$, pas sur un pire cas hypothétique des positions
+        # ouvertes — ce qui bloquerait dès la 2e position parallèle).
+        if self.realized_day_pnl <= -self.user_daily_loss_max:
+            return False, (
+                f"user_daily_loss_realized_{self.realized_day_pnl:+.0f}_"
+                f"below_{-self.user_daily_loss_max:.0f}"
+            )
+
+        # 3. Circuit breaker streak perdant
         if (self.consec_loss_pause_days > 0
                 and self.consec_loss_days >= self.consec_loss_pause_days):
             return False, f"consec_loss_pause_{self.consec_loss_days}"
 
+        # 4. Slacks Topstep (daily $1K + trailing $2K)
         open_risk = self._sum_open_risks()
-        # Slack daily : on suppose que le nouveau trade + tous les trades
-        # ouverts touchent leur SL → cumul des risks contre la limite daily
         slack_daily = (
             self.daily_loss_limit + self.realized_day_pnl - open_risk
         )
-        # Slack trailing : même calcul mais contre la trailing DD
         trail_floor = self.peak_pnl - self.trailing_dd_limit
         slack_trail = self.cum_pnl - trail_floor - open_risk
 
@@ -148,13 +191,15 @@ class PortfolioRiskManager:
     def register_open(self, trade_id: str, risk_usd: float,
                       when: Optional[datetime] = None,
                       metadata: Optional[Dict] = None):
-        """Enregistre un ordre armé / position ouverte (occupe du slack)."""
+        """Enregistre un ordre armé / position ouverte (occupe du slack +
+        incrémente le compteur de trades du jour)."""
         self._maybe_roll_day(when)
         self.open_trades[trade_id] = _OpenTrade(
             risk_usd=float(risk_usd),
             opened_at=when,
             metadata=metadata or {},
         )
+        self.daily_trades_count += 1
 
     def register_close(self, trade_id: str, pnl: float,
                        when: Optional[datetime] = None) -> Tuple[bool, str]:
@@ -196,6 +241,7 @@ class PortfolioRiskManager:
         self.realized_day_pnl = 0.0
         self.current_day = None
         self.consec_loss_days = 0
+        self.daily_trades_count = 0
         self.open_trades.clear()
 
     def status(self) -> Dict:
@@ -208,6 +254,13 @@ class PortfolioRiskManager:
             "realized_day_pnl": self.realized_day_pnl,
             "current_day": str(self.current_day) if self.current_day else None,
             "consec_loss_days": self.consec_loss_days,
+            "daily_trades_count": self.daily_trades_count,
+            "daily_trades_remaining": max(
+                0, self.user_max_trades_per_day - self.daily_trades_count
+            ),
+            "user_daily_loss_remaining": max(
+                0.0, self.user_daily_loss_max + self.realized_day_pnl
+            ),
             "n_open": len(self.open_trades),
             "open_risk_usd": open_risk,
             "slack_daily": (

@@ -49,8 +49,22 @@ TRADE_RANGE = {"MES1": True, "NQ1": True, "YM1": False}
 # ==============================================================================
 
 RISK_PER_TRADE_USD = 100
-MAX_TRADES_PER_DAY = 2
+MAX_TRADES_PER_DAY = 2          # par actif × stratégie (legacy composite/opr)
 SL_BUFFER_TICKS = 2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Limites de risque UTILISATEUR (plus strictes que Topstep)
+# ─────────────────────────────────────────────────────────────────────────────
+# Appliquées par core/risk_portfolio.PortfolioRiskManager (live mode).
+# Topstep autorise $1 000 daily loss et 0 limite de trades, mais l'utilisateur
+# veut un profil conservateur : $200 daily loss et 3 trades/jour max
+# (toutes stratégies + tous actifs confondus).
+USER_DAILY_LOSS_MAX = 200       # $ — perte journalière max réalisée
+USER_MAX_TRADES_PER_DAY = 3     # nombre max de fills par jour (global portefeuille)
+# Max positions ouvertes simultanément. Cohérence : avec USER_DAILY_LOSS_MAX=200
+# et RISK_PER_TRADE_USD=100, accepter 3 trades simultanés exposerait à un pire
+# cas de $300 (3 × $100 SL touchés) qui dépasserait $200. Donc max 2.
+USER_MAX_OPEN_POSITIONS = 2
 
 # --- Nouvelles features de gestion du risque ---
 
