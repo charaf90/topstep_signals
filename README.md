@@ -1,50 +1,44 @@
 # Topstep Signals
 
 Laboratoire de stratégies intraday sur futures micro (MES, NQ, YM) pour le
-challenge Topstep 50K. Trois stratégies indépendantes coexistent en parallèle
-dans le projet — backtests + optimisation walk-forward, en attendant
-l'intégration broker (ProjectX) qui fera l'exécution automatisée.
+challenge Topstep 50K. Deux stratégies de production coexistent en parallèle :
+**OPR** (Opening Range Breakout) et **Fib** (retracement Fibonacci 38.2 %).
+Le Composite (zones S/R) reste disponible pour la recherche.
 
-> **Branche V6** — la couche d'envoi de signaux Telegram et le runner live
-> (`signals.py`) ont été supprimés pour concentrer le projet sur la
-> recherche de stratégies et le backtest. L'exécution automatique sur
-> Topstep passera par l'API ProjectX (à venir, hors de ce dépôt pour
-> l'instant).
+> **Statut V6** — le projet est en phase backtest/optimisation. L'exécution
+> automatique sur Topstep passera par l'API ProjectX (à venir).
 
 ---
 
-## Trois stratégies
+## Portefeuille de production
 
-| Stratégie | Module | Logique | Status |
-|-----------|--------|---------|--------|
-| **Composite** | `core/strategy.py` | Trade de zones S/R multi-TF + score composite | v5.2 |
-| **OPR** | `core/opr.py` | Opening Range Breakout (pullback à 9h30 NY) | opr-v4 |
+**OPR + Fib** — recommandation retenue après évaluation walk-forward complète.
+
+| Métrique | OPR seul | Fib seul | **OPR + Fib** |
+|---|---|---|---|
+| Trades (Dec 2024 → Mar 2026) | 814 | 182 | 996 |
+| P&L | +$22,573 | +$6,891 | **+$29,464** |
+| Max trailing DD | -$746 | -$494 | **-$756** |
+| Sharpe annualisé | 6.45 | 5.13 | **7.01** |
+| Bootstrap Topstep | 99.9% | 100% | **99.1%** |
+
+Sharpe 7.01 le plus élevé de toutes les combinaisons testées, DD bien contenu
+(-$756 sur une limite Topstep de $2,000), bootstrap excellent.
+
+---
+
+## Deux stratégies de production
+
+| Stratégie | Module | Logique | Version |
+|---|---|---|---|
+| **OPR** | `core/opr.py` | Opening Range Breakout pullback à 9h30 NY | opr-v4 |
 | **Fib** | `core/strategy_fib.py` | Retracement Fibonacci 38.2 % post-impulse | fib-v2 |
 
 Chaque stratégie applique son propre garde-fou Topstep (`risk_topstep.py`).
-Sizing risque dollar fixe ($100/trade) commun aux trois.
+En production multi-stratégies, le `PortfolioRiskManager` (`core/risk_portfolio.py`)
+gère la vue globale : cap 3 fills/jour, $200 perte journalière réalisée max.
 
----
-
-## Résultats backtest portefeuille
-
-**Période :** décembre 2024 → mars 2026
-**Comparaison de toutes les combinaisons** (`compare_portfolios.py`) :
-
-| Combinaison | Trades | P&L | Max DD | Sharpe | Bootstrap |
-|-------------|--------|------|---------|--------|-----------|
-| Composite seul | 142 | +$3,728 | -$1,500 | 4.05 | 100% |
-| OPR seul | 814 | +$22,573 | -$746 | 6.45 | 99.9% |
-| Fib seul (fib-v2) | 182 | +$6,891 | -$494 | 5.13 | 100% |
-| Composite + OPR | 956 | +$26,302 | -$852 | 6.46 | 98.5% |
-| Composite + Fib | 324 | +$10,619 | -$875 | 5.01 | 99.8% |
-| OPR + Fib | 996 | +$29,464 | -$756 | **7.01** | 99.1% |
-| **Composite + OPR + Fib** | **1 138** | **+$33,193** | -$904 | 6.96 | 99.2% |
-
-**Recommandation production : triplet (Composite + OPR + Fib-v2).**
-Maximise P&L (+$33,193) avec DD contenu (-$904), Sharpe annualisé 6.96,
-bootstrap Topstep 99.2 %. Alternative Sharpe-max : OPR + Fib (-$3,729 sur
-P&L mais DD -$756 et Sharpe 7.01).
+Sizing risque dollar fixe ($100/trade) commun aux deux.
 
 ---
 
@@ -54,80 +48,61 @@ P&L mais DD -$756 et Sharpe 7.01).
 pip install -r requirements.txt
 ```
 
-Données requises pour le mode CSV : fichiers 15min nommés
-`MES1_data_m15.csv`, `NQ1_data_m15.csv`, `YM1_data_m15.csv` dans `data/`.
+Données requises : fichiers 15min dans `data/` nommés
+`MES1_data_m15.csv`, `NQ1_data_m15.csv`, `YM1_data_m15.csv`.
 
 Format CSV : `datetime, symbol, open, high, low, close, volume`
-
-Le mode `--live` télécharge directement depuis TradingView via
-[`tvDatafeed`](https://github.com/rongardF/tvdatafeed) (déjà épinglé dans
-`requirements.txt`) et n'a pas besoin de fichier local.
 
 ---
 
 ## Usage
 
-### Backtest
+### Backtest production (OPR + Fib — défaut)
 
 ```bash
-# 3 stratégies sur 3 actifs (par défaut)
-python backtest.py --csv-dir ./data
-
-# Stratégie unique
-python backtest.py --csv-dir ./data --strategy composite
-python backtest.py --csv-dir ./data --strategy opr
-python backtest.py --csv-dir ./data --strategy fib
-
-# Legacy : composite + OPR uniquement (pré-Fib)
-python backtest.py --csv-dir ./data --strategy both
-
-# Actif unique
-python backtest.py --csv-dir ./data --ticker NQ1
+python backtest.py --csv-dir ./data                  # 3 actifs, OPR+Fib
+python backtest.py --csv-dir ./data --ticker NQ1     # Actif unique
+python backtest.py --csv-dir ./data --no-analysis-charts  # Sans charts journaliers
 ```
 
-### Comparaison des portefeuilles (post-backtest)
+### Backtests par stratégie
 
 ```bash
-python backtest.py --csv-dir ./data --strategy all   # 1. génère les CSVs
-python compare_portfolios.py                          # 2. évalue les 7 combos
+python backtest.py --csv-dir ./data --strategy opr        # OPR uniquement
+python backtest.py --csv-dir ./data --strategy fib        # Fib uniquement
+python backtest.py --csv-dir ./data --strategy composite  # Composite (recherche)
+python backtest.py --csv-dir ./data --strategy all        # Les 3 stratégies
 ```
 
-### Backtest sur données TradingView récentes
+### Analyse garde-fou portefeuille global
 
 ```bash
-python backtest.py --live                       # 10 000 bougies par actif
-python backtest.py --live --bars 20000 --ticker NQ1
+python replay_portfolio_risk.py   # Compare scénario sans/avec sélection actif corrélé
 ```
-`--csv-dir` et `--live` sont mutuellement exclusifs.
-
-### Backtest avec graphiques par trade
-
-```bash
-python backtest.py --csv-dir ./data --plot                          # Tous trades
-python backtest.py --csv-dir ./data --plot --plot-filter sl         # SL uniquement
-python backtest.py --csv-dir ./data --plot --plot-filter win        # Gagnants
-```
-
-Les graphiques d'analyse journaliers (1 PNG / jour / actif) sont générés
-par défaut sous `output/analysis_charts/{STRATEGY_VERSION}/{TICKER}/`.
-Désactivable avec `--no-analysis-charts`.
 
 ### Optimisations walk-forward
 
 ```bash
-python optimize.py --csv-dir ./data         # Composite Phase A/B/C (heures)
-python run_phase_c.py --csv-dir ./data      # Phase C composite seule
-python optimize_opr.py --csv-dir ./data     # OPR (SL/TP × ATR)
-python optimize_zones.py --csv-dir ./data   # Détection des zones (TOL × MW × REC)
+# OPR (SL/TP × ATR — production)
+python optimize_opr.py --csv-dir ./data
+
+# Fib (SL × TP × IMP — sandbox isolée)
+cd draft_fibo_50/
+python optimize.py --csv-dir ../data          # SL × TP × IMP par ticker
+python optimize_pivot.py --csv-dir ../data    # PIVOT_LEFT/RIGHT
+python analyze_filters_v2.py                  # Filtres trigger walk-forward
+
+# OPR filtres trigger (recalibration)
+cd analyse/
+python 01_extract_features.py --csv-dir ../data
+python 03_filter_backtest.py
 ```
 
-Pour Fib, l'optimisation se fait dans `draft_fibo_50/` (sandbox de
-recherche conservée pour traçabilité) :
+### Backtest avec graphiques par trade
+
 ```bash
-cd draft_fibo_50/
-python optimize.py --csv-dir ../data        # SL × TP × IMP
-python optimize_pivot.py --csv-dir ../data  # PIVOT_LEFT/RIGHT
-python analyze_filters.py                   # Filtres trigger walk-forward
+python backtest.py --csv-dir ./data --plot
+python backtest.py --csv-dir ./data --plot --plot-filter sl   # SL uniquement
 ```
 
 ---
@@ -136,46 +111,41 @@ python analyze_filters.py                   # Filtres trigger walk-forward
 
 ```
 topstep_signals/
-├── config.py              # Tous paramètres (composite v5.2, opr-v4, fib-v1, Topstep)
-├── backtest.py            # Backtest 3 stratégies + validate_topstep (bootstrap)
-├── compare_portfolios.py  # Évalue les 7 combinaisons {Composite, OPR, Fib}
-├── optimize.py            # Walk-forward composite (Phase A/B/C)
-├── optimize_opr.py        # Walk-forward OPR (SL/TP)
-├── optimize_zones.py      # Walk-forward zones S/R (TOL × MW × REC)
-├── run_phase_c.py         # Phase C composite seule
+├── config.py              # Tous paramètres (OPR opr-v4, Fib fib-v2, Topstep)
+├── backtest.py            # Backtest — défaut : OPR+Fib (opr_fib)
+├── optimize.py            # Walk-forward Composite (recherche)
+├── optimize_opr.py        # Walk-forward OPR (SL/TP × ATR)
+├── replay_portfolio_risk.py  # Analyse garde-fou portefeuille global
 ├── core/
-│   ├── data.py            # Chargement CSV ou TradingView
-│   ├── zones.py           # Détection pivots + clustering zones S/R
-│   ├── trend.py           # Score EMA triple + alignment_score (composite)
-│   ├── premarket.py       # Features pré-market + filtre
-│   ├── scoring.py         # Score composite 0-100 + features volatilité ATR
-│   ├── risk_topstep.py    # Garde-fou slack journalier / trailing DD
-│   ├── strategy.py        # Composite — génération signaux + simulation
-│   ├── opr.py             # OPR (PineScript pullback) — opr-v4 + filtres trigger
-│   ├── strategy_fib.py    # Fib retracement 50% — fib-v1 + filtres trigger
-│   ├── chart.py           # Graphiques OHLC style TradingView (par trade)
+│   ├── data.py            # Chargement CSV
+│   ├── zones.py           # Détection zones S/R (Composite)
+│   ├── trend.py           # Score EMA triple (Composite)
+│   ├── premarket.py       # Features pré-market (Composite)
+│   ├── scoring.py         # Score composite 0-100 (Composite)
+│   ├── risk_topstep.py    # Garde-fou per-stratégie (daily / trailing DD)
+│   ├── risk_portfolio.py  # Garde-fou global portefeuille (live mode)
+│   ├── signal_selector.py # Sélection actif prioritaire (corrélation)
+│   ├── strategy.py        # Composite (recherche)
+│   ├── opr.py             # OPR — production
+│   ├── strategy_fib.py    # Fib 38.2 % — production
+│   ├── chart.py           # Graphiques par trade
 │   └── analysis_chart.py  # Graphique d'analyse journalier
-├── analyse/               # Sandbox d'analyse OPR opr-v4 (filtres trigger)
-├── draft_fibo_50/         # Sandbox de développement Fib (conservé en référence)
+├── analyse/               # Recalibration filtres trigger OPR
+├── draft_fibo_50/         # Recalibration et optimisation Fib
 ├── data/                  # CSV 15min (gitignored)
-├── output/                # Graphiques + rapports générés (gitignored)
-├── CHECKPOINTS_SUMMARY.md # Historique versions composite
-├── CLAUDE.md              # Guide projet pour agents IA
-└── requirements.txt
+└── output/                # Graphiques + rapports (gitignored)
 ```
 
 ---
 
 ## Roadmap V6
 
-1. ✅ **Cleanup** : suppression de `signals.py` et de la stack Telegram.
-2. ✅ **OPR opr-v3** : SL/TP en multiplicateurs ATR journalier 14j.
-3. ✅ **OPR opr-v4** : ajout filtres trigger walk-forward (PF +0.46 sur MES1, etc.).
-4. ✅ **Fib fib-v1** : retracement Fibonacci 50 % intégré (Sharpe OOS 5.29).
-5. ✅ **Évaluation portefeuilles 3 stratégies** : triplet recommandé en
-   production.
-6. ✅ **Fib fib-v2** : test 38.2 / 50 / 61.8 + combinaisons → niveau 38.2 %
-   retenu (P&L +91 % vs fib-v1) + filtres trigger re-calibrés.
-7. ⏳ **Intégration API ProjectX** pour exécution automatisée sur Topstep.
-
-Voir `CLAUDE.md` pour le détail technique de chaque stratégie.
+1. ✅ Cleanup Telegram + `signals.py`
+2. ✅ OPR opr-v3 : SL/TP basés ATR journalier
+3. ✅ OPR opr-v4 : filtres trigger walk-forward
+4. ✅ Fib fib-v1 : retracement Fibonacci 50 %
+5. ✅ Fib fib-v2 : niveau 38.2 % + filtres trigger re-calibrés
+6. ✅ Évaluation portefeuilles → **OPR + Fib retenu en production**
+7. ✅ Garde-fou portefeuille global (`PortfolioRiskManager`)
+8. ✅ Sélecteur actif corrélé (`signal_selector.py`)
+9. ⏳ **Intégration API ProjectX** — exécution automatisée sur Topstep

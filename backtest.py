@@ -725,10 +725,12 @@ def main():
                         help="Actif unique (défaut: tous)")
     parser.add_argument("--output-dir", type=str, default="./output",
                         help="Répertoire de sortie")
-    parser.add_argument("--strategy", type=str, default="all",
-                        choices=["composite", "opr", "fib", "both", "all"],
-                        help="Stratégie à backtester. 'both' = composite+opr "
-                             "(legacy) ; 'all' = composite+opr+fib (défaut).")
+    parser.add_argument("--strategy", type=str, default="opr_fib",
+                        choices=["opr_fib", "opr", "fib", "composite", "all"],
+                        help="Stratégie à backtester. "
+                             "'opr_fib' = OPR+Fib (production, défaut) ; "
+                             "'all' = composite+opr+fib (recherche) ; "
+                             "'composite', 'opr', 'fib' = stratégie unique.")
     parser.add_argument("--plot", action="store_true",
                         help="Générer graphiques pour chaque trade rempli")
     parser.add_argument("--plot-filter", type=str, default="all",
@@ -743,10 +745,10 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
 
-    if args.strategy == "all":
+    if args.strategy == "opr_fib":
+        strategies = ["opr", "fib"]
+    elif args.strategy == "all":
         strategies = ["composite", "opr", "fib"]
-    elif args.strategy == "both":
-        strategies = ["composite", "opr"]
     else:
         strategies = [args.strategy]
 
@@ -755,7 +757,7 @@ def main():
 
     for ticker in tickers:
         print(f"\n{'='*60}")
-        print(f"  BACKTEST — {ticker} (composite RR={RR_TARGET[ticker]})")
+        print(f"  BACKTEST — {ticker}  [{', '.join(s.upper() for s in strategies)}]")
         print(f"{'='*60}")
 
         csv_path = Path(args.csv_dir) / f"{ticker}_data_m15.csv"

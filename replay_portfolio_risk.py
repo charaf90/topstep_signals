@@ -24,6 +24,7 @@ import pandas as pd
 
 from config import INSTRUMENTS, TOPSTEP_PROFIT_TARGET
 from core.risk_portfolio import PortfolioRiskManager
+from core.signal_selector import TICKER_PRIORITY
 
 
 SUFFIX_MAP = {"composite": "", "opr": "_opr", "fib": "_fib"}
@@ -77,21 +78,45 @@ def load_all_trades(output_dir: Path) -> pd.DataFrame:
 
 def replay(trades: pd.DataFrame) -> dict:
     """
-    Replay chronologique. Pour chaque trade :
-      1. À l'heure de fill, on demande can_open(risk) au manager
-      2. Si OK, register_open() puis on traite les exits (close) déjà arrivés
-         AVANT ce fill (pour libérer du slack)
-      3. À l'exit_time, register_close()
+    Replay chronologique. Pour chaque trade (qui est déjà un fill confirmé
+    dans les CSVs de backtest) :
+      1. À fill_time : can_open() → si OK, register_open() + register_fill()
+         (les deux ensemble car le backtest ne distingue pas arm vs fill)
+      2. À exit_time : register_close()
+
+    Tri stable : exit avant fill à timestamp égal pour libérer le slack avant
+    d'évaluer un nouveau trade concurrent.
     """
     rm = PortfolioRiskManager()
+
+    # Trades dont fill_time == exit_time : SL touché sur la même bougie que le fill.
+    # L'exit doit être traité APRÈS le fill (pas avant), sinon la position n'est
+    # jamais enregistrée et reste ouverte indéfiniment.
+    same_bar_idx = {
+        i for i, row in trades.iterrows()
+        if row["fill_time_dt"] == row["exit_time_dt"]
+    }
 
     events = []
     for i, row in trades.iterrows():
         events.append((row["fill_time_dt"], "fill", i))
         events.append((row["exit_time_dt"], "exit", i))
-    # Tri stable : exit avant fill si égalité de timestamp (libère slack)
-    type_priority = {"exit": 0, "fill": 1}
-    events.sort(key=lambda e: (e[0], type_priority[e[1]]))
+
+    def _sort_key(e):
+        ts, kind, idx = e
+        # Priorité à égalité de timestamp :
+        #  0 = exit d'un trade à durée normale (libère le slack)
+        #  1 = fill (profite du slack libéré)
+        #  2 = exit same-bar (traité juste après le fill correspondant)
+        if kind == "exit" and idx not in same_bar_idx:
+            pri = 0
+        elif kind == "fill":
+            pri = 1
+        else:
+            pri = 2
+        return (ts, pri)
+
+    events.sort(key=_sort_key)
 
     blocked_count = 0
     blocked_pnl_potential = 0.0
@@ -114,8 +139,11 @@ def replay(trades: pd.DataFrame) -> dict:
                 blocked_idx.add(idx)
                 continue
             tid = f"{row['strategy']}_{row['ticker']}_{idx}"
+            # Dans le backtest les CSVs contiennent des fills confirmés —
+            # on arm + fill immédiatement pour comptabiliser le trade journalier.
             rm.register_open(tid, float(row["risk_usd"]),
                              when=ts.to_pydatetime())
+            rm.register_fill(tid, when=ts.to_pydatetime())
             accepted_idx.add(idx)
             accepted_count += 1
         else:  # exit
@@ -142,6 +170,51 @@ def replay(trades: pd.DataFrame) -> dict:
         "blocked_idx": blocked_idx,
         "accepted_idx": accepted_idx,
     }
+
+
+def apply_correlation_filter(trades: pd.DataFrame) -> pd.DataFrame:
+    """
+    Quand plusieurs actifs déclenchent la même stratégie sur la même bougie
+    M15 (fill_time_dt identique), ne conserve que le ticker le mieux classé OOS.
+
+    Groupement par (strategy, fill_time_dt) — sur futures US corrélés, les
+    signaux simultanés ont presque toujours la même direction.
+    Retourne un DataFrame allégé (lignes dupliquées supprimées).
+    """
+    rows_to_keep = set()
+    for (strategy, fill_ts), grp in trades.groupby(["strategy", "fill_time_dt"]):
+        if len(grp) == 1:
+            rows_to_keep.update(grp.index.tolist())
+            continue
+        priority = TICKER_PRIORITY.get(strategy, {})
+        best_idx = min(grp.index, key=lambda i: priority.get(trades.at[i, "ticker"], 999))
+        rows_to_keep.add(best_idx)
+    filtered = trades.loc[sorted(rows_to_keep)].reset_index(drop=True)
+    return filtered
+
+
+def _print_replay(label: str, res: dict, pnl_ref: float):
+    print(f"\n{'='*80}")
+    print(f"  {label}")
+    print(f"{'='*80}")
+    print(f"  Trades soumis       : {res['n_total']}")
+    print(f"  Trades acceptés     : {res['n_accepted']}")
+    print(f"  Trades bloqués      : {res['n_blocked']}  "
+          f"({res['block_rate_pct']:.1f} %)")
+    print(f"  P&L réalisé         : ${res['realized_pnl']:+,.0f}")
+    print(f"  P&L potentiel bloqué: ${res['blocked_pnl_potential']:+,.0f}")
+    print(f"  Breaches limites    : {res['n_breaches']}")
+    delta = res["realized_pnl"] - pnl_ref
+    print(f"  Δ P&L vs référence  : ${delta:+,.0f}  "
+          f"({100*delta/abs(pnl_ref) if pnl_ref else 0:.1f} %)")
+    if res["top_block_reasons"]:
+        print(f"  Top raisons blocage :")
+        for reason, count in res["top_block_reasons"].items():
+            print(f"    {count:>4}× {reason}")
+    if res["n_breaches"] == 0:
+        print(f"  ✓ Aucune limite Topstep franchie")
+    else:
+        print(f"  ⚠ {res['n_breaches']} breach(s)")
 
 
 def main():
@@ -172,50 +245,43 @@ def main():
     print(f"  Daily P&L max : ${float(daily.max()):+,.0f}  "
           f"min : ${float(daily.min()):+,.0f}")
 
-    # ── Replay sous PortfolioRiskManager ────────────────────────────────
-    print(f"\n{'='*80}")
-    print(f"  REPLAY — garde-fou PORTEFEUILLE GLOBAL (live-mode)")
-    print(f"{'='*80}")
-    res = replay(trades)
-    print(f"  Trades soumis       : {res['n_total']}")
-    print(f"  Trades acceptés     : {res['n_accepted']}")
-    print(f"  Trades bloqués      : {res['n_blocked']}  "
-          f"({res['block_rate_pct']:.1f} %)")
-    print(f"  P&L réalisé         : ${res['realized_pnl']:+,.0f}")
-    print(f"  P&L potentiel bloqué: ${res['blocked_pnl_potential']:+,.0f}")
-    print(f"  Breaches limites    : {res['n_breaches']}")
-    print(f"\n  État final manager :")
-    for k, v in res["final_state"].items():
-        if isinstance(v, float):
-            print(f"    {k:20s} ${v:+,.0f}" if "pnl" in k or "slack" in k or "remain" in k or "risk" in k
-                  else f"    {k:20s} {v:.2f}")
-        else:
-            print(f"    {k:20s} {v}")
-    if res["top_block_reasons"]:
-        print(f"\n  Top raisons de blocage :")
-        for reason, count in res["top_block_reasons"].items():
-            print(f"    {count:>4}× {reason}")
+    # ── Scénario A : garde-fou global SANS sélection actif ──────────────
+    res_a = replay(trades)
+    _print_replay("REPLAY A — garde-fou global (3 fills/jour, sans sélection actif)",
+                  res_a, pnl_total)
 
-    # ── Synthèse impact ─────────────────────────────────────────────────
-    delta_pnl = res["realized_pnl"] - pnl_total
-    print(f"\n{'='*80}")
-    print(f"  IMPACT — global vs per-stratégie")
-    print(f"{'='*80}")
-    print(f"  Δ P&L (global − ref) : ${delta_pnl:+,.0f}  "
-          f"({100*delta_pnl/abs(pnl_total) if pnl_total else 0:.1f} %)")
-    print(f"  Δ trades             : {res['n_accepted'] - n_total:+d} "
-          f"(blocked {res['n_blocked']})")
-    if res["n_breaches"] == 0:
-        print(f"  ✓ Aucune limite Topstep franchie sous garde-fou portefeuille")
-    else:
-        print(f"  ⚠ {res['n_breaches']} breach(s) résiduel(s) après blocage")
+    # ── Scénario B : garde-fou global + sélection actif corrélé ─────────
+    n_corr_removed = len(trades) - len(apply_correlation_filter(trades))
+    trades_sel = apply_correlation_filter(trades)
+    res_b = replay(trades_sel)
+    _print_replay(
+        f"REPLAY B — garde-fou global + sélection actif (élimine {n_corr_removed} signaux corrélés)",
+        res_b, pnl_total,
+    )
 
-    # ── Export trades acceptés / bloqués ────────────────────────────────
+    # ── Comparaison A vs B ───────────────────────────────────────────────
+    print(f"\n{'='*80}")
+    print(f"  COMPARAISON — impact de la sélection actif (A vs B)")
+    print(f"{'='*80}")
+    print(f"  Trades soumis     : {res_a['n_total']:>6}  →  {res_b['n_total']:>6}  "
+          f"(−{n_corr_removed} corrélés éliminés amont)")
+    print(f"  Trades acceptés   : {res_a['n_accepted']:>6}  →  {res_b['n_accepted']:>6}")
+    print(f"  Trades bloqués    : {res_a['n_blocked']:>6}  →  {res_b['n_blocked']:>6}")
+    print(f"  P&L réalisé       : ${res_a['realized_pnl']:>+10,.0f}  →  "
+          f"${res_b['realized_pnl']:>+10,.0f}")
+    delta_ab = res_b["realized_pnl"] - res_a["realized_pnl"]
+    print(f"  Δ P&L (B − A)     : ${delta_ab:>+10,.0f}")
+
+    # ── Export ──────────────────────────────────────────────────────────
     out_dir = Path("./output")
-    trades["accepted_global"] = trades.index.isin(res["accepted_idx"])
+    trades["accepted_global"] = trades.index.isin(res_a["accepted_idx"])
+    trades_sel["accepted_selected"] = trades_sel.index.isin(res_b["accepted_idx"])
     out_path = out_dir / "portfolio_replay.csv"
     trades.to_csv(out_path, index=False)
+    out_path_b = out_dir / "portfolio_replay_selected.csv"
+    trades_sel.to_csv(out_path_b, index=False)
     print(f"\n  ✓ {out_path}")
+    print(f"  ✓ {out_path_b}")
 
 
 if __name__ == "__main__":

@@ -59,12 +59,12 @@ SL_BUFFER_TICKS = 2
 # Topstep autorise $1 000 daily loss et 0 limite de trades, mais l'utilisateur
 # veut un profil conservateur : $200 daily loss et 3 trades/jour max
 # (toutes stratégies + tous actifs confondus).
-USER_DAILY_LOSS_MAX = 200       # $ — perte journalière max réalisée
+USER_DAILY_LOSS_MAX = 200       # $ — perte journalière max RÉALISÉE (stop sur P&L réel)
 USER_MAX_TRADES_PER_DAY = 3     # nombre max de fills par jour (global portefeuille)
-# Max positions ouvertes simultanément. Cohérence : avec USER_DAILY_LOSS_MAX=200
-# et RISK_PER_TRADE_USD=100, accepter 3 trades simultanés exposerait à un pire
-# cas de $300 (3 × $100 SL touchés) qui dépasserait $200. Donc max 2.
-USER_MAX_OPEN_POSITIONS = 2
+# 0 = pas de cap hard sur les positions simultanées — le cap de 3 fills/jour
+# le borne naturellement (max 3 actives si toutes encore ouvertes en même temps).
+# Le sélecteur de signaux (core/signal_selector.py) gère la corrélation inter-actifs.
+USER_MAX_OPEN_POSITIONS = 0
 
 # --- Nouvelles features de gestion du risque ---
 
