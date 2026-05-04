@@ -35,12 +35,15 @@ from config import (
     PROJECTX_SYMBOLS, PROJECTX_BARS_WARMUP, PROJECTX_LIVE_MODE,
     LIVE_STATE_FILE,
     YM1_ENABLED,
+    USER_DAILY_LOSS_MAX, USER_MAX_TRADES_PER_DAY,
+    CONSEC_LOSS_PAUSE_DAYS,
 )
 from core.opr import run_opr_day
 from core.strategy_fib import get_fib_live_signal
 from core.risk_portfolio import PortfolioRiskManager, _Order
 from core.signal_selector import filter_correlated_signals
 from broker.projectx_client import ProjectXClient
+from broker.telegram_bot import TelegramBot
 
 _log = logging.getLogger(__name__)
 
@@ -170,6 +173,7 @@ class SessionRunner:
         tickers:    Optional[List[str]] = None,
         strategy:   str = "opr_fib",
         live_mode:  bool = PROJECTX_LIVE_MODE,
+        telegram:   Optional[TelegramBot] = None,
     ):
         self.client     = client
         self.account_id = account_id
@@ -180,6 +184,7 @@ class SessionRunner:
         self.tickers    = tickers or self._default_tickers()
         self.state: Dict = {}
         self.rm:  PortfolioRiskManager = PortfolioRiskManager()
+        self.tg: TelegramBot = telegram or TelegramBot("", "")  # noop si absent
 
     # ─────────────────────────────────────────────────────────────────────
     # Tickers actifs
@@ -203,22 +208,29 @@ class SessionRunner:
                 raw = self.state_file.read_text(encoding="utf-8")
                 self.state = json.loads(raw)
                 self.rm = _rm_from_dict(self.state.get("risk_state", {}))
+                # Restaure l'offset Telegram getUpdates
+                tg_offset = self.state.get("telegram_update_id", -1)
+                self.tg.restore_update_id(tg_offset)
                 return
             except Exception as exc:
                 _log.warning("Lecture state échouée (%s) — réinitialisation", exc)
         # État vide
         self.state = {
-            "date":         None,
-            "account_id":   self.account_id,
-            "contracts":    {},
-            "placed_tags":  {},
+            "date":                  None,
+            "account_id":            self.account_id,
+            "contracts":             {},
+            "placed_tags":           {},
+            "session_report_sent":   None,   # date YYYY-MM-DD du dernier rapport envoyé
+            "session_start_notified":None,   # date YYYY-MM-DD du dernier start notifié
+            "telegram_update_id":    -1,
         }
         self.rm = PortfolioRiskManager()
 
     def _save_state(self):
         """Persiste l'état dans le fichier JSON."""
-        self.state["risk_state"] = _rm_to_dict(self.rm)
-        self.state["account_id"] = self.account_id
+        self.state["risk_state"]        = _rm_to_dict(self.rm)
+        self.state["account_id"]        = self.account_id
+        self.state["telegram_update_id"]= self.tg.current_update_id()
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(
             json.dumps(self.state, indent=2, ensure_ascii=False),
@@ -387,6 +399,10 @@ class SessionRunner:
         ok, reason = self.rm.can_open(risk_usd=risk, when=datetime.utcnow())
         if not ok:
             _log.info("[%s] %s BLOQUÉ par risk manager : %s", ticker, tag, reason)
+            self.tg.notify_risk_blocked(ticker, tag, reason)
+            # Alerte pause consec-loss séparée pour la lisibilité
+            if "consec_loss_pause" in reason:
+                self.tg.notify_consec_loss_pause(self.rm.consec_loss_days)
             return False
 
         # ── Conversion direction → side ───────────────────────────────────
@@ -401,24 +417,39 @@ class SessionRunner:
                   ticker, signal.get("strategy", "?"),
                   signal["direction"].upper(), entry,
                   sl_ticks, tp_ticks, n_ct)
+        # Enrichit le signal avec les ticks calculés (pour fmt_order_placed)
+        signal["_sl_ticks"] = sl_ticks
+        signal["_tp_ticks"] = tp_ticks
+        # Niveau 1 : alerte signal
+        self.tg.notify_signal(signal)
 
         if self.dry_run:
             _log.info("  [DRY-RUN] ordre non envoyé")
             order_id = -1     # sentinelle pour dry run
         else:
-            order_id = self.client.place_limit_order(
-                account_id  = self.account_id,
-                contract_id = cid,
-                side        = side,
-                size        = n_ct,
-                limit_price = entry,
-                sl_ticks    = sl_ticks,
-                tp_ticks    = tp_ticks,
-                custom_tag  = tag,
-            )
-            if order_id is None:
-                _log.error("  Placement échoué pour %s", tag)
+            try:
+                order_id = self.client.place_limit_order(
+                    account_id  = self.account_id,
+                    contract_id = cid,
+                    side        = side,
+                    size        = n_ct,
+                    limit_price = entry,
+                    sl_ticks    = sl_ticks,
+                    tp_ticks    = tp_ticks,
+                    custom_tag  = tag,
+                )
+            except Exception as exc:
+                _log.error("  Exception lors du placement pour %s : %s", tag, exc)
+                self.tg.notify_system_error(f"place_limit_order {tag}", exc)
                 return False
+            if order_id is None:
+                _log.error("  Placement échoué pour %s (API refus)", tag)
+                self.tg.notify_system_error(
+                    f"place_limit_order {tag}", "API a refusé l'ordre (orderId=None)")
+                return False
+
+        # ── Niveau 1 : alerte ordre placé ────────────────────────────────
+        self.tg.notify_order_placed(tag, signal, order_id, dry_run=self.dry_run)
 
         # ── Mise à jour état ──────────────────────────────────────────────
         self.rm.register_open(
@@ -500,6 +531,15 @@ class SessionRunner:
                     info["status"]    = _ST_ACTIVE
                     info["fill_time"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
                     self.rm.register_fill(tag, when=now_utc)
+                    # Niveau 1 : alerte fill
+                    status_snap = self.rm.status()
+                    self.tg.notify_fill(
+                        tag, info,
+                        fills_today = status_snap["daily_fills_count"],
+                        fills_max   = self.rm.user_max_trades_per_day,
+                    )
+                    # Alerte si limite journalière ≥ 80 %
+                    self._maybe_warn_daily_limit(status_snap)
                 else:
                     # Pas de position → ordre annulé ou expiré sans fill
                     _log.info("[%s] Ordre annulé / expiré sans fill", tag)
@@ -531,8 +571,18 @@ class SessionRunner:
                 info["close_pnl"] = pnl
                 breached, reason  = self.rm.register_close(tag, pnl,
                                                             when=now_utc)
+                # Niveau 1 : alerte clôture
+                status_snap = self.rm.status()
+                self.tg.notify_close(
+                    tag, info, pnl,
+                    session_pnl = status_snap["realized_day_pnl"],
+                    cum_pnl     = status_snap["cum_pnl"],
+                )
                 if breached:
                     _log.critical("LIMITE TOPSTEP FRANCHIE : %s", reason)
+                    self.tg.notify_risk_breach(reason)
+                else:
+                    self._maybe_warn_daily_limit(status_snap)
 
     # ─────────────────────────────────────────────────────────────────────
     # Clôture forcée d'une position (Fib timeout ou fin de session OPR)
@@ -557,6 +607,19 @@ class SessionRunner:
                 custom_tag  = f"CLOSE_{tag}"[:64],
             )
         info["status"] = _ST_CLOSED
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Alertes limites approchantes
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _maybe_warn_daily_limit(self, status: Dict):
+        """Envoie une alerte si la perte journalière dépasse 80 % de la limite."""
+        day_pnl  = status.get("realized_day_pnl", 0.0)
+        limit    = float(USER_DAILY_LOSS_MAX)
+        if day_pnl < 0 and abs(day_pnl) / limit >= 0.80:
+            fills_r = status.get("daily_fills_remaining",
+                                 USER_MAX_TRADES_PER_DAY)
+            self.tg.notify_daily_limit_warning(day_pnl, limit, int(fills_r))
 
     def _close_all_pending_and_active(self, strategy_filter: Optional[str] = None,
                                       now_utc: Optional[datetime] = None):
@@ -609,16 +672,35 @@ class SessionRunner:
         self._load_state()
 
         # ── 2. Découverte contrats front-month ────────────────────────────
-        self._ensure_contracts()
+        try:
+            self._ensure_contracts()
+        except Exception as exc:
+            _log.error("_ensure_contracts échoué : %s", exc)
+            self.tg.notify_system_error("ensure_contracts", exc)
+            self._save_state()
+            return
 
         # ── 3. Synchronisation broker (fills / clôtures) ──────────────────
-        self._sync_broker(now_utc)
+        try:
+            self._sync_broker(now_utc)
+        except Exception as exc:
+            _log.error("_sync_broker échoué : %s", exc)
+            self.tg.notify_system_error("sync_broker", exc)
 
         # ── 4. Fin de session OPR ? ───────────────────────────────────────
+        today_str  = _current_day_ny(now_utc).isoformat()
         if _opr_session_over(now_utc):
             _log.info("Session OPR terminée (16h30 NY) — clôture en cours")
             self._close_all_pending_and_active(strategy_filter="OPR",
                                                now_utc=now_utc)
+            # ── Niveau 2 : bilan de session (une seule fois par jour) ──────
+            if self.state.get("session_report_sent") != today_str:
+                self.tg.send_session_report(
+                    today_str,
+                    self.state.get("placed_tags", {}),
+                    self.rm.status(),
+                )
+                self.state["session_report_sent"] = today_str
             self._save_state()
             _log.info("Tick terminé (post-session)")
             return
@@ -626,12 +708,38 @@ class SessionRunner:
         # ── 5. Jour NY courant ────────────────────────────────────────────
         day_ny = pd.Timestamp(now_utc, tz="UTC").tz_convert(_NY_TZ).normalize()
 
-        # ── 6. Fetch barres + génération signaux ──────────────────────────
+        # ── 5b. Notification démarrage de session (une fois par jour) ─────
+        if self.state.get("session_start_notified") != today_str:
+            self.tg.notify_session_start(
+                today_str,
+                self.tickers,
+                self.rm.status(),
+            )
+            self.state["session_start_notified"] = today_str
+
+        # ── 6. Niveau 3 : commandes Telegram entrantes (/status) ──────────
+        now_ny_str = (now_utc.replace(tzinfo=timezone.utc)
+                      .astimezone(_NY_TZ)
+                      .strftime("%Y-%m-%d %H:%M NY"))
+        self.tg.check_commands(
+            placed_tags = self.state.get("placed_tags", {}),
+            rm_status   = self.rm.status(),
+            now_ny      = now_ny_str,
+        )
+
+        # ── 7. Fetch barres + génération signaux ──────────────────────────
         new_signals: List[Dict] = []
 
         for ticker in self.tickers:
-            df = self._fetch_bars(ticker)
+            try:
+                df = self._fetch_bars(ticker)
+            except Exception as exc:
+                _log.error("_fetch_bars %s échoué : %s", ticker, exc)
+                self.tg.notify_system_error(f"fetch_bars {ticker}", exc)
+                continue
             if df is None or df.empty:
+                self.tg.notify_system_error(
+                    f"fetch_bars {ticker}", "Aucune barre reçue")
                 continue
 
             if self.strategy in ("opr_fib", "opr") and OPR_ENABLED:
@@ -644,7 +752,7 @@ class SessionRunner:
                 if sig and not self._already_placed(sig["tag"]):
                     new_signals.append(sig)
 
-        # ── 7. Filtre de corrélation ──────────────────────────────────────
+        # ── 8. Filtre de corrélation ──────────────────────────────────────
         if len(new_signals) > 1:
             before = len(new_signals)
             new_signals = filter_correlated_signals(new_signals)
@@ -652,22 +760,20 @@ class SessionRunner:
                 _log.info("Filtre corrélation : %d → %d signal(s)",
                            before, len(new_signals))
 
-        # ── 8. Placement des ordres ───────────────────────────────────────
+        # ── 9. Placement des ordres ───────────────────────────────────────
         for sig in new_signals:
             self._place_order(sig)
 
-        # ── 9. Résumé risk manager ────────────────────────────────────────
+        # ── 10. Résumé risk manager ───────────────────────────────────────
         status = self.rm.status()
         _log.info(
             "Risk : cum=%.0f$ | jour=%.0f$ | fills=%d/%d | "
             "slack daily=%.0f$ trail=%.0f$",
             status["cum_pnl"], status["realized_day_pnl"],
-            status["daily_fills_count"], status["user_max_trades_per_day"]
-            if hasattr(self.rm, "user_max_trades_per_day")
-            else status.get("daily_fills_remaining", "?"),
+            status["daily_fills_count"], self.rm.user_max_trades_per_day,
             status["slack_daily"], status["slack_trail"],
         )
 
-        # ── 10. Sauvegarde ────────────────────────────────────────────────
+        # ── 11. Sauvegarde ────────────────────────────────────────────────
         self._save_state()
         _log.info("Tick terminé")

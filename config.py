@@ -398,6 +398,22 @@ PROJECTX_SYMBOLS   = {"MES1": "MES", "NQ1": "MNQ", "YM1": "MYM"}
 # Tous les appels API (search_contract, get_bars, place_order) utilisent cette valeur.
 PROJECTX_LIVE_MODE = False
 
+# ==============================================================================
+# TELEGRAM
+# ==============================================================================
+# Credentials chargés depuis .env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID).
+# Laisser vide pour désactiver complètement.
+
+# Activation globale (False → aucun message envoyé, toutes les méthodes no-op)
+TELEGRAM_ENABLED = True
+
+# Niveaux d'alerte activables indépendamment
+TELEGRAM_LEVEL_TRADES   = True   # fills, clôtures, signaux, ordres placés
+TELEGRAM_LEVEL_RISK     = True   # blocages RM, limites approchantes, breach Topstep
+TELEGRAM_LEVEL_SYSTEM   = True   # erreurs API, perte de connexion
+TELEGRAM_LEVEL_REPORT   = True   # bilan de session (Niveau 2)
+TELEGRAM_LEVEL_COMMANDS = True   # /status bidirectionnel (Niveau 3)
+
 # Nombre de barres 15m à fetcher pour garantir le warmup des indicateurs
 # (ATR journalier OPR = 14 jours × 80 bougies = 1120 ; Fib warmup = 250).
 # 2000 barres ≈ 25 jours de trading → confortable.

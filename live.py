@@ -38,7 +38,13 @@ if _env_file.exists():
 
 from broker.projectx_client import ProjectXClient
 from broker.live_runner import SessionRunner
-from config import LIVE_STATE_FILE
+from broker.telegram_bot import TelegramBot
+from config import (
+    LIVE_STATE_FILE,
+    TELEGRAM_ENABLED,
+    TELEGRAM_LEVEL_TRADES, TELEGRAM_LEVEL_RISK,
+    TELEGRAM_LEVEL_SYSTEM, TELEGRAM_LEVEL_REPORT, TELEGRAM_LEVEL_COMMANDS,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -107,6 +113,20 @@ def _build_runner(args: argparse.Namespace) -> SessionRunner:
 
     tickers = [args.ticker] if args.ticker else None
 
+    # ── Bot Telegram ──────────────────────────────────────────────────────
+    tg_token   = os.environ.get("TELEGRAM_BOT_TOKEN",  "").strip()
+    tg_chat_id = os.environ.get("TELEGRAM_CHAT_ID",    "").strip()
+    telegram = TelegramBot(
+        token           = tg_token,
+        chat_id         = tg_chat_id,
+        enabled         = TELEGRAM_ENABLED and bool(tg_token) and bool(tg_chat_id),
+        level_trades    = TELEGRAM_LEVEL_TRADES,
+        level_risk      = TELEGRAM_LEVEL_RISK,
+        level_system    = TELEGRAM_LEVEL_SYSTEM,
+        level_report    = TELEGRAM_LEVEL_REPORT,
+        level_commands  = TELEGRAM_LEVEL_COMMANDS,
+    )
+
     # Détecte si le compte est simulé (challenge) ou live (funded)
     accounts = client.get_accounts(only_active=True)
     is_simulated = any(a.get("simulated", True) for a in accounts
@@ -125,6 +145,7 @@ def _build_runner(args: argparse.Namespace) -> SessionRunner:
         tickers    = tickers,
         strategy   = args.strategy,
         live_mode  = live_mode,
+        telegram   = telegram,
     )
 
 
