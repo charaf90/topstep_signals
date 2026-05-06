@@ -245,17 +245,23 @@ def build_signal(
     """Construit le dict signal — None si sizing impossible."""
     if current_atr is None or pd.isna(current_atr) or current_atr <= 0:
         return None
-    entry = impulse["fib_50"]
+    tick = INSTRUMENTS[ticker]["tick_size"]
+    def _tick(price):
+        return round(round(price / tick) * tick, 10)
+
+    entry = _tick(impulse["fib_50"])
     sl_dist = sl_mult * current_atr
     tp_dist = tp_mult * current_atr
     if impulse["direction"] == "long":
-        sl_price = entry - sl_dist
-        tp_price = entry + tp_dist
+        sl_price = _tick(entry - sl_dist)
+        tp_price = _tick(entry + tp_dist)
     else:
-        sl_price = entry + sl_dist
-        tp_price = entry - tp_dist
+        sl_price = _tick(entry + sl_dist)
+        tp_price = _tick(entry - tp_dist)
     dpp = INSTRUMENTS[ticker]["dollar_per_point"]
-    n_ct = int(RISK_PER_TRADE_USD / (sl_dist * dpp))
+    sl_dist = abs(entry - sl_price)
+    tp_dist = abs(entry - tp_price)
+    n_ct = int(RISK_PER_TRADE_USD / (sl_dist * dpp)) if sl_dist > 0 else 0
     if n_ct <= 0:
         return None
     return {
@@ -712,9 +718,12 @@ def get_fib_live_signal(df_15m: pd.DataFrame, ticker: str) -> Optional[Dict]:
 
     # ── Retour de l'état final ────────────────────────────────────────────
     def _imp_key_str(sig: Dict) -> str:
+        # Les indices iloc glissent quand le DataFrame est re-fetché à chaque
+        # tick (fenêtre glissante). On utilise les prix des swings qui sont
+        # stables pour identifier de façon unique un impulse.
         return (f"{sig['direction']}"
-                f"_{sig.get('pivot_low_idx', 0)}"
-                f"_{sig.get('pivot_high_idx', 0)}")
+                f"_{sig.get('swing_low', 0)}"
+                f"_{sig.get('swing_high', 0)}")
 
     if position is not None:
         return {

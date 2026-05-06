@@ -1,0 +1,233 @@
+"""
+Optimiseur walk-forward universel.
+
+Contrat attendu du module stratégie :
+    PARAM_GRID  : dict[str, list]   — grille d'optimisation
+    TICKERS     : list[str]
+    STRATEGY_ID : str
+    run_backtest(df_15m, ticker, tf=None, params=None,
+                 topstep_guard=False) -> pd.DataFrame
+
+Usage :
+    from core.optimizer import optimize
+    optimize(strategies.opr, data_dict)
+"""
+
+import itertools
+import time
+from typing import Optional
+
+import pandas as pd
+
+from core import metrics as m
+
+# ── Dates walk-forward (cohérentes sur toutes les stratégies) ───────────────
+IS_START  = "2024-12-01"
+IS_END    = "2025-09-30"
+OOS_START = "2025-10-01"
+IS_LABEL  = "déc 2024 – sept 2025"
+OOS_LABEL = "oct 2025 – mars 2026"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Fonction principale
+# ══════════════════════════════════════════════════════════════════════════════
+
+def optimize(
+    strategy,
+    data: dict,
+    is_end:    str = IS_END,
+    oos_start: str = OOS_START,
+    per_ticker: bool = True,
+    score_fn=None,
+    n_bootstrap: int = 1000,
+) -> dict:
+    """
+    Walk-forward IS/OOS sur toutes les combinaisons de PARAM_GRID.
+
+    Args:
+        strategy    : module strategies/xxx.py avec PARAM_GRID défini
+        data        : {ticker: (df_15m, tf_dict)}
+        is_end      : dernière date IS incluse (YYYY-MM-DD)
+        oos_start   : première date OOS (YYYY-MM-DD)
+        per_ticker  : True = optimise chaque ticker séparément (recommandé)
+        score_fn    : fonction de score IS pour classer les combos
+                      défaut : oos_pf * oos_pnl (si oos valide) else 0
+        n_bootstrap : permutations bootstrap Topstep
+
+    Returns:
+        {ticker: {"params": dict, "is": stats, "oos": stats, "oos_topstep": dict}}
+    """
+    strategy_id = getattr(strategy, "STRATEGY_ID", "unknown")
+    param_grid  = getattr(strategy, "PARAM_GRID",  {})
+
+    if not param_grid:
+        print(f"  [{strategy_id}] Aucun PARAM_GRID défini — pas d'optimisation.")
+        return {}
+
+    if score_fn is None:
+        score_fn = _default_score
+
+    keys   = list(param_grid.keys())
+    combos = list(itertools.product(*param_grid.values()))
+    total  = len(combos)
+
+    print(f"\n{'='*62}")
+    print(f"  OPTIMISATION — {strategy_id}")
+    print(f"  IS  : {IS_LABEL}")
+    print(f"  OOS : {OOS_LABEL}")
+    print(f"  Grille : {total} combinaisons × {len(data)} actifs")
+    print(f"{'='*62}")
+
+    best_per_ticker = {}
+
+    tickers = list(data.keys())
+    if not per_ticker:
+        tickers = ["ALL"]  # futur : optimisation globale
+
+    for ticker in tickers:
+        if ticker == "ALL":
+            dfs = data
+        else:
+            if ticker not in data:
+                continue
+            dfs = {ticker: data[ticker]}
+
+        print(f"\n  ▸ Optimisation {ticker} ({total} combos)...")
+        results = []
+        t0 = time.time()
+
+        for idx, combo in enumerate(combos, 1):
+            params = dict(zip(keys, combo))
+            rows   = []
+
+            for t, (df_15m, tf) in dfs.items():
+                df_all = strategy.run_backtest(
+                    df_15m, t, tf=tf, params=params, topstep_guard=False
+                )
+                if len(df_all) == 0 or "date" not in df_all.columns:
+                    continue
+                df_is  = df_all[df_all["date"] <= is_end]
+                df_oos = df_all[df_all["date"] >= oos_start]
+                rows.append({"ticker": t, "is": df_is, "oos": df_oos})
+
+            if not rows:
+                continue
+
+            is_combined  = pd.concat([r["is"]  for r in rows], ignore_index=True)
+            oos_combined = pd.concat([r["oos"] for r in rows], ignore_index=True)
+            is_s  = m.compute_stats(is_combined)
+            oos_s = m.compute_stats(oos_combined)
+
+            score = score_fn(is_s, oos_s)
+            results.append({"params": params, "is": is_s, "oos": oos_s, "score": score})
+
+            if idx % max(1, total // 10) == 0 or idx == total:
+                elapsed = time.time() - t0
+                eta     = elapsed / idx * (total - idx)
+                best_so_far = max(results, key=lambda r: r["score"])
+                p_str = "  ".join(f"{k}={v}" for k, v in best_so_far["params"].items())
+                print(f"    [{idx:>4}/{total}]  "
+                      f"meilleur IS P&L=${best_so_far['is']['pnl']:>+8,.0f}  "
+                      f"({p_str})  ETA {eta:.0f}s")
+
+        if not results:
+            print(f"  [{ticker}] Aucun résultat.")
+            continue
+
+        # Meilleure combo IS — valider OOS
+        results.sort(key=lambda r: r["score"], reverse=True)
+        best = results[0]
+
+        # Recalcul OOS propre avec params retenus + bootstrap
+        oos_trades_list = []
+        for t, (df_15m, tf) in dfs.items():
+            df_all = strategy.run_backtest(
+                df_15m, t, tf=tf, params=best["params"], topstep_guard=False
+            )
+            if len(df_all) > 0 and "date" in df_all.columns:
+                oos_trades_list.append(df_all[df_all["date"] >= oos_start])
+
+        oos_combined = pd.concat(oos_trades_list, ignore_index=True) \
+                       if oos_trades_list else pd.DataFrame()
+        oos_s        = m.compute_stats(oos_combined)
+        oos_topstep  = m.compute_topstep(oos_combined, n_bootstrap=n_bootstrap)
+
+        best_per_ticker[ticker] = {
+            "params":      best["params"],
+            "is":          best["is"],
+            "oos":         oos_s,
+            "oos_topstep": oos_topstep,
+        }
+
+        _print_ticker_result(ticker, best["params"], best["is"],
+                             oos_s, oos_topstep)
+
+    # Rapport global
+    _print_global_report(strategy_id, best_per_ticker)
+    return best_per_ticker
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _default_score(is_s: dict, oos_s: dict) -> float:
+    """Score IS utilisé pour le classement. Pénalise si OOS négatif."""
+    if oos_s["pnl"] <= 0 or oos_s["pf"] < 1.0:
+        return 0.0
+    return is_s["pf"] * is_s["pnl"] if is_s["pnl"] > 0 else 0.0
+
+
+def _print_ticker_result(ticker, params, is_s, oos_s, oos_topstep):
+    p_str = "  ".join(f"{k}={v}" for k, v in params.items())
+    print(f"\n  Résultat {ticker} : {p_str}")
+    print(f"    IS  : n={is_s['n']:>4}  WR={is_s['wr']*100:.0f}%  "
+          f"PF={is_s['pf']:.2f}  P&L=${is_s['pnl']:>+,.0f}")
+    print(f"    OOS : n={oos_s['n']:>4}  WR={oos_s['wr']*100:.0f}%  "
+          f"PF={oos_s['pf']:.2f}  P&L=${oos_s['pnl']:>+,.0f}  "
+          f"BS={oos_topstep['bootstrap_pass_rate']*100:.0f}%")
+
+
+def _print_global_report(strategy_id: str, best_per_ticker: dict):
+    if not best_per_ticker:
+        return
+
+    print(f"\n{'='*62}")
+    print(f"  RAPPORT FINAL — {strategy_id}")
+    print(f"{'='*62}")
+
+    # Agréger IS et OOS sur tous les tickers
+    is_all  = {"n": 0, "pnl": 0.0}
+    oos_all = {"n": 0, "pnl": 0.0}
+    oos_topstep_combined = {"bootstrap_pass_rate": 0.0}
+
+    for ticker, res in best_per_ticker.items():
+        is_all["n"]   += res["is"]["n"]
+        is_all["pnl"] += res["is"]["pnl"]
+        oos_all["n"]  += res["oos"]["n"]
+        oos_all["pnl"]+= res["oos"]["pnl"]
+
+    # Verdict global (sur la moyenne des OOS)
+    if best_per_ticker:
+        avg_oos_pf = sum(r["oos"]["pf"] for r in best_per_ticker.values()) / len(best_per_ticker)
+        avg_bs     = sum(r["oos_topstep"]["bootstrap_pass_rate"]
+                         for r in best_per_ticker.values()) / len(best_per_ticker)
+        oos_global = {**oos_all, "pf": avg_oos_pf}
+        oos_ts_global = {"bootstrap_pass_rate": avg_bs,
+                         "trailing_dd": min(r["oos_topstep"].get("trailing_dd", 0)
+                                            for r in best_per_ticker.values())}
+        m.print_verdict_report(
+            strategy_id,
+            is_stats   = {**is_all,  "pf": sum(r["is"]["pf"]  for r in best_per_ticker.values()) / len(best_per_ticker)},
+            oos_stats  = oos_global,
+            oos_topstep= oos_ts_global,
+            is_period  = IS_LABEL,
+            oos_period = OOS_LABEL,
+        )
+
+    print(f"\n  Paramètres retenus :")
+    for ticker, res in best_per_ticker.items():
+        p_str = "  ".join(f"{k}={v}" for k, v in res["params"].items())
+        print(f"    {ticker} : {p_str}")
+    print(f"\n  → Reporter ces valeurs dans config.py")

@@ -408,8 +408,11 @@ class SessionRunner:
         # ── Conversion direction → side ───────────────────────────────────
         side = 0 if signal["direction"] == "long" else 1    # 0=Buy, 1=Sell
 
-        sl_ticks = _pts_to_ticks(signal["sl_dist"], ticker)
-        tp_ticks = _pts_to_ticks(signal["tp_dist"], ticker)
+        # Auto OCO Brackets : SL négatif pour long (sous entrée), positif pour short
+        _sl = _pts_to_ticks(signal["sl_dist"], ticker)
+        _tp = _pts_to_ticks(signal["tp_dist"], ticker)
+        sl_ticks = -_sl if side == 0 else _sl
+        tp_ticks =  _tp if side == 0 else -_tp
         n_ct     = int(signal["n_ct"])
         entry    = float(signal["entry"])
 
@@ -687,13 +690,22 @@ class SessionRunner:
             _log.error("_sync_broker échoué : %s", exc)
             self.tg.notify_system_error("sync_broker", exc)
 
-        # ── 4. Fin de session OPR ? ───────────────────────────────────────
+        # ── 4. Commandes Telegram entrantes (/status) — toujours actif ──────
         today_str  = _current_day_ny(now_utc).isoformat()
+        now_ny_str = (now_utc.replace(tzinfo=timezone.utc)
+                      .astimezone(_NY_TZ)
+                      .strftime("%Y-%m-%d %H:%M NY"))
+        self.tg.check_commands(
+            placed_tags = self.state.get("placed_tags", {}),
+            rm_status   = self.rm.status(),
+            now_ny      = now_ny_str,
+        )
+
+        # ── 5. Fin de session OPR ? ───────────────────────────────────────
         if _opr_session_over(now_utc):
             _log.info("Session OPR terminée (16h30 NY) — clôture en cours")
             self._close_all_pending_and_active(strategy_filter="OPR",
                                                now_utc=now_utc)
-            # ── Niveau 2 : bilan de session (une seule fois par jour) ──────
             if self.state.get("session_report_sent") != today_str:
                 self.tg.send_session_report(
                     today_str,
@@ -705,10 +717,9 @@ class SessionRunner:
             _log.info("Tick terminé (post-session)")
             return
 
-        # ── 5. Jour NY courant ────────────────────────────────────────────
+        # ── 6. Jour NY courant ────────────────────────────────────────────
         day_ny = pd.Timestamp(now_utc, tz="UTC").tz_convert(_NY_TZ).normalize()
 
-        # ── 5b. Notification démarrage de session (une fois par jour) ─────
         if self.state.get("session_start_notified") != today_str:
             self.tg.notify_session_start(
                 today_str,
@@ -716,16 +727,6 @@ class SessionRunner:
                 self.rm.status(),
             )
             self.state["session_start_notified"] = today_str
-
-        # ── 6. Niveau 3 : commandes Telegram entrantes (/status) ──────────
-        now_ny_str = (now_utc.replace(tzinfo=timezone.utc)
-                      .astimezone(_NY_TZ)
-                      .strftime("%Y-%m-%d %H:%M NY"))
-        self.tg.check_commands(
-            placed_tags = self.state.get("placed_tags", {}),
-            rm_status   = self.rm.status(),
-            now_ny      = now_ny_str,
-        )
 
         # ── 7. Fetch barres + génération signaux ──────────────────────────
         new_signals: List[Dict] = []
