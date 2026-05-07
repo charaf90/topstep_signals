@@ -241,9 +241,11 @@ def fmt_status(placed_tags: Dict, rm_status: Dict, now_ny: str) -> str:
         entry  = v.get("entry", 0)
         ord_lines += f"  • {_esc(strat)} {_esc(ticker)} {d} @ {entry:.2f}\n"
 
-    broker_pnl   = rm_status.get("broker_day_pnl")
-    broker_fills = rm_status.get("broker_fills")
-    broker_open  = rm_status.get("broker_n_open")
+    broker_balance = rm_status.get("broker_balance")
+    broker_pnl     = rm_status.get("broker_day_pnl")
+    broker_fees    = rm_status.get("broker_day_fees")
+    broker_fills   = rm_status.get("broker_fills")
+    broker_open    = rm_status.get("broker_n_open")
 
     sign_d = "+" if day_pnl >= 0 else ""
     sign_c = "+" if cum >= 0 else ""
@@ -265,10 +267,14 @@ def fmt_status(placed_tags: Dict, rm_status: Dict, now_ny: str) -> str:
     # Données broker réelles (source de vérité)
     if broker_pnl is not None:
         b_sign = "+" if broker_pnl >= 0 else ""
+        bal_line = (f"  Solde compte : <b>{broker_balance:,.2f} $</b>\n"
+                    if broker_balance is not None else "")
         s += (
             f"📊 <b>Broker (réel) :</b>\n"
-            f"  P&amp;L jour : <b>{b_sign}{broker_pnl:.2f} $</b>\n"
-            f"  Trades fermés : {broker_fills} | Positions ouvertes : {broker_open}\n"
+            f"{bal_line}"
+            f"  P&amp;L net jour : <b>{b_sign}{broker_pnl:.2f} $</b>"
+            f"  <i>(frais : -{broker_fees:.2f} $)</i>\n"
+            f"  Trades fermés : {broker_fills} | Positions : {broker_open}\n"
             f"{'─'*24}\n"
         )
 

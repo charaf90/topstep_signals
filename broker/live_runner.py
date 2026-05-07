@@ -677,24 +677,43 @@ class SessionRunner:
 
     def _get_broker_day_summary(self, now_utc: datetime) -> Dict:
         """
-        Interroge le broker pour le résumé réel de la journée :
-          - P&L réalisé total (toutes positions fermées aujourd'hui)
-          - Nombre de trades fermés
-        Indépendant de ce que notre RM a tracké — reflète l'état réel du compte.
+        Résumé réel du compte depuis le broker :
+          - balance   : solde courant du compte (inclut P&L + frais)
+          - P&L net   : profitAndLoss - fees sur tous les trades du jour
+          - fills     : nombre de trades fermés aujourd'hui
+          - positions : positions ouvertes en cours
         """
         try:
-            day_start = (now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-                         - timedelta(hours=5))
-            trades = self.client.get_trades_since(self.account_id, day_start)
-            closes = [t for t in trades
-                      if t.get("profitAndLoss") is not None and not t.get("voided")]
-            broker_pnl    = sum(float(t["profitAndLoss"]) for t in closes)
-            broker_fills  = len(closes)
+            # Solde courant du compte
+            accounts = self.client.get_accounts()
+            balance  = next(
+                (float(a["balance"]) for a in accounts
+                 if a.get("id") == self.account_id),
+                None,
+            )
+
+            # Trades du jour (avec marge DST)
+            day_start  = (now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+                          - timedelta(hours=5))
+            trades     = self.client.get_trades_since(self.account_id, day_start)
+            valid      = [t for t in trades if not t.get("voided")]
+
+            # P&L brut (seulement sur les trades de clôture)
+            gross_pnl  = sum(float(t["profitAndLoss"]) for t in valid
+                             if t.get("profitAndLoss") is not None)
+            # Frais sur TOUS les trades (open + close)
+            total_fees = sum(float(t.get("fees", 0)) for t in valid)
+            net_pnl    = gross_pnl - total_fees
+
+            closes         = [t for t in valid if t.get("profitAndLoss") is not None]
             open_positions = self.client.get_positions(self.account_id)
+
             return {
-                "broker_day_pnl":   round(broker_pnl, 2),
-                "broker_fills":     broker_fills,
-                "broker_n_open":    len(open_positions),
+                "broker_balance":  round(balance, 2) if balance is not None else None,
+                "broker_day_pnl":  round(net_pnl, 2),
+                "broker_day_fees": round(total_fees, 2),
+                "broker_fills":    len(closes),
+                "broker_n_open":   len(open_positions),
             }
         except Exception as exc:
             _log.debug("_get_broker_day_summary échoué : %s", exc)
