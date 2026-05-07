@@ -45,9 +45,9 @@ MIN_BARS_US_SESSION  = 8
 # ==============================================================================
 # LIMITES UTILISATEUR (live — plus strictes que Topstep)
 # ==============================================================================
-USER_DAILY_LOSS_MAX    = 200   # $ perte journalière réalisée max
-USER_MAX_TRADES_PER_DAY = 3   # fills global portefeuille
-USER_MAX_OPEN_POSITIONS = 0
+USER_DAILY_LOSS_MAX     = 200  # $ perte journalière réalisée max — protection réelle
+USER_MAX_TRADES_PER_DAY = 0   # désactivé : avec $100/trade le daily loss bloque après 2 SL
+USER_MAX_OPEN_POSITIONS = 0   # pas de limite (positions simultanées)
 
 # ==============================================================================
 # GARDE-FOU TOPSTEP (challenge 50K)
