@@ -42,10 +42,12 @@ from core.opr import run_opr_day
 from core.strategy_fib import get_fib_live_signal
 from core.risk_portfolio import PortfolioRiskManager, _Order
 from core.signal_selector import filter_correlated_signals
+from core.event_logger import EventLogger
 from broker.projectx_client import ProjectXClient
 from broker.telegram_bot import TelegramBot
 
-_log = logging.getLogger(__name__)
+_log   = logging.getLogger(__name__)
+_evlog = EventLogger("logs/trading_events.log")
 
 _NY_TZ = ZoneInfo(OPR_TIMEZONE)
 
@@ -399,9 +401,10 @@ class SessionRunner:
         ok, reason = self.rm.can_open(risk_usd=risk, when=datetime.utcnow())
         if not ok:
             _log.info("[%s] %s BLOQUÉ par risk manager : %s", ticker, tag, reason)
+            _evlog.risk_blocked(ticker, tag, reason)
             self.tg.notify_risk_blocked(ticker, tag, reason)
-            # Alerte pause consec-loss séparée pour la lisibilité
             if "consec_loss_pause" in reason:
+                _evlog.consec_loss_pause(self.rm.consec_loss_days)
                 self.tg.notify_consec_loss_pause(self.rm.consec_loss_days)
             return False
 
@@ -420,10 +423,12 @@ class SessionRunner:
                   ticker, signal.get("strategy", "?"),
                   signal["direction"].upper(), entry,
                   sl_ticks, tp_ticks, n_ct)
-        # Enrichit le signal avec les ticks calculés (pour fmt_order_placed)
+        _evlog.signal(ticker, signal.get("strategy", "?"),
+                      signal["direction"], entry,
+                      signal["sl"], signal["tp"],
+                      signal.get("rr", 0), n_ct)
         signal["_sl_ticks"] = sl_ticks
         signal["_tp_ticks"] = tp_ticks
-        # Niveau 1 : alerte signal
         self.tg.notify_signal(signal)
 
         if self.dry_run:
@@ -443,15 +448,17 @@ class SessionRunner:
                 )
             except Exception as exc:
                 _log.error("  Exception lors du placement pour %s : %s", tag, exc)
+                _evlog.order_failed(tag, str(exc))
                 self.tg.notify_system_error(f"place_limit_order {tag}", exc)
                 return False
             if order_id is None:
                 _log.error("  Placement échoué pour %s (API refus)", tag)
+                _evlog.order_failed(tag, "API refus (orderId=None)")
                 self.tg.notify_system_error(
                     f"place_limit_order {tag}", "API a refusé l'ordre (orderId=None)")
                 return False
 
-        # ── Niveau 1 : alerte ordre placé ────────────────────────────────
+        _evlog.order_placed(tag, order_id, dry_run=self.dry_run)
         self.tg.notify_order_placed(tag, signal, order_id, dry_run=self.dry_run)
 
         # ── Mise à jour état ──────────────────────────────────────────────
@@ -534,18 +541,21 @@ class SessionRunner:
                     info["status"]    = _ST_ACTIVE
                     info["fill_time"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
                     self.rm.register_fill(tag, when=now_utc)
-                    # Niveau 1 : alerte fill
                     status_snap = self.rm.status()
+                    _evlog.fill(tag, info["ticker"], info["direction"],
+                                info["entry"],
+                                status_snap["daily_fills_count"],
+                                self.rm.user_max_trades_per_day)
                     self.tg.notify_fill(
                         tag, info,
                         fills_today = status_snap["daily_fills_count"],
                         fills_max   = self.rm.user_max_trades_per_day,
                     )
-                    # Alerte si limite journalière ≥ 80 %
                     self._maybe_warn_daily_limit(status_snap)
                 else:
                     # Pas de position → ordre annulé ou expiré sans fill
                     _log.info("[%s] Ordre annulé / expiré sans fill", tag)
+                    _evlog.order_cancelled(tag, "expiré sans fill")
                     info["status"] = _ST_CANCELLED
                     self.rm.cancel_open(tag)
                 continue
@@ -553,8 +563,6 @@ class SessionRunner:
             if status == _ST_ACTIVE:
                 cid = info["contract_id"]
                 if cid in pos_by_cid:
-                    # Position toujours ouverte
-                    # Vérif timeout Fib (FIB_MAX_HOLD_BARS × 15 min)
                     if (info.get("strategy") == "FIB"
                             and info.get("fill_time")):
                         fill_dt = datetime.fromisoformat(
@@ -574,8 +582,10 @@ class SessionRunner:
                 info["close_pnl"] = pnl
                 breached, reason  = self.rm.register_close(tag, pnl,
                                                             when=now_utc)
-                # Niveau 1 : alerte clôture
                 status_snap = self.rm.status()
+                _evlog.close(tag, info["ticker"], pnl,
+                             status_snap["realized_day_pnl"],
+                             status_snap["cum_pnl"])
                 self.tg.notify_close(
                     tag, info, pnl,
                     session_pnl = status_snap["realized_day_pnl"],
@@ -583,6 +593,7 @@ class SessionRunner:
                 )
                 if breached:
                     _log.critical("LIMITE TOPSTEP FRANCHIE : %s", reason)
+                    _evlog.risk_breach(reason)
                     self.tg.notify_risk_breach(reason)
                 else:
                     self._maybe_warn_daily_limit(status_snap)
@@ -622,6 +633,7 @@ class SessionRunner:
         if day_pnl < 0 and abs(day_pnl) / limit >= 0.80:
             fills_r = status.get("daily_fills_remaining",
                                  USER_MAX_TRADES_PER_DAY)
+            _evlog.daily_warning(day_pnl, limit)
             self.tg.notify_daily_limit_warning(day_pnl, limit, int(fills_r))
 
     def _close_all_pending_and_active(self, strategy_filter: Optional[str] = None,
@@ -645,6 +657,7 @@ class SessionRunner:
 
             if status == _ST_PENDING:
                 _log.info("[%s] Annulation ordre fin de session", tag)
+                _evlog.order_cancelled(tag, "fin de session")
                 if not self.dry_run and order_id > 0:
                     self.client.cancel_order(self.account_id, order_id)
                 info["status"] = _ST_CANCELLED
@@ -652,8 +665,7 @@ class SessionRunner:
 
             elif status == _ST_ACTIVE:
                 self._close_position_market(tag, info, now_utc)
-                # P&L de clôture inconnu ici → approximé à 0 (sera réel
-                # à la prochaine sync via get_trades_since).
+                _evlog.order_cancelled(tag, "clôture forcée fin de session")
                 self.rm.register_close(tag, 0.0, when=now_utc)
 
     # ─────────────────────────────────────────────────────────────────────
@@ -679,6 +691,7 @@ class SessionRunner:
             self._ensure_contracts()
         except Exception as exc:
             _log.error("_ensure_contracts échoué : %s", exc)
+            _evlog.error("ensure_contracts", exc)
             self.tg.notify_system_error("ensure_contracts", exc)
             self._save_state()
             return
@@ -688,6 +701,7 @@ class SessionRunner:
             self._sync_broker(now_utc)
         except Exception as exc:
             _log.error("_sync_broker échoué : %s", exc)
+            _evlog.error("sync_broker", exc)
             self.tg.notify_system_error("sync_broker", exc)
 
         # ── 4. Commandes Telegram entrantes (/status) — toujours actif ──────
@@ -707,10 +721,13 @@ class SessionRunner:
             self._close_all_pending_and_active(strategy_filter="OPR",
                                                now_utc=now_utc)
             if self.state.get("session_report_sent") != today_str:
+                snap = self.rm.status()
+                fills = snap.get("daily_fills_count", 0)
+                _evlog.session_end(today_str, snap.get("realized_day_pnl", 0.0), fills)
                 self.tg.send_session_report(
                     today_str,
                     self.state.get("placed_tags", {}),
-                    self.rm.status(),
+                    snap,
                 )
                 self.state["session_report_sent"] = today_str
             self._save_state()
@@ -721,6 +738,8 @@ class SessionRunner:
         day_ny = pd.Timestamp(now_utc, tz="UTC").tz_convert(_NY_TZ).normalize()
 
         if self.state.get("session_start_notified") != today_str:
+            mode = "LIVE" if self.live_mode else "SIMULÉ"
+            _evlog.session_start(today_str, self.tickers, mode)
             self.tg.notify_session_start(
                 today_str,
                 self.tickers,

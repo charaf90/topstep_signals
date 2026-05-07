@@ -206,17 +206,27 @@ def _make_signal(
     journalier. Retourne None si SL/TP invalides ou sizing nul.
     """
     inst = INSTRUMENTS[ticker]
-    dpp = inst["dollar_per_point"]
+    tick = inst["tick_size"]
+    dpp  = inst["dollar_per_point"]
+
+    def _tick(p: float) -> float:
+        return round(round(p / tick) * tick, 10)
 
     if sl_pts <= 0 or tp_pts <= 0:
         return None
 
     if direction == "long":
-        sl_price = entry - sl_pts
-        tp_price = entry + tp_pts
+        sl_price = _tick(entry - sl_pts)
+        tp_price = _tick(entry + tp_pts)
     else:
-        sl_price = entry + sl_pts
-        tp_price = entry - tp_pts
+        sl_price = _tick(entry + sl_pts)
+        tp_price = _tick(entry - tp_pts)
+
+    # Recalcul des distances après arrondi tick
+    sl_pts = abs(entry - sl_price)
+    tp_pts = abs(entry - tp_price)
+    if sl_pts <= 0 or tp_pts <= 0:
+        return None
 
     # Sizing à risque fixe ($100 par défaut)
     n_ct = int(RISK_PER_TRADE_USD / (sl_pts * dpp))
