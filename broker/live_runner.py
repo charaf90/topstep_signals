@@ -675,6 +675,31 @@ class SessionRunner:
     # Alertes limites approchantes
     # ─────────────────────────────────────────────────────────────────────
 
+    def _get_broker_day_summary(self, now_utc: datetime) -> Dict:
+        """
+        Interroge le broker pour le résumé réel de la journée :
+          - P&L réalisé total (toutes positions fermées aujourd'hui)
+          - Nombre de trades fermés
+        Indépendant de ce que notre RM a tracké — reflète l'état réel du compte.
+        """
+        try:
+            day_start = (now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+                         - timedelta(hours=5))
+            trades = self.client.get_trades_since(self.account_id, day_start)
+            closes = [t for t in trades
+                      if t.get("profitAndLoss") is not None and not t.get("voided")]
+            broker_pnl    = sum(float(t["profitAndLoss"]) for t in closes)
+            broker_fills  = len(closes)
+            open_positions = self.client.get_positions(self.account_id)
+            return {
+                "broker_day_pnl":   round(broker_pnl, 2),
+                "broker_fills":     broker_fills,
+                "broker_n_open":    len(open_positions),
+            }
+        except Exception as exc:
+            _log.debug("_get_broker_day_summary échoué : %s", exc)
+            return {}
+
     def _maybe_warn_daily_limit(self, status: Dict):
         """Envoie une alerte si la perte journalière dépasse 80 % de la limite."""
         day_pnl  = status.get("realized_day_pnl", 0.0)
@@ -758,9 +783,10 @@ class SessionRunner:
         now_ny_str = (now_utc.replace(tzinfo=timezone.utc)
                       .astimezone(_NY_TZ)
                       .strftime("%Y-%m-%d %H:%M NY"))
+        rm_snap = {**self.rm.status(), **self._get_broker_day_summary(now_utc)}
         self.tg.check_commands(
             placed_tags = self.state.get("placed_tags", {}),
-            rm_status   = self.rm.status(),
+            rm_status   = rm_snap,
             now_ny      = now_ny_str,
         )
 

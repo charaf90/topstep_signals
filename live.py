@@ -202,9 +202,13 @@ def main():
                                     .strftime("%Y-%m-%d %H:%M NY"))
                     # Sync broker pour avoir l'état réel (fills, clôtures)
                     runner._sync_broker(now_utc_poll)
+                    rm_snap = {
+                        **runner.rm.status(),
+                        **runner._get_broker_day_summary(now_utc_poll),
+                    }
                     runner.tg.check_commands(
                         placed_tags = runner.state.get("placed_tags", {}),
-                        rm_status   = runner.rm.status(),
+                        rm_status   = rm_snap,
                         now_ny      = now_ny_str,
                     )
                 except Exception as exc:

@@ -241,6 +241,10 @@ def fmt_status(placed_tags: Dict, rm_status: Dict, now_ny: str) -> str:
         entry  = v.get("entry", 0)
         ord_lines += f"  • {_esc(strat)} {_esc(ticker)} {d} @ {entry:.2f}\n"
 
+    broker_pnl   = rm_status.get("broker_day_pnl")
+    broker_fills = rm_status.get("broker_fills")
+    broker_open  = rm_status.get("broker_n_open")
+
     sign_d = "+" if day_pnl >= 0 else ""
     sign_c = "+" if cum >= 0 else ""
     s = (
@@ -256,10 +260,20 @@ def fmt_status(placed_tags: Dict, rm_status: Dict, now_ny: str) -> str:
         s += f"<b>Ordres en attente ({len(pending)}) :</b>\n{ord_lines}"
     else:
         s += "Ordres : aucun\n"
+    s += f"{'─'*24}\n"
+
+    # Données broker réelles (source de vérité)
+    if broker_pnl is not None:
+        b_sign = "+" if broker_pnl >= 0 else ""
+        s += (
+            f"📊 <b>Broker (réel) :</b>\n"
+            f"  P&amp;L jour : <b>{b_sign}{broker_pnl:.2f} $</b>\n"
+            f"  Trades fermés : {broker_fills} | Positions ouvertes : {broker_open}\n"
+            f"{'─'*24}\n"
+        )
+
     s += (
-        f"{'─'*24}\n"
-        f"P&amp;L session : {sign_d}{day_pnl:.2f} $ | Cum : {sign_c}{cum:.2f} $\n"
-        f"Fills : {fills_d}/{fills_max} ({fills_r} restant(s))\n"
+        f"Système — P&amp;L : {sign_d}{day_pnl:.2f} $ | Cum : {sign_c}{cum:.2f} $\n"
         f"Slack daily : {slack_d:.0f} $ | Trail : {slack_t:.0f} $\n"
         f"Objectif restant : {target:.2f} $"
     )
