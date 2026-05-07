@@ -382,6 +382,44 @@ class SessionRunner:
         """Vrai si l'ordre avec ce tag a déjà été envoyé au broker."""
         return tag in self.state.get("placed_tags", {})
 
+    def _mark_tag_failed(self, tag: str, signal: Dict, cid: str):
+        """
+        Enregistre le tag comme CANCELLED pour empêcher tout retry.
+        Appelé quand le placement échoue côté API — le broker peut avoir
+        l'ordre ou non, mais on ne doit pas retenter indéfiniment.
+        """
+        self.state.setdefault("placed_tags", {})[tag] = {
+            "order_id":    None,
+            "strategy":    signal.get("strategy", "?"),
+            "ticker":      signal["ticker"],
+            "contract_id": cid,
+            "direction":   signal["direction"],
+            "entry":       float(signal["entry"]),
+            "sl":          float(signal["sl"]),
+            "tp":          float(signal["tp"]),
+            "n_ct":        int(signal["n_ct"]),
+            "risk":        float(signal.get("risk", 0)),
+            "status":      _ST_CANCELLED,
+            "placed_at":   datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "fill_time":   None,
+            "close_pnl":   None,
+        }
+
+    def _find_order_id_by_tag(self, tag: str) -> Optional[int]:
+        """
+        Cherche un ordre ouvert correspondant au custom tag.
+        Utilisé pour récupérer l'orderId quand le placement a échoué côté API
+        mais que le broker a quand même créé l'ordre (ex: custom tag already in use).
+        """
+        try:
+            orders = self.client.get_open_orders(self.account_id)
+            for o in orders:
+                if o.get("customTag") == tag or o.get("tag") == tag:
+                    return int(o["id"])
+        except Exception as exc:
+            _log.warning("_find_order_id_by_tag(%s) échoué : %s", tag, exc)
+        return None
+
     def _place_order(self, signal: Dict) -> bool:
         """
         Vérifie can_open, place le limit order avec brackets SL/TP, et
@@ -450,13 +488,24 @@ class SessionRunner:
                 _log.error("  Exception lors du placement pour %s : %s", tag, exc)
                 _evlog.order_failed(tag, str(exc))
                 self.tg.notify_system_error(f"place_limit_order {tag}", exc)
+                # Sécurité : marquer le tag pour éviter une boucle infinie
+                self._mark_tag_failed(tag, signal, cid)
                 return False
             if order_id is None:
-                _log.error("  Placement échoué pour %s (API refus)", tag)
-                _evlog.order_failed(tag, "API refus (orderId=None)")
-                self.tg.notify_system_error(
-                    f"place_limit_order {tag}", "API a refusé l'ordre (orderId=None)")
-                return False
+                # L'API a retourné success=False — le broker a peut-être quand
+                # même créé l'ordre (ex: "custom tag already in use").
+                # On cherche l'ordre par son tag dans les ordres ouverts.
+                recovered_id = self._find_order_id_by_tag(tag)
+                if recovered_id is not None:
+                    _log.info("  Ordre récupéré par tag : id=%s", recovered_id)
+                    order_id = recovered_id
+                else:
+                    _log.error("  Placement échoué pour %s (API refus)", tag)
+                    _evlog.order_failed(tag, "API refus (orderId=None)")
+                    self.tg.notify_system_error(
+                        f"place_limit_order {tag}", "API a refusé l'ordre (orderId=None)")
+                    self._mark_tag_failed(tag, signal, cid)
+                    return False
 
         _evlog.order_placed(tag, order_id, dry_run=self.dry_run)
         self.tg.notify_order_placed(tag, signal, order_id, dry_run=self.dry_run)
