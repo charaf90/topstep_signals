@@ -176,13 +176,36 @@ def main():
             log.error("Erreur non fatale dans run_tick : %s", exc, exc_info=True)
 
         # Attente jusqu'à la prochaine bougie M15 (:01, :16, :31, :46)
+        # Pendant l'attente, on poll Telegram toutes les 30 s pour répondre
+        # immédiatement aux commandes /status sans attendre le prochain tick.
         import datetime as _dt
+        import zoneinfo as _zi
+        _NY = _zi.ZoneInfo("America/New_York")
+
         now = _dt.datetime.utcnow()
         minutes_to_next = 15 - (now.minute % 15)
         seconds_offset  = 60  # 60 s après la clôture de la bougie
         wait = minutes_to_next * 60 - now.second + seconds_offset
         log.info("Prochaine exécution dans %d s", wait)
-        time.sleep(wait)
+
+        elapsed      = 0
+        poll_interval = 30  # secondes entre deux checks Telegram
+        while elapsed < wait:
+            sleep_chunk = min(poll_interval, wait - elapsed)
+            time.sleep(sleep_chunk)
+            elapsed += sleep_chunk
+            if elapsed < wait:
+                try:
+                    now_ny_str = (_dt.datetime.now(_dt.timezone.utc)
+                                  .astimezone(_NY)
+                                  .strftime("%Y-%m-%d %H:%M NY"))
+                    runner.tg.check_commands(
+                        placed_tags = runner.state.get("placed_tags", {}),
+                        rm_status   = runner.rm.status(),
+                        now_ny      = now_ny_str,
+                    )
+                except Exception as exc:
+                    log.debug("Poll Telegram entre ticks : %s", exc)
 
 
 if __name__ == "__main__":
