@@ -180,29 +180,45 @@ def fmt_session_start(date_str: str, tickers: List[str],
 
 def fmt_session_report(date_str: str, placed_tags: Dict,
                        rm_status: Dict) -> str:
-    # Statistiques des trades du jour
+    # Statistiques des trades du jour (depuis placed_tags — best effort)
     closed = [v for v in placed_tags.values()
               if v.get("status") in ("CLOSED",) and
               _is_today(v.get("placed_at", ""), date_str)]
-    n_fills  = sum(1 for v in placed_tags.values()
-                   if v.get("fill_time") and _is_today(v.get("fill_time", ""), date_str))
+    n_fills_rm = sum(1 for v in placed_tags.values()
+                     if v.get("fill_time") and _is_today(v.get("fill_time", ""), date_str))
     n_tp     = sum(1 for v in closed if (v.get("close_pnl") or 0) > 0)
     n_sl     = sum(1 for v in closed if (v.get("close_pnl") or 0) < 0)
     n_te     = sum(1 for v in closed if (v.get("close_pnl") or 0) == 0)
-    pnl_day  = rm_status.get("realized_day_pnl", 0.0)
-    cum      = rm_status.get("cum_pnl", 0.0)
-    target   = rm_status.get("target_remaining", 0.0)
-    slack_d  = rm_status.get("slack_daily", 0.0)
-    slack_t  = rm_status.get("slack_trail", 0.0)
-    fills_r  = rm_status.get("daily_fills_remaining", "?")
-    sign_d   = "+" if pnl_day >= 0 else ""
-    sign_c   = "+" if cum >= 0 else ""
-    icon_d   = "✅" if pnl_day >= 0 else "🔴"
+
+    # Données broker réelles (prioritaires sur le RM interne)
+    broker_pnl  = rm_status.get("broker_day_pnl")
+    broker_fees = rm_status.get("broker_day_fees")
+    broker_bal  = rm_status.get("broker_balance")
+    broker_fill = rm_status.get("broker_fills")
+
+    pnl_day = broker_pnl  if broker_pnl  is not None else rm_status.get("realized_day_pnl", 0.0)
+    n_fills = broker_fill if broker_fill is not None else n_fills_rm
+
+    cum     = rm_status.get("cum_pnl", 0.0)
+    target  = rm_status.get("target_remaining", 0.0)
+    slack_d = rm_status.get("slack_daily", 0.0)
+    slack_t = rm_status.get("slack_trail", 0.0)
+
+    sign_d = "+" if pnl_day >= 0 else ""
+    sign_c = "+" if cum >= 0 else ""
+    icon_d = "✅" if pnl_day >= 0 else "🔴"
+
+    # Ligne frais broker si disponible
+    fees_line = (f"  (frais : -{broker_fees:.2f} $)\n" if broker_fees is not None else "")
+    bal_line  = (f"Solde compte : {broker_bal:,.2f} $\n" if broker_bal is not None else "")
+
     return (
         f"📊 <b>Bilan session</b> — {_esc(date_str)}\n"
         f"{'─'*24}\n"
         f"Fills : {n_fills} | TP : {n_tp} | SL : {n_sl} | TE : {n_te}\n"
         f"P&amp;L session : {icon_d} <b>{sign_d}{pnl_day:.2f} $</b>\n"
+        f"{fees_line}"
+        f"{bal_line}"
         f"{'─'*24}\n"
         f"Cum challenge : <b>{sign_c}{cum:.2f} $</b>\n"
         f"Objectif restant : {target:.2f} $\n"

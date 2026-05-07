@@ -812,13 +812,20 @@ class SessionRunner:
             self._close_all_pending_and_active(strategy_filter="OPR",
                                                now_utc=now_utc)
             if self.state.get("session_report_sent") != today_str:
-                snap = self.rm.status()
-                fills = snap.get("daily_fills_count", 0)
-                _evlog.session_end(today_str, snap.get("realized_day_pnl", 0.0), fills)
+                snap        = self.rm.status()
+                broker_snap = self._get_broker_day_summary(now_utc)
+                merged      = {**snap, **broker_snap}
+                pnl_report  = (broker_snap.get("broker_day_pnl")
+                               if broker_snap.get("broker_day_pnl") is not None
+                               else snap.get("realized_day_pnl", 0.0))
+                fills_report = (broker_snap.get("broker_fills")
+                                if broker_snap.get("broker_fills") is not None
+                                else snap.get("daily_fills_count", 0))
+                _evlog.session_end(today_str, pnl_report, fills_report)
                 self.tg.send_session_report(
                     today_str,
                     self.state.get("placed_tags", {}),
-                    snap,
+                    merged,
                 )
                 self.state["session_report_sent"] = today_str
             self._save_state()
