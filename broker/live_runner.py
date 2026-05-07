@@ -677,40 +677,37 @@ class SessionRunner:
 
     def _get_broker_day_summary(self, now_utc: datetime) -> Dict:
         """
-        Résumé réel du compte depuis le broker :
-          - balance   : solde courant du compte (inclut P&L + frais)
-          - P&L net   : profitAndLoss - fees sur tous les trades du jour
-          - fills     : nombre de trades fermés aujourd'hui
-          - positions : positions ouvertes en cours
+        Résumé réel du compte depuis le broker.
+
+        P&L journalier = solde courant - solde d'ouverture de session.
+        Méthode infaillible : capture TOUT (P&L, frais, trades non trackés).
         """
         try:
-            # Solde courant du compte
             accounts = self.client.get_accounts()
             balance  = next(
                 (float(a["balance"]) for a in accounts
-                 if a.get("id") == self.account_id),
-                None,
+                 if a.get("id") == self.account_id), None
             )
 
-            # Trades du jour (avec marge DST)
-            day_start  = (now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-                          - timedelta(hours=5))
-            trades     = self.client.get_trades_since(self.account_id, day_start)
-            valid      = [t for t in trades if not t.get("voided")]
+            opening_balance = self.state.get("opening_balance")
+            if balance is not None and opening_balance is not None:
+                day_pnl = balance - opening_balance
+            else:
+                day_pnl = None
 
-            # P&L brut (seulement sur les trades de clôture)
-            gross_pnl  = sum(float(t["profitAndLoss"]) for t in valid
-                             if t.get("profitAndLoss") is not None)
-            # Frais sur TOUS les trades (open + close)
+            # Trades du jour pour le compte des fills
+            day_start = (now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+                         - timedelta(hours=5))
+            trades    = self.client.get_trades_since(self.account_id, day_start)
+            valid     = [t for t in trades if not t.get("voided")]
+            closes    = [t for t in valid if t.get("profitAndLoss") is not None]
             total_fees = sum(float(t.get("fees", 0)) for t in valid)
-            net_pnl    = gross_pnl - total_fees
 
-            closes         = [t for t in valid if t.get("profitAndLoss") is not None]
             open_positions = self.client.get_positions(self.account_id)
 
             return {
                 "broker_balance":  round(balance, 2) if balance is not None else None,
-                "broker_day_pnl":  round(net_pnl, 2),
+                "broker_day_pnl":  round(day_pnl, 2) if day_pnl is not None else None,
                 "broker_day_fees": round(total_fees, 2),
                 "broker_fills":    len(closes),
                 "broker_n_open":   len(open_positions),
@@ -830,6 +827,21 @@ class SessionRunner:
 
         # ── 6. Jour NY courant ────────────────────────────────────────────
         day_ny = pd.Timestamp(now_utc, tz="UTC").tz_convert(_NY_TZ).normalize()
+
+        # Capture le solde d'ouverture une fois par jour (indépendant du session_start)
+        if self.state.get("opening_balance_date") != today_str:
+            try:
+                accounts = self.client.get_accounts()
+                opening  = next(
+                    (float(a["balance"]) for a in accounts
+                     if a.get("id") == self.account_id), None
+                )
+                if opening is not None:
+                    self.state["opening_balance"]      = opening
+                    self.state["opening_balance_date"] = today_str
+                    _log.info("Solde d'ouverture capturé : %.2f $", opening)
+            except Exception as exc:
+                _log.warning("Impossible de lire le solde d'ouverture : %s", exc)
 
         if self.state.get("session_start_notified") != today_str:
             mode = "LIVE" if self.live_mode else "SIMULÉ"
