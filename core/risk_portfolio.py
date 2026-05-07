@@ -204,6 +204,19 @@ class PortfolioRiskManager:
                 f"(daily={slack_daily:.0f},trail={slack_trail:.0f},"
                 f"reserved={reserved:.0f})"
             )
+
+        # 6. Slack USER daily — pire cas : (reserved + nouveau trade) → tous SL
+        #    garantit que même si tout le monde touche son SL simultanément,
+        #    la perte réalisée ne dépasse pas user_daily_loss_max
+        if self.user_daily_loss_max > 0:
+            slack_user = (
+                self.user_daily_loss_max + self.realized_day_pnl - reserved
+            )
+            if slack_user < risk_usd:
+                return False, (
+                    f"user_daily_slack_{slack_user:.0f}_below_{risk_usd:.0f}"
+                )
+
         return True, "ok"
 
     def register_open(self, trade_id: str, risk_usd: float,
