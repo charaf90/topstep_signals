@@ -18,8 +18,10 @@ from core.optimizer import optimize
 
 # ── Registre (identique à backtest.py) ──────────────────────────────────────
 REGISTRY = {
-    "opr": "strategies.opr",
-    "fib": "strategies.fib",
+    "opr":         "strategies.opr",
+    "fib":         "strategies.fib",
+    "smc":         "strategies.smc",
+    "fib_explore": "strategies.fib_explore",
 }
 
 

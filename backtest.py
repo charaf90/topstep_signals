@@ -23,8 +23,10 @@ from core import backtester, metrics as m
 
 # ── Registre des stratégies ──────────────────────────────────────────────────
 REGISTRY = {
-    "opr": "strategies.opr",
-    "fib": "strategies.fib",
+    "opr":         "strategies.opr",
+    "fib":         "strategies.fib",
+    "smc":         "strategies.smc",
+    "fib_explore": "strategies.fib_explore",
 }
 
 

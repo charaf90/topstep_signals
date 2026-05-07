@@ -214,8 +214,18 @@ FIB_LEVEL_PER_TICKER = {"MES1": 0.382, "NQ1": 0.382, "YM1": 0.382}
 #   NQ1   IS Sharpe=5.52  OOS Sharpe=4.52  OOS PF=1.79  OOS P&L=+$765   (n=35)
 #   YM1   IS Sharpe=1.04  OOS Sharpe=1.44  OOS PF=1.22  OOS P&L=+$640   (n=57)
 FIB_SL_ATR_MULT_PER_TICKER     = {"MES1": 0.75, "NQ1": 1.50, "YM1": 1.00}
-FIB_TP_ATR_MULT_PER_TICKER     = {"MES1": 2.00, "NQ1": 1.50, "YM1": 2.00}
-FIB_MIN_IMPULSE_ATR_PER_TICKER = {"MES1": 2.00, "NQ1": 1.00, "YM1": 2.00}
+FIB_TP_ATR_MULT_PER_TICKER     = {"MES1": 1.50, "NQ1": 1.50, "YM1": 2.00}   # MES1 : 2.0→1.5 (fib-v3)
+FIB_MIN_IMPULSE_ATR_PER_TICKER = {"MES1": 1.00, "NQ1": 1.00, "YM1": 2.00}   # MES1 : 2.0→1.0 (fib-v3)
+
+# Fenêtre de session horaire par ticker (heures UTC).
+# Clés de SESSION_WINDOWS dans core/strategy_fib.py.
+# MES1 : "no_nuit" (0h–21h UTC) validé 🟢 fib-v3 — OOS PF=1.82, BS=100%
+# NQ1/YM1 : "us_session" inchangé
+FIB_SESSION_PER_TICKER = {
+    "MES1": "no_nuit",     # 0h–21h UTC
+    "NQ1":  "us_session",  # 13h–21h UTC
+    "YM1":  "us_session",  # 13h–21h UTC
+}
 
 # Filtres trigger walk-forward (calibrés pour fib-v2, niveau 38.2 %)
 # via draft_fibo_50/analyze_filters_v2.py.
@@ -235,7 +245,72 @@ FIB_TRIGGER_FILTERS_PER_TICKER = {
     "YM1":  {"feature": "bars_since_confirm", "direction": "lt", "threshold": 2.0},
 }
 
-FIB_STRATEGY_VERSION = "fib-v2"
+FIB_STRATEGY_VERSION = "fib-v3"
+
+# ==============================================================================
+# STRATÉGIE SMC (Smart Money Concepts) — smc-v1
+# ==============================================================================
+# Inspirée de LuxAlgo SMC. Logique :
+#   1. Pivot swing (right-side, size configurable)
+#   2. CHoCH = retournement de structure (tendance inverse → cassure swing)
+#   3. Order Block = barre avec min parsedLow (long) ou max parsedHigh (short)
+#      dans la plage [pivot source → bar CHoCH], filtré volatilité
+#   4. Ordre LIMIT à entry_pct dans l'OB, SL structurel, TP = ATR × mult
+#   5. Killzone NY Open uniquement (9h30–11h00 NY)
+
+SMC_TIMEZONE = "America/New_York"
+
+# Killzone de production (défaut)
+SMC_KILLZONE_NY = (9, 30, 11, 0)
+
+# Toutes les killzones disponibles — (h_start, m_start, h_end, m_end) heure NY
+SMC_ALL_KILLZONES = {
+    "london_open":  (2,  0,  5,  0),   # ouverture session européenne
+    "ny_premarket": (7,  0,  9, 30),   # pré-marché NY
+    "ny_open":      (9, 30, 11,  0),   # cash open NY
+    "london_close": (10, 0, 12,  0),   # chevauchement clôture London
+    "ny_midday":    (11, 0, 13,  0),   # déjeuner NY
+    "ny_afternoon": (13, 0, 16,  0),   # après-midi NY
+}
+
+# Taille des fenêtres pivot (barres)
+SMC_SWING_SIZE    = 50   # structure swing (LuxAlgo défaut)
+SMC_INTERNAL_SIZE = 5    # structure interne
+
+# Entrée dans l'OB : 0.0 = bord extérieur, 0.5 = milieu, 1.0 = bord intérieur
+SMC_ENTRY_PCT = 0.5
+
+# SL : au-delà de l'OB extreme + sl_atr_mult × ATR(14)
+# Le buffer ATR remplace le buffer fixe en ticks — s'adapte à la volatilité
+SMC_SL_ATR_MULT_PER_TICKER = {"MES1": 0.5, "NQ1": 0.5, "YM1": 0.5}
+
+# TP : multiplicateur ATR par ticker (calibré walk-forward)
+SMC_TP_ATR_MULT_PER_TICKER = {"MES1": 2.0, "NQ1": 2.0, "YM1": 2.0}
+
+# ATR pour le TP
+SMC_ATR_PERIOD = 14
+
+# Filtre volatilité OB (méthode LuxAlgo) :
+# bougie avec range ≥ SMC_OB_VOL_MULT × ATR(SMC_OB_VOL_ATR_PERIOD) → inversée
+SMC_OB_VOL_ATR_PERIOD = 200
+SMC_OB_VOL_MULT       = 2.0
+
+# Vie de l'ordre
+SMC_ORDER_TIMEOUT_BARS = 8     # annulé après 8 barres = 2h sans fill
+SMC_SESSION_END_NY     = (16, 30)
+SMC_MAX_TRADES_PER_DAY = 2
+
+# Type de signal : "choch" | "bos" | "both"
+SMC_SIGNAL_TYPE = "both"
+
+# Niveau de structure : "swing" | "internal" | "both"
+# Analyse exploratoire → swing inutilisable (0 TP), internal uniquement
+SMC_STRUCTURE_LEVEL = "internal"
+
+# Durée de validité d'un CHoCH (barres max depuis l'événement)
+SMC_CHOCH_LOOKBACK_BARS = 30
+
+SMC_STRATEGY_VERSION = "smc-v1"
 
 # ==============================================================================
 # BROKER PROJECTX / TOPSTEPX

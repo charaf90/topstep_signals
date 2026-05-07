@@ -1,5 +1,8 @@
 """
-Stratégie Fibonacci 50% retracement (M15) — version production.
+Stratégie Fibonacci — COPIE EXPLORATOIRE (sans restriction de session).
+
+NE PAS utiliser en production. Branche de recherche uniquement.
+Différence vs production : filtre US_SESSION désactivé — toutes les heures valides.
 
 Extraite et adaptée de `draft_fibo_50/` après validation walk-forward.
 Logique métier complète (cf. CLAUDE.md → "Stratégie Fibonacci") :
@@ -32,17 +35,7 @@ from config import (
     FIB_SL_ATR_MULT_PER_TICKER, FIB_TP_ATR_MULT_PER_TICKER,
     FIB_MIN_IMPULSE_ATR_PER_TICKER,
     FIB_TRIGGER_FILTERS_PER_TICKER,
-    US_SESSION_START_UTC, US_SESSION_END_UTC,
-    FIB_SESSION_PER_TICKER,
 )
-
-# Fenêtres de session (heures UTC, borne haute exclue)
-_SESSION_WINDOWS = {
-    "us_session": (US_SESSION_START_UTC, US_SESSION_END_UTC),  # 13h–21h
-    "no_nuit":    (0,  21),   # tout sauf 21h–00h UTC
-    "europe_us":  (7,  17),
-    "all":        (0,  24),
-}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -305,24 +298,31 @@ def build_signal(
 # Moteur de backtest (boucle barre par barre)
 # ═════════════════════════════════════════════════════════════════════════════
 
+# Fenêtres de session nommées (heures UTC, borne haute exclue)
+SESSION_WINDOWS = {
+    "europe_us":    (7,  17),   # Europe + US Open (meilleur MES1)
+    "europe_us_pm": (7,  21),   # Europe + toute la session US
+    "us":           (13, 21),   # Sessions US uniquement
+    "no_nuit":      (0,  21),   # Tout sauf la nuit (21h–00h UTC)
+    "all":          (0,  24),   # Pas de filtre
+}
+
+
 def run_fib_backtest(df_15m: pd.DataFrame, ticker: str,
                      fib_level: Optional[float] = None,
                      sl_mult: Optional[float] = None,
                      tp_mult: Optional[float] = None,
                      min_imp: Optional[float] = None,
-                     apply_filter: bool = True) -> pd.DataFrame:
+                     apply_filter: bool = True,
+                     session: Optional[str] = None,
+                     direction_filter: Optional[str] = None) -> pd.DataFrame:
     """
-    Backtest complet de la stratégie Fib pour un ticker.
-    Retourne un DataFrame de trades clos (mêmes colonnes que les autres
-    stratégies pour cohérence d'agrégation portefeuille).
+    Backtest exploratoire Fib (sans filtre US session par défaut).
 
-    Paramètres surchargeables (sinon valeurs config.py per-ticker) :
-      fib_level   : niveau Fibonacci. None → FIB_LEVEL_PER_TICKER[ticker]
-                    (défaut 0.382). Alternatives explicites : 0.50, 0.618…
-      sl_mult     : SL en multiples d'ATR
-      tp_mult     : TP en multiples d'ATR
-      min_imp     : taille minimale impulse en multiples d'ATR
-      apply_filter: appliquer le filtre trigger configuré (défaut True)
+    Params supplémentaires vs production :
+      session          : fenêtre horaire UTC — clé de SESSION_WINDOWS
+                         None = aucun filtre
+      direction_filter : "long" | "short" | None — restreint la direction
     """
     if not FIB_ENABLED:
         return pd.DataFrame()
@@ -344,10 +344,13 @@ def run_fib_backtest(df_15m: pd.DataFrame, ticker: str,
 
     pivot_highs, pivot_lows = detect_pivots(df, FIB_PIVOT_LEFT, FIB_PIVOT_RIGHT)
 
-    sess_key   = FIB_SESSION_PER_TICKER.get(ticker, "us_session")
-    s_h, e_h   = _SESSION_WINDOWS.get(sess_key, (US_SESSION_START_UTC, US_SESSION_END_UTC))
-    hours      = df.index.hour
-    in_session = (hours >= s_h) & (hours < e_h)
+    # Filtre de session horaire
+    if session is not None and session in SESSION_WINDOWS:
+        s_h, e_h = SESSION_WINDOWS[session]
+        hours      = df.index.hour
+        in_session = (hours >= s_h) & (hours < e_h)
+    else:
+        in_session = None
 
     n = len(df)
     trades = []
@@ -460,7 +463,7 @@ def run_fib_backtest(df_15m: pd.DataFrame, ticker: str,
         # 3. Génération nouveau signal
         if pending is not None or position is not None:
             continue
-        if not bool(in_session[i]):
+        if in_session is not None and not bool(in_session[i]):
             continue
         atr_now = bar["atr"]
         if pd.isna(atr_now) or atr_now <= 0:
@@ -471,6 +474,8 @@ def run_fib_backtest(df_15m: pd.DataFrame, ticker: str,
             float(bar["adx"]) if not pd.isna(bar["adx"]) else np.nan,
             FIB_ADX_TREND_THRESHOLD
         )
+        if direction_filter == "long"  and trend != "BULL": continue
+        if direction_filter == "short" and trend != "BEAR": continue
         if trend == "RANGE":
             continue
 
@@ -586,11 +591,6 @@ def get_fib_live_signal(df_15m: pd.DataFrame, ticker: str) -> Optional[Dict]:
 
     pivot_highs, pivot_lows = detect_pivots(df, FIB_PIVOT_LEFT, FIB_PIVOT_RIGHT)
 
-    sess_key   = FIB_SESSION_PER_TICKER.get(ticker, "us_session")
-    s_h, e_h   = _SESSION_WINDOWS.get(sess_key, (US_SESSION_START_UTC, US_SESSION_END_UTC))
-    hours      = df.index.hour
-    in_session = (hours >= s_h) & (hours < e_h)
-
     n       = len(df)
     warmup  = max(FIB_EMA_SLOW_PERIOD, 250)
     pending  = None
@@ -647,8 +647,6 @@ def get_fib_live_signal(df_15m: pd.DataFrame, ticker: str) -> Optional[Dict]:
 
         # 3. Génération d'un nouveau signal
         if pending is not None or position is not None:
-            continue
-        if not bool(in_session[i]):
             continue
         atr_now = bar["atr"]
         if pd.isna(atr_now) or atr_now <= 0:
