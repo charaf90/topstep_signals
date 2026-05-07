@@ -828,20 +828,36 @@ class SessionRunner:
         # ── 6. Jour NY courant ────────────────────────────────────────────
         day_ny = pd.Timestamp(now_utc, tz="UTC").tz_convert(_NY_TZ).normalize()
 
-        # Capture le solde d'ouverture une fois par jour (indépendant du session_start)
+        # Calcule le solde d'ouverture une fois par jour.
+        # On reconstruit depuis les trades du jour pour être correct même si le
+        # daemon redémarre en cours de session (opening = balance - pnl_net_jour).
         if self.state.get("opening_balance_date") != today_str:
             try:
                 accounts = self.client.get_accounts()
-                opening  = next(
+                balance  = next(
                     (float(a["balance"]) for a in accounts
                      if a.get("id") == self.account_id), None
                 )
-                if opening is not None:
+                if balance is not None:
+                    day_start_ob = (now_utc.replace(hour=0, minute=0,
+                                                    second=0, microsecond=0)
+                                    - timedelta(hours=5))
+                    trades_ob = self.client.get_trades_since(
+                        self.account_id, day_start_ob)
+                    valid_ob  = [t for t in trades_ob if not t.get("voided")]
+                    today_pnl = sum(float(t["profitAndLoss"])
+                                    for t in valid_ob
+                                    if t.get("profitAndLoss") is not None)
+                    today_fees = sum(float(t.get("fees", 0)) for t in valid_ob)
+                    opening = balance - today_pnl + today_fees
                     self.state["opening_balance"]      = opening
                     self.state["opening_balance_date"] = today_str
-                    _log.info("Solde d'ouverture capturé : %.2f $", opening)
+                    _log.info(
+                        "Solde d'ouverture recalculé : %.2f $ "
+                        "(balance=%.2f, pnl=%.2f, fees=%.2f)",
+                        opening, balance, today_pnl, today_fees)
             except Exception as exc:
-                _log.warning("Impossible de lire le solde d'ouverture : %s", exc)
+                _log.warning("Impossible de calculer le solde d'ouverture : %s", exc)
 
         if self.state.get("session_start_notified") != today_str:
             mode = "LIVE" if self.live_mode else "SIMULÉ"
