@@ -196,9 +196,12 @@ def main():
             elapsed += sleep_chunk
             if elapsed < wait:
                 try:
-                    now_ny_str = (_dt.datetime.now(_dt.timezone.utc)
-                                  .astimezone(_NY)
-                                  .strftime("%Y-%m-%d %H:%M NY"))
+                    now_utc_poll = _dt.datetime.utcnow()
+                    now_ny_str   = (_dt.datetime.now(_dt.timezone.utc)
+                                    .astimezone(_NY)
+                                    .strftime("%Y-%m-%d %H:%M NY"))
+                    # Sync broker pour avoir l'état réel (fills, clôtures)
+                    runner._sync_broker(now_utc_poll)
                     runner.tg.check_commands(
                         placed_tags = runner.state.get("placed_tags", {}),
                         rm_status   = runner.rm.status(),
