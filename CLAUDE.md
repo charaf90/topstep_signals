@@ -1,24 +1,68 @@
 # CLAUDE.md — Guide de session pour topstep_signals
 
+## ⚡ Démarrage de session — à exécuter d'office
+
+À chaque nouvelle session, commence par cette séquence pour cadrer le contexte avant toute action :
+
+```bash
+# 1. État du daemon live (prod tourne en permanence)
+tmux ls 2>/dev/null && cat state/live_state.json | python -m json.tool 2>/dev/null
+
+# 2. Versions en production
+grep -E "(OPR|FIB)_STRATEGY_VERSION" config.py
+
+# 3. Derniers événements live (10 dernières lignes)
+tail -n 10 logs/trading_events.log 2>/dev/null
+
+# 4. Données disponibles
+ls data/
+```
+
+Synthétise ensuite en 3-4 lignes :
+- État live (actif/inactif, PnL du jour, distance aux limites Topstep)
+- Versions prod (OPR / Fib)
+- Dernier événement notable (si pertinent)
+
+**Puis demande à l'utilisateur ce qu'il veut faire ce jour.**
+
+---
+
+## Skills disponibles
+
+| Skill | Quand l'invoquer | Comment |
+|---|---|---|
+| `/new-strategy "<description>"` | Développer une nouvelle stratégie de trading de A à Z (analyse → backtest → optim → stress tests → rapport) | Commande explicite uniquement |
+
+Le skill `new-strategy` est **autonome** et orchestre tout le pipeline. Ne pas court-circuiter ses phases. Si une analyse rapide hors-skill suffit (ex: une question sur un paramètre), répondre directement sans invoquer le skill.
+
+---
+
 ## Rôle de Claude dans ce projet
 
 **Deux rôles distincts selon le contexte :**
 
 ### 1. Partenaire de recherche
-Développer, backtester et optimiser de nouvelles stratégies de trading. Proposer
-des idées, analyser les résultats, prendre des décisions rigoureuses.
+Développer, backtester et optimiser de nouvelles stratégies. Proposer des idées, analyser les résultats, prendre des décisions rigoureuses. **Toujours dans `strategies/` et `config.py`. Jamais dans `core/` ou `broker/` sans confirmation explicite.**
 
 ### 2. Partenaire de production (live)
-Surveiller le daemon live en tmux, analyser les logs Telegram, détecter les
-anomalies, vérifier l'état du compte. **En prod : ne jamais modifier un fichier
-de production sans confirmation explicite.** La production tourne en permanence.
+Surveiller le daemon live en tmux, analyser les logs Telegram, détecter les anomalies, vérifier l'état du compte. **En prod : ne jamais modifier un fichier de production sans confirmation explicite.** La production tourne en permanence.
+
+### Que faire si...
+
+| Situation | Action |
+|---|---|
+| Live a décroché (tmux mort) | Diagnostic dans `logs/trading_events.log`. **Ne pas redémarrer sans confirmation utilisateur.** |
+| Limite Topstep approchée (< 200$) | Alerter l'utilisateur immédiatement. Ne rien modifier. |
+| Demande de promotion d'une stratégie | Vérifier verdict 🟢 + checklist PHASE 8 du skill. **Confirmation explicite requise pour chaque modification de `core/` ou `broker/`.** |
+| Modification suggérée d'un paramètre prod | Backtest préalable obligatoire sur IS+OOS. Pas d'écriture directe dans `config.py` pour des paramètres prod actifs. |
+| Erreur API ProjectX répétée | Logger la trace, ne pas retenter automatiquement, attendre l'utilisateur. |
+| Données manquantes (CSV) | Vérifier `data/` et la dernière mise à jour TradingView. Pas de remplissage automatique de gaps. |
 
 ---
 
 ## Vue d'ensemble du projet
 
-**Objectif :** passer le challenge Topstep 50K (micro-contrats MES1, NQ1, YM1)
-via des stratégies intraday algorithmiques, puis trader un compte financé.
+**Objectif :** passer le challenge Topstep 50K (micro-contrats MES1, NQ1, YM1) via des stratégies intraday algorithmiques, puis trader un compte financé.
 
 **Contraintes Topstep :**
 - Daily loss max : $1 000
@@ -27,7 +71,7 @@ via des stratégies intraday algorithmiques, puis trader un compte financé.
 
 **Portefeuille en production (live depuis 2026-05-05) :**
 - **OPR opr-v4** — Opening Range Breakout pullback 9h30 NY
-- **Fib fib-v2** — Retracement Fibonacci 38.2 % post-impulse
+- **Fib fib-v3** — Retracement Fibonacci 38.2 % post-impulse
 
 ---
 
@@ -46,9 +90,7 @@ via des stratégies intraday algorithmiques, puis trader un compte financé.
 └─────────────────────────────────────────────────────┘
 ```
 
-**Règle absolue :** les fichiers production ne sont modifiés que lors d'une
-promotion explicite d'une nouvelle stratégie validée 🟢. Jamais en cours de
-recherche.
+**Règle absolue :** les fichiers production ne sont modifiés que lors d'une promotion explicite d'une nouvelle stratégie validée 🟢. Jamais en cours de recherche.
 
 ---
 
@@ -75,7 +117,8 @@ topstep_signals/
 │   ├── risk_topstep.py      # Garde-fou Topstep par trade
 │   ├── risk_portfolio.py    # Garde-fou global portefeuille (live)
 │   ├── signal_selector.py   # Sélection actif corrélé NQ1 > YM1 > MES1
-│   ├── analysis_chart.py    # Graphiques journaliers (utilisé par strategies/)
+│   ├── event_logger.py      # Log structuré des événements live
+│   ├── analysis_chart.py    # Graphiques journaliers
 │   └── chart.py             # Graphiques par trade
 │
 ├── broker/                  # ← PRODUCTION — ne pas toucher
@@ -83,8 +126,13 @@ topstep_signals/
 │   ├── projectx_client.py   # API TopstepX
 │   └── telegram_bot.py      # Alertes et /status bidirectionnel
 │
+├── .claude/
+│   ├── skills/              # Skills Claude Code (new-strategy, etc.)
+│   └── templates/           # strategy_template.md, rapport_template.md
+│
+├── logs/                    # gitignored — trading_events.log
 ├── data/                    # gitignored — CSV 15m par ticker
-└── output/                  # gitignored — backtests, charts
+└── output/                  # gitignored — backtests, charts, rapports
 ```
 
 ---
@@ -117,40 +165,27 @@ tmux attach -t <session>
 # État du live runner
 cat state/live_state.json
 
-# Logs
-tail -f logs/live.log    # si configuré
+# Logs événements live (fills, closes, erreurs, risk)
+tail -f logs/trading_events.log
 ```
 
 ---
 
 ## Pipeline d'une nouvelle stratégie
 
+> Pour un développement complet : utiliser le skill `/new-strategy "<description>"`.
+> Les étapes ci-dessous sont la version manuelle / référence.
+
 ### 1. Créer `strategies/ma_strategie.py`
 
-```python
-STRATEGY_ID = "ict-v1"
-TICKERS     = ["MES1", "NQ1", "YM1"]
-CSV_SUFFIX  = "_ict"
-
-PARAM_GRID = {
-    "sl_mult": [0.5, 1.0, 1.5],
-    "tp_mult": [1.0, 2.0, 3.0],
-}
-
-def run_backtest(df_15m, ticker, tf=None, params=None, topstep_guard=True):
-    """Retourne pd.DataFrame de trades (colonnes standard)."""
-    ...
-
-def plot_day(df_15m, ticker, date_str, day_trades, output_path):
-    """Optionnel — chart d'une journée pour --plot."""
-    ...
-```
-
-**Colonnes obligatoires du DataFrame retourné :**
+Schéma de colonnes obligatoire (compatibilité `core/optimizer.py`) :
 ```
 date, dir, entry, sl, tp, sl_dist, tp_dist, rr, n_ct,
 result (TP|SL|TE|NOT_FILLED), pnl, fill_time, exit_time, exit, regime
 ```
+`pnl` = **P&L net** (slippage + commissions inclus).
+
+Colonnes optionnelles tolérées : `pnl_gross`, `adx`, `atr_pct`, `is_macro_day`.
 
 ### 2. Enregistrer dans `backtest.py` et `optimize.py`
 ```python
@@ -184,9 +219,11 @@ python optimize.py --strategy ict --csv-dir ./data
 | Critère | 🟢 PRODUCTION | 🟡 VEILLE | 🔴 REJET |
 |---|---|---|---|
 | OOS Profit Factor | ≥ 1.5 | ≥ 1.2 | < 1.2 |
-| Bootstrap Topstep | ≥ 80% | ≥ 50% | < 50% |
+| Bootstrap **portfolio** | ≥ 80% | ≥ 50% | < 50% |
 | Trades OOS | ≥ 20 | ≥ 8 | < 8 |
 | P&L OOS | > 0 | > 0 | ≤ 0 |
+
+> Le bootstrap **par ticker** peut être bas (ex: MES1 5.8 %) sans être disqualifiant — c'est le bootstrap **portefeuille** qui décide.
 
 **Rapport automatique après `optimize.py` :**
 ```
@@ -201,17 +238,21 @@ python optimize.py --strategy ict --csv-dir ./data
 ══════════════════════════════════════════════════════════════
 ```
 
+Pour les analyses approfondies (multiple-testing correction, stress tests par régime, Monte Carlo permutation), voir le skill `/new-strategy` PHASES 4-5.
+
 ---
 
 ## Promotion en production
 
-Uniquement si verdict 🟢 et après validation visuelle des charts :
+**À exécuter uniquement après verdict 🟢, validation visuelle des charts, ET confirmation explicite de l'utilisateur pour chaque étape touchant `core/` ou `broker/`.**
 
-1. Créer `core/ma_strategie.py` (logique d'exécution live)
-2. Ajouter `get_X_live_signal()` utilisable par `live_runner.py`
+1. Créer `core/<strategy_id>.py` (logique d'exécution live)
+2. Ajouter `get_<strategy>_live_signal()` utilisable par `live_runner.py`
 3. Mettre à jour `broker/live_runner.py` (imports + boucle de session)
 4. Mettre à jour `core/signal_selector.py` si nécessaire
-5. Tester en simulation (`PROJECTX_LIVE_MODE = False`) avant live réel
+5. Configurer `core/event_logger.py` pour la nouvelle stratégie
+6. Tester en simulation (`PROJECTX_LIVE_MODE = False`) avant live réel
+7. Activation progressive : 1 contrat 1 semaine → sizing nominal
 
 ---
 
@@ -226,20 +267,23 @@ tmux ls
 cat state/live_state.json | python -m json.tool
 
 # 3. Trades du jour via Telegram ou logs
+tail -n 30 logs/trading_events.log
+
 # 4. Vérifier que les limites Topstep ne sont pas approchées
 ```
 
 ### Signaux d'alerte à surveiller
 - `live_state.json` : `cum_pnl`, `peak_pnl`, `daily_pnl` proches des limites
 - Telegram : messages de blocage RM, erreurs API ProjectX, pertes de connexion
-- Trades répétés NOT_FILLED → problème de données ou de connectivité
-- Sequence de SL consécutifs → vérifier conditions de marché
+- Trades répétés `NOT_FILLED` → problème de données ou de connectivité
+- Séquence de SL consécutifs → vérifier conditions de marché
 
 ### Ce que Claude NE fait PAS sans confirmation
 - Modifier `broker/live_runner.py` ou tout fichier `core/` en production
 - Changer `PROJECTX_LIVE_MODE = True` → `False` (interrompt le live)
 - Redémarrer le daemon tmux
 - Modifier les params SL/TP en production pendant une session live
+- Activer `YM1_ENABLED = True` dans `core/opr.py` sans preuve OOS
 
 ---
 
@@ -254,6 +298,8 @@ cat state/live_state.json | python -m json.tool
 | Global | `RISK_PER_TRADE_USD=100`, `MAX_TRADES_PER_DAY=2` |
 | Utilisateur | `USER_DAILY_LOSS_MAX=200`, `USER_MAX_TRADES_PER_DAY=3` |
 | Topstep | `TOPSTEP_DAILY_LOSS_MAX=1000`, `TOPSTEP_TRAILING_DD=2000` |
+| Frictions | `SLIPPAGE_TICKS_PER_TICKER`, `COMMISSION_RT_PER_CONTRACT=1.40` |
+| Macro | `MACRO_EVENT_DATES` (FOMC/CPI/NFP/JOLTS) |
 | Circuit breakers | `CONSEC_LOSS_PAUSE_DAYS=5`, `DAILY_STOP_AFTER_SL=False` |
 | OPR | `OPR_SL_ATR_MULT`, `OPR_TP_ATR_MULT`, `OPR_STRATEGY_VERSION` |
 | Fib | `FIB_SL_ATR_MULT_PER_TICKER`, `FIB_TP_ATR_MULT_PER_TICKER` |
@@ -261,8 +307,8 @@ cat state/live_state.json | python -m json.tool
 | Telegram | `TELEGRAM_ENABLED`, niveaux `TELEGRAM_LEVEL_*` |
 
 ### Walk-forward IS/OOS (dates fixes pour cohérence)
-- **IS :** déc 2024 → sept 2025 (`IS_END = "2025-09-30"`)
-- **OOS :** oct 2025 → mars 2026 (`OOS_START = "2025-10-01"`)
+- **IS :** déc 2024 → 2025-09-30 (`IS_END = "2025-09-30"`)
+- **OOS :** 2025-10-01 → mars 2026 (`OOS_START = "2025-10-01"`)
 - Critère d'acceptation : `OOS PF ≥ 1.2 ET n ≥ 8 ET P&L OOS > 0`
 
 ---
@@ -273,51 +319,66 @@ cat state/live_state.json | python -m json.tool
 
 | Asset | Trades | WR | PF | P&L | DD |
 |---|---|---|---|---|---|
-| MES1 | 139 | 40% | 1.45 | +$2 339 | -$561 |
-| NQ1 | 476 | 46% | 1.65 | +$14 304 | -$866 |
-| YM1 | 199 | 60% | 1.92 | +$5 931 | -$502 |
-| **Portfolio** | **814** | — | — | **+$22 573** | **-$746** |
+| MES1 | 142 | 39% | 1.38 | +$2 132 | -$611 |
+| NQ1 | 476 | 46% | 1.67 | +$14 640 | -$867 |
+| YM1 | 199 | 60% | 1.89 | +$5 802 | -$502 |
+| **Portfolio** | **817** | — | — | **+$22 574** | **-$822** |
 
-Bootstrap portefeuille : **99.8%** ✅
+Bootstrap portefeuille : **100%** ✅
 
-### Fib fib-v2 (déc 2024 → mars 2026)
+### Fib fib-v3 (déc 2024 → mars 2026)
 
-| Asset | Trades | PF | P&L |
-|---|---|---|---|
-| MES1 | 114 | 1.78 | +$2 956 |
-| NQ1 | 20 | 8.58 | +$2 325 |
-| YM1 | 48 | 1.76 | +$1 610 |
-| **Portfolio** | **182** | — | **+$6 891** |
+| Asset | Trades | WR | PF | P&L |
+|---|---|---|---|---|
+| MES1 | 247 | 46% | 1.67 | +$7 848 |
+| NQ1 | 20 | 90% | 8.58 | +$1 266 |
+| YM1 | 48 | 50% | 1.92 | +$1 692 |
+| **Portfolio** | **315** | — | — | **+$10 805** |
 
 Bootstrap portefeuille : **100%** ✅
 
 ### OPR + Fib combiné
-- P&L : **+$29 464** | DD : **-$756** | Sharpe : **7.01** | Bootstrap : **99.1%**
+- P&L : **+$33 379** | DD : **-$822** | Bootstrap : **100%**
 
 ---
 
 ## Conventions de code
 
-- **Langue :** nommage, commentaires, docstrings → **français**
+- **Langue :** nommage, commentaires, docstrings → **français**.
+  Exception documentée : `MAX_TRADES_PER_DAY` reste en anglais (héritage).
 - **Paramètres :** toujours dans `config.py`, jamais hardcodés
-- **Timeframes :** toutes les heures OPR en **heure NY** (DST-aware via `OPR_TIMEZONE`)
-- **Timestamps :** UTC naïf en interne, conversion NY uniquement dans `core/opr.py`
+- **Timeframes :** toutes les heures OPR en **heure NY** (DST-aware via `zoneinfo("America/New_York")`)
+- **Timestamps :** UTC naïf en interne, conversion NY uniquement en frontière de stratégie
 - **Pas de leak temporel :** ATR et features calculés strictement avant le cutoff
 - **Bump de version :** `OPR_STRATEGY_VERSION` ou `FIB_STRATEGY_VERSION` à chaque
-  changement structurel de la stratégie (nouveau filtre, nouvelle logique)
+  changement structurel de la stratégie
 - **Charts :** `--plot` génère 10 jours aléatoires parmi les jours avec fills
+- **Reproductibilité :** `np.random.seed(42)` en tête de chaque module utilisant l'aléatoire
 
 ---
 
 ## Pièges à éviter
 
-- Ne **jamais** modifier `core/opr.py` ou `core/strategy_fib.py` pour de la recherche
-  → utiliser `strategies/opr.py` et `strategies/fib.py`
+- Ne **jamais** modifier `core/opr.py` ou `core/strategy_fib.py` pour de la recherche → utiliser `strategies/opr.py` et `strategies/fib.py`
 - Ne **jamais** accepter des params walk-forward avec OOS PF < 1.2
 - Données CSV : `{csv_dir}/{TICKER}_data_m15.csv` (majuscule)
 - `YM1_ENABLED = False` dans `core/opr.py` — ne pas activer sans preuve OOS
-- Après changement de `config.py`, vérifier que `core/opr.py` reflète bien les
-  valeurs (il importe les dicts par référence et les patch dynamiquement)
-- Le bootstrap par ticker seul peut être bas (ex: MES1 5.8%) — ce qui compte
-  c'est le **bootstrap portefeuille** (tous actifs agrégés)
+- Après changement de `config.py`, vérifier que `core/opr.py` reflète bien les valeurs (il importe les dicts par référence et les patch dynamiquement)
+- Le bootstrap par ticker seul peut être bas (ex: MES1 5.8%) — ce qui compte c'est le **bootstrap portefeuille** (tous actifs agrégés)
 - `data/` et `output/` sont gitignorés — ne pas versionner de données de marché
+- **Fill ambigu (SL et TP dans même barre M15)** : assume SL prioritaire, jamais TP
+- **Ignorer slippage et commissions** dans un nouveau backtest = sur-estimation typique de 15-25 % du PF
+- **Hardcode d'une date dans une stratégie** : interdit. Toutes les dates spéciales (macro, sessions partielles) vont dans `config.py`.
+
+---
+
+## Rappels d'invariants — vérifier avant chaque commit / promotion
+
+- [ ] Schéma colonnes du DataFrame de trades respecté (`pnl` = net, canonique)
+- [ ] `<STRAT>_STRATEGY_VERSION` bumpé si changement structurel
+- [ ] Aucun fichier de `core/opr.py`, `core/strategy_fib.py`, `broker/` modifié sans confirmation explicite
+- [ ] Tous les paramètres dans `config.py`
+- [ ] Walk-forward IS=2025-09-30 / OOS=2025-10-01 respecté
+- [ ] Slippage et commissions intégrés dans `pnl`
+- [ ] Reproductibilité : seed fixé
+- [ ] DST-aware : `zoneinfo`, pas `pytz` ou décalage horaire en dur

@@ -1,53 +1,78 @@
 #!/usr/bin/env python3
 """
-Optimisation walk-forward standardisée — toutes stratégies.
+Optimisation walk-forward standardisée — toutes stratégies (plug-and-play).
+
+Toute stratégie placée dans `strategies/<nom>.py` est automatiquement
+disponible via `--strategy <nom>` (cf. core/registry.py).
 
 Usage :
   python optimize.py --strategy opr --csv-dir ./data
   python optimize.py --strategy fib --csv-dir ./data --ticker NQ1
   python optimize.py --strategy all --csv-dir ./data
+  python optimize.py --list
 """
 
 import argparse
-import importlib
 from pathlib import Path
 
 from config import INSTRUMENTS
 from core.data import load_csv, build_timeframes
 from core.optimizer import optimize
-
-# ── Registre (identique à backtest.py) ──────────────────────────────────────
-REGISTRY = {
-    "opr":         "strategies.opr",
-    "fib":         "strategies.fib",
-    "smc":         "strategies.smc",
-    "fib_explore": "strategies.fib_explore",
-}
+from core.registry import discover_strategies, load_strategy
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Optimisation walk-forward")
-    parser.add_argument("--csv-dir",  type=str, required=True)
-    parser.add_argument("--strategy", type=str, required=True,
-                        choices=list(REGISTRY) + ["all"])
+    parser = argparse.ArgumentParser(description="Optimisation walk-forward (plug-and-play)")
+    parser.add_argument("--list",     action="store_true",
+                        help="Liste les stratégies disponibles et quitte")
+    parser.add_argument("--csv-dir",  type=str, default=None)
+    parser.add_argument("--strategy", type=str, default=None,
+                        help="Stratégie à optimiser (ou 'all')")
     parser.add_argument("--ticker",   type=str, default=None)
     parser.add_argument("--is-end",   type=str, default="2025-09-30",
                         help="Fin de la période IS (YYYY-MM-DD)")
     parser.add_argument("--oos-start",type=str, default="2025-10-01",
                         help="Début de la période OOS (YYYY-MM-DD)")
+    parser.add_argument("--no-robustness", action="store_true",
+                        help="Ne pas générer le rapport de robustesse")
+    parser.add_argument("--output-dir", type=str, default="output")
     args = parser.parse_args()
 
-    strategies = list(REGISTRY) if args.strategy == "all" else [args.strategy]
-    tickers    = [args.ticker]  if args.ticker    else list(INSTRUMENTS)
+    available = discover_strategies()
 
-    for strat_name in strategies:
-        module = importlib.import_module(REGISTRY[strat_name])
+    if args.list:
+        print("Stratégies disponibles :")
+        for n in sorted(available):
+            print(f"  • {n:<10}  →  {available[n]}")
+        return
+
+    if not args.strategy:
+        parser.error("--strategy est requis (ou utilise --list)")
+    if not args.csv_dir:
+        parser.error("--csv-dir est requis")
+
+    if args.strategy == "all":
+        strategy_names = sorted(available)
+    elif args.strategy in available:
+        strategy_names = [args.strategy]
+    else:
+        parser.error(
+            f"Stratégie inconnue : '{args.strategy}'. "
+            f"Disponibles : {', '.join(sorted(available)) or '(aucune)'} ou 'all'"
+        )
+        return
+
+    tickers = [args.ticker] if args.ticker else list(INSTRUMENTS)
+
+    for strat_name in strategy_names:
+        module = load_strategy(strat_name)
         data   = {}
 
         for ticker in tickers:
             if ticker not in getattr(module, "TICKERS", tickers):
                 continue
-            csv_path = Path(args.csv_dir) / f"{ticker}_data_m15.csv"
+            tf_suffix = getattr(module, "CSV_TIMEFRAME", "m15")
+            csv_path = Path(args.csv_dir) / f"{ticker}_data_{tf_suffix}.csv"
             if not csv_path.exists():
                 print(f"  [!] {csv_path} introuvable")
                 continue
@@ -59,7 +84,13 @@ def main():
             print(f"  [!] Aucune donnée disponible pour {strat_name}")
             continue
 
-        optimize(module, data, is_end=args.is_end, oos_start=args.oos_start)
+        optimize(
+            module, data,
+            is_end             = args.is_end,
+            oos_start          = args.oos_start,
+            robustness_report  = not args.no_robustness,
+            output_dir         = args.output_dir,
+        )
 
 
 if __name__ == "__main__":

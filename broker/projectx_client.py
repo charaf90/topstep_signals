@@ -143,6 +143,38 @@ class ProjectXClient:
             return None
         return contracts[0]
 
+    def search_contracts(self, symbol: str,
+                         live: bool = True) -> List[Dict]:
+        """
+        Recherche TOUS les contrats matchant le texte (max 20 par l'API).
+        Utile pour récupérer la liste des échéances d'un même sous-jacent
+        ou pour vérifier le mapping symbole → contract_id.
+
+        Format des entrées :
+          {id, name, description, tickSize, tickValue,
+           activeContract, symbolId}
+        """
+        data = self._post("/api/Contract/search",
+                          {"searchText": symbol, "live": live})
+        return data.get("contracts", [])
+
+    def list_available_contracts(self, live: bool = False) -> List[Dict]:
+        """
+        Liste tous les contrats disponibles à la souscription (sim ou live).
+        Endpoint POST /api/Contract/available.
+
+        Réponse (per item) :
+          id          : "CON.F.US.MES.M26"
+          name        : "MESM6"  (root + month code)
+          description : "Micro E-mini S&P 500: June 2026"
+          tickSize    : float
+          tickValue   : float
+          activeContract : bool
+          symbolId    : "F.US.MES"
+        """
+        data = self._post("/api/Contract/available", {"live": live})
+        return data.get("contracts", [])
+
     # ─────────────────────────────────────────────────────────────────────
     # Données historiques — barres OHLCV
     # ─────────────────────────────────────────────────────────────────────

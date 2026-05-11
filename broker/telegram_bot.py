@@ -226,6 +226,111 @@ def fmt_session_report(date_str: str, placed_tags: Dict,
     )
 
 
+def fmt_risk(rm_status: Dict, now_ny: str,
+             user_daily_loss_max: float = 200.0,
+             topstep_daily_loss_max: float = 1000.0,
+             topstep_trailing_dd: float = 2000.0,
+             topstep_profit_target: float = 3000.0,
+             paused: bool = False) -> str:
+    """Détails des limites Topstep et utilisateur, slacks restants."""
+    cum     = rm_status.get("cum_pnl", 0.0)
+    peak    = rm_status.get("peak_pnl", 0.0)
+    day_pnl = rm_status.get("realized_day_pnl", 0.0)
+    slack_d = rm_status.get("slack_daily", 0.0)
+    slack_t = rm_status.get("slack_trail", 0.0)
+    target  = rm_status.get("target_remaining", topstep_profit_target)
+    streak  = rm_status.get("consec_loss_days", 0)
+    fills_d = rm_status.get("daily_fills_count", 0)
+    user_remaining = rm_status.get("user_daily_loss_remaining", user_daily_loss_max)
+
+    # Distance réelle au floor trailing
+    trail_floor = peak - topstep_trailing_dd
+    trail_distance = cum - trail_floor
+
+    sign_d = "+" if day_pnl >= 0 else ""
+    sign_c = "+" if cum >= 0 else ""
+
+    pause_line = ("\n⏸ <b>Bot en pause</b>"
+                  if paused else "")
+
+    return (
+        f"🛡 <b>Risk monitor</b>\n"
+        f"<i>{_esc(now_ny)}</i>\n"
+        f"{'─'*24}\n"
+        f"P&amp;L jour : <b>{sign_d}{day_pnl:.2f} $</b> | Cum : {sign_c}{cum:.2f} $\n"
+        f"Peak cum : {peak:+.2f} $ | Fills jour : {fills_d}\n"
+        f"{'─'*24}\n"
+        f"<b>Topstep</b>\n"
+        f"  Daily slack : {slack_d:.0f} $ / {topstep_daily_loss_max:.0f} $\n"
+        f"  Trailing slack : {slack_t:.0f} $ / {topstep_trailing_dd:.0f} $\n"
+        f"  Trail floor : {trail_floor:+.0f} $ (distance {trail_distance:+.0f} $)\n"
+        f"  Cible : {target:+.0f} $ / +{topstep_profit_target:.0f} $\n"
+        f"{'─'*24}\n"
+        f"<b>Plafonds utilisateur</b>\n"
+        f"  Perte jour restante : {user_remaining:.0f} $ / {user_daily_loss_max:.0f} $\n"
+        + (f"⚠️ Streak perdant : {streak} jour(s)\n" if streak > 0 else "")
+        + pause_line
+    )
+
+
+def fmt_trades(placed_tags: Dict, date_str: str, n_max: int = 10) -> str:
+    """Liste les N derniers trades du jour avec leur statut."""
+    today = [(t, v) for t, v in placed_tags.items()
+             if _is_today(v.get("placed_at", ""), date_str)]
+    if not today:
+        return f"📜 <b>Trades du {_esc(date_str)}</b>\n\nAucun trade aujourd'hui."
+
+    today.sort(key=lambda kv: kv[1].get("placed_at", ""), reverse=True)
+    today = today[:n_max]
+
+    lines = [f"📜 <b>Trades du {_esc(date_str)}</b> ({len(today)} affichés)"]
+    for tag, v in today:
+        strat = v.get("strategy", "?")
+        ticker = v.get("ticker", "?")
+        d = "🔼" if v.get("direction") == "long" else "🔽"
+        entry = v.get("entry", 0)
+        st = v.get("status", "?")
+        pnl = v.get("close_pnl")
+
+        if st == "CLOSED" and pnl is not None:
+            sign = "+" if pnl >= 0 else ""
+            icon = "✅" if pnl > 0 else ("❌" if pnl < 0 else "⏱")
+            tail = f"{icon} <b>{sign}{pnl:.2f} $</b>"
+        elif st == "ACTIVE":
+            tail = "🟢 active"
+        elif st == "PENDING":
+            tail = "⏳ pending"
+        else:
+            tail = f"<i>{_esc(st)}</i>"
+        lines.append(
+            f"  {d} {_esc(strat)} {_esc(ticker)} @ {entry:.2f} — {tail}"
+        )
+    return "\n".join(lines)
+
+
+def fmt_help() -> str:
+    return (
+        "📖 <b>Commandes disponibles</b>\n"
+        "/status — État du portefeuille (positions, P&amp;L, slacks)\n"
+        "/risk   — Détail des limites Topstep et plafonds utilisateur\n"
+        "/trades — Liste des trades du jour (10 derniers)\n"
+        "/pause  — Mettre en pause les nouveaux ordres\n"
+        "/resume — Reprendre les nouveaux ordres\n"
+        "/help   — Ce message\n\n"
+        "<i>Le sync broker reste actif même en pause — "
+        "les positions ouvertes continuent de TP/SL normalement.</i>"
+    )
+
+
+def fmt_pause_resume(paused: bool) -> str:
+    if paused:
+        return ("⏸ <b>Bot en pause</b>\n"
+                "Aucun nouvel ordre ne sera placé.\n"
+                "Les positions existantes continuent normalement.")
+    return ("▶️ <b>Bot repris</b>\n"
+            "Les nouveaux ordres seront placés au prochain tick.")
+
+
 def fmt_status(placed_tags: Dict, rm_status: Dict, now_ny: str) -> str:
     pending  = [(t, v) for t, v in placed_tags.items()
                 if v.get("status") == "PENDING"]
@@ -472,12 +577,24 @@ class TelegramBot:
     # ─────────────────────────────────────────────────────────────────────
 
     def check_commands(self, placed_tags: Dict, rm_status: Dict,
-                       now_ny: str) -> int:
+                       now_ny: str,
+                       on_pause=None,
+                       on_resume=None,
+                       paused: bool = False,
+                       today_str: str = "") -> int:
         """
-        Interroge getUpdates, traite les commandes /status reçues.
-        Retourne le nombre de commandes traitées.
+        Interroge getUpdates, traite les commandes reçues.
 
-        Appeler une fois par tick (non-bloquant).
+        Args:
+            placed_tags : état des ordres pour /status et /trades
+            rm_status   : snapshot du PortfolioRiskManager + broker
+            now_ny      : timestamp NY pour l'en-tête des messages
+            on_pause    : callback() appelé sur /pause (le runner persiste l'état)
+            on_resume   : callback() appelé sur /resume
+            paused      : booléen courant — affiché dans /risk et /status
+            today_str   : YYYY-MM-DD courant (pour /trades)
+
+        Retourne le nombre de commandes traitées. Appeler une fois par tick.
         """
         if not self.enabled or not self.level_commands:
             return 0
@@ -489,20 +606,57 @@ class TelegramBot:
             if not msg:
                 continue
             text = (msg.get("text") or "").strip().lower()
-            # On répond uniquement depuis le chat autorisé
             from_chat = str(msg.get("chat", {}).get("id", ""))
             if from_chat != self.chat_id:
                 _log.debug("Message d'un chat inconnu (%s) ignoré", from_chat)
                 continue
+
             if text.startswith("/status"):
                 self.send(fmt_status(placed_tags, rm_status, now_ny))
                 handled += 1
-            elif text.startswith("/help"):
-                self.send(
-                    "📖 <b>Commandes disponibles</b>\n"
-                    "/status — État instantané du portefeuille\n"
-                    "/help   — Ce message"
+
+            elif text.startswith("/risk"):
+                # Imports tardifs pour ne pas créer de cycle
+                from config import (
+                    USER_DAILY_LOSS_MAX,
+                    TOPSTEP_DAILY_LOSS_MAX,
+                    TOPSTEP_TRAILING_DD,
+                    TOPSTEP_PROFIT_TARGET,
                 )
+                self.send(fmt_risk(
+                    rm_status, now_ny,
+                    user_daily_loss_max    = float(USER_DAILY_LOSS_MAX),
+                    topstep_daily_loss_max = float(TOPSTEP_DAILY_LOSS_MAX),
+                    topstep_trailing_dd    = float(TOPSTEP_TRAILING_DD),
+                    topstep_profit_target  = float(TOPSTEP_PROFIT_TARGET),
+                    paused                 = paused,
+                ))
+                handled += 1
+
+            elif text.startswith("/trades"):
+                self.send(fmt_trades(placed_tags, today_str or now_ny[:10]))
+                handled += 1
+
+            elif text.startswith("/pause"):
+                if on_pause is not None and not paused:
+                    try:
+                        on_pause()
+                    except Exception as exc:
+                        _log.warning("Callback /pause échoué : %s", exc)
+                self.send(fmt_pause_resume(True))
+                handled += 1
+
+            elif text.startswith("/resume"):
+                if on_resume is not None and paused:
+                    try:
+                        on_resume()
+                    except Exception as exc:
+                        _log.warning("Callback /resume échoué : %s", exc)
+                self.send(fmt_pause_resume(False))
+                handled += 1
+
+            elif text.startswith("/help"):
+                self.send(fmt_help())
                 handled += 1
 
         return handled

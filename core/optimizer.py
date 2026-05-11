@@ -14,12 +14,15 @@ Usage :
 """
 
 import itertools
+import json
 import time
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
 from core import metrics as m
+from core import robustness as rb
 
 # ── Dates walk-forward (cohérentes sur toutes les stratégies) ───────────────
 IS_START  = "2024-12-01"
@@ -41,6 +44,8 @@ def optimize(
     per_ticker: bool = True,
     score_fn=None,
     n_bootstrap: int = 1000,
+    robustness_report: bool = True,
+    output_dir: Optional[str] = "output",
 ) -> dict:
     """
     Walk-forward IS/OOS sur toutes les combinaisons de PARAM_GRID.
@@ -165,7 +170,105 @@ def optimize(
 
     # Rapport global
     _print_global_report(strategy_id, best_per_ticker)
+
+    # Robustesse statistique (post-optimisation, all-in-one) — n'invalide pas
+    # le verdict de base, mais le rapport est complet : Bonferroni, PSR,
+    # Monte-Carlo, stress par régime, worst-case clustering.
+    if robustness_report and best_per_ticker:
+        try:
+            _run_and_dump_robustness(
+                strategy_id=strategy_id,
+                strategy=strategy,
+                data=data,
+                best_per_ticker=best_per_ticker,
+                oos_start=oos_start,
+                n_combos=len(combos),
+                output_dir=output_dir,
+            )
+        except Exception as exc:
+            print(f"  [!] Robustesse non générée : {exc}")
+
     return best_per_ticker
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Robustesse statistique (intégration core/robustness.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _run_and_dump_robustness(
+    strategy_id: str,
+    strategy,
+    data: dict,
+    best_per_ticker: dict,
+    oos_start: str,
+    n_combos: int,
+    output_dir: Optional[str],
+):
+    """
+    Recalcule les trades OOS portfolio (all tickers, params optimaux) et lance
+    le pipeline core/robustness.py. Exporte un JSON + un Markdown.
+    """
+    # Recalcul trades OOS portfolio avec les params optimaux par ticker
+    parts = []
+    for ticker, res in best_per_ticker.items():
+        if ticker not in data:
+            continue
+        df_15m, tf = data[ticker]
+        df_all = strategy.run_backtest(
+            df_15m, ticker, tf=tf, params=res["params"], topstep_guard=False
+        )
+        if len(df_all) == 0 or "date" not in df_all.columns:
+            continue
+        df_oos = df_all[df_all["date"] >= oos_start].copy()
+        if "ticker" not in df_oos.columns:
+            df_oos["ticker"] = ticker
+        parts.append(df_oos)
+
+    if not parts:
+        print("  [!] Aucun trade OOS — robustesse non calculée")
+        return
+
+    oos_combined = pd.concat(parts, ignore_index=True)
+    if "result" in oos_combined.columns:
+        oos_combined = oos_combined[oos_combined["result"] != "NOT_FILLED"]
+    if len(oos_combined) < 10:
+        print(f"  [!] OOS trop court ({len(oos_combined)} trades) — robustesse skipée")
+        return
+
+    # Limite Topstep restante : par défaut limite full ; si state/live_state.json
+    # est présent on tient compte du DD déjà consommé.
+    from config import TOPSTEP_TRAILING_DD
+    topstep_dd_remaining = float(TOPSTEP_TRAILING_DD)
+    try:
+        with open("state/live_state.json", encoding="utf-8") as f:
+            live_state = json.load(f)
+        rs = live_state.get("risk_state", {})
+        cum  = float(rs.get("cum_pnl",  0.0))
+        peak = float(rs.get("peak_pnl", 0.0))
+        dd_consumed = max(0.0, peak - cum)
+        topstep_dd_remaining = max(0.0, TOPSTEP_TRAILING_DD - dd_consumed)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    results = rb.run_full_robustness(
+        trades                 = oos_combined,
+        n_strategies_tested    = max(1, n_combos),
+        topstep_dd_remaining   = topstep_dd_remaining,
+        seed                   = 42,
+    )
+
+    md = rb.format_summary_markdown(results)
+    print()
+    print(md)
+
+    if output_dir:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"robustness_{strategy_id}.json").write_text(
+            json.dumps(results, indent=2, default=str), encoding="utf-8"
+        )
+        (out / f"robustness_{strategy_id}.md").write_text(md, encoding="utf-8")
+        print(f"  ✓ output/robustness_{strategy_id}.json + .md")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

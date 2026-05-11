@@ -9,3 +9,5 @@ analyse/data/
 analyse/charts/
 draft_fibo_50/output/
 state/
+logs/
+.claude/

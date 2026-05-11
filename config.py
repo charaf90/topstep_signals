@@ -23,6 +23,20 @@ INSTRUMENTS = {
         "tick_size": 1.0,
         "name": "Micro E-mini Dow Jones",
     },
+    # Ajoutés pour tests sur autres classes d'actifs (data_fetcher ProjectX).
+    # USAGE RECHERCHE uniquement — pas de promotion live tant que pas validés OOS.
+    "MGC1": {
+        # Micro Gold : tickSize 0.10, tickValue $1.00 → 10 ticks/point × $1 = $10/point
+        "dollar_per_point": 10.0,
+        "tick_size": 0.10,
+        "name": "Micro Gold",
+    },
+    "MCLE1": {
+        # Micro WTI Crude : tickSize 0.01, tickValue $1.00 → 100 ticks/point × $1 = $100/point
+        "dollar_per_point": 100.0,
+        "tick_size": 0.01,
+        "name": "Micro WTI Crude Oil",
+    },
 }
 
 # ==============================================================================
@@ -32,6 +46,61 @@ INSTRUMENTS = {
 RISK_PER_TRADE_USD   = 100
 MAX_TRADES_PER_DAY   = 2       # par actif (OPR)
 SL_BUFFER_TICKS      = 2
+
+# ==============================================================================
+# FRICTIONS DE MARCHÉ (slippage + commissions)
+# ==============================================================================
+# Slippage par actif (en ticks) — appliqué à l'entrée ET à la sortie côté
+# core/robustness.py et templates strategy_template.md. Calibré sur l'observation
+# des fills réels TopstepX :
+#   • MES1 : tick 0.25, spread typique 1 tick → 1 tick de glissement
+#   • NQ1  : tick 0.25, spread plus mince mais bougies M15 plus volatiles → 2 ticks
+#   • YM1  : tick 1.0, spread serré → 1 tick
+SLIPPAGE_TICKS_PER_TICKER = {
+    "MES1":  1, "NQ1": 2, "YM1": 1,
+    # Tests recherche — calibration prudente (par défaut 1 tick) :
+    "MGC1":  1,   # Gold micro : spread typique 1 tick
+    "MCLE1": 2,   # Crude micro : ticks fins (0.01) + volatilité → 2 ticks
+}
+
+# Commission round-trip par contrat (entrée + sortie) — Topstep TopstepX micro
+COMMISSION_RT_PER_CONTRACT = 1.40   # $/contrat aller-retour
+
+# ==============================================================================
+# CALENDRIER MACRO (jours sensibles : FOMC, CPI, NFP, JOLTS, PCE)
+# ==============================================================================
+# Format : ["YYYY-MM-DD", ...] — utilisé par core/robustness.py pour le stress
+# test "macro_day" et par les wrappers `strategies/*.py` qui exposent la
+# colonne `is_macro_day` (cf. strategy_template.md).
+# À maintenir manuellement : pas d'ingestion automatisée pour l'instant.
+MACRO_EVENT_DATES = [
+    # 2025 ───────────────────────────────────────────────────────────────────
+    "2025-10-08",  # FOMC minutes (sept)
+    "2025-10-15",  # CPI sept
+    "2025-10-29",  # FOMC
+    "2025-11-07",  # NFP oct
+    "2025-11-13",  # CPI oct
+    "2025-12-05",  # NFP nov
+    "2025-12-10",  # CPI nov
+    "2025-12-17",  # FOMC
+    # 2026 ───────────────────────────────────────────────────────────────────
+    "2026-01-09",  # NFP déc
+    "2026-01-14",  # CPI déc
+    "2026-01-28",  # FOMC
+    "2026-02-06",  # NFP janv
+    "2026-02-11",  # CPI janv
+    "2026-03-06",  # NFP fév
+    "2026-03-12",  # CPI fév
+    "2026-03-18",  # FOMC
+    "2026-04-03",  # NFP mar
+    "2026-04-10",  # CPI mar
+    "2026-04-30",  # FOMC
+    "2026-05-02",  # NFP avr
+    "2026-05-13",  # CPI avr
+    "2026-06-05",  # NFP mai
+    "2026-06-10",  # CPI mai
+    "2026-06-17",  # FOMC
+]
 
 # Horaires de session (UTC)
 CUTOFF_HOUR_UTC      = 11      # coupure analyse pré-marché
@@ -248,71 +317,6 @@ FIB_TRIGGER_FILTERS_PER_TICKER = {
 FIB_STRATEGY_VERSION = "fib-v3"
 
 # ==============================================================================
-# STRATÉGIE SMC (Smart Money Concepts) — smc-v1
-# ==============================================================================
-# Inspirée de LuxAlgo SMC. Logique :
-#   1. Pivot swing (right-side, size configurable)
-#   2. CHoCH = retournement de structure (tendance inverse → cassure swing)
-#   3. Order Block = barre avec min parsedLow (long) ou max parsedHigh (short)
-#      dans la plage [pivot source → bar CHoCH], filtré volatilité
-#   4. Ordre LIMIT à entry_pct dans l'OB, SL structurel, TP = ATR × mult
-#   5. Killzone NY Open uniquement (9h30–11h00 NY)
-
-SMC_TIMEZONE = "America/New_York"
-
-# Killzone de production (défaut)
-SMC_KILLZONE_NY = (9, 30, 11, 0)
-
-# Toutes les killzones disponibles — (h_start, m_start, h_end, m_end) heure NY
-SMC_ALL_KILLZONES = {
-    "london_open":  (2,  0,  5,  0),   # ouverture session européenne
-    "ny_premarket": (7,  0,  9, 30),   # pré-marché NY
-    "ny_open":      (9, 30, 11,  0),   # cash open NY
-    "london_close": (10, 0, 12,  0),   # chevauchement clôture London
-    "ny_midday":    (11, 0, 13,  0),   # déjeuner NY
-    "ny_afternoon": (13, 0, 16,  0),   # après-midi NY
-}
-
-# Taille des fenêtres pivot (barres)
-SMC_SWING_SIZE    = 50   # structure swing (LuxAlgo défaut)
-SMC_INTERNAL_SIZE = 5    # structure interne
-
-# Entrée dans l'OB : 0.0 = bord extérieur, 0.5 = milieu, 1.0 = bord intérieur
-SMC_ENTRY_PCT = 0.5
-
-# SL : au-delà de l'OB extreme + sl_atr_mult × ATR(14)
-# Le buffer ATR remplace le buffer fixe en ticks — s'adapte à la volatilité
-SMC_SL_ATR_MULT_PER_TICKER = {"MES1": 0.5, "NQ1": 0.5, "YM1": 0.5}
-
-# TP : multiplicateur ATR par ticker (calibré walk-forward)
-SMC_TP_ATR_MULT_PER_TICKER = {"MES1": 2.0, "NQ1": 2.0, "YM1": 2.0}
-
-# ATR pour le TP
-SMC_ATR_PERIOD = 14
-
-# Filtre volatilité OB (méthode LuxAlgo) :
-# bougie avec range ≥ SMC_OB_VOL_MULT × ATR(SMC_OB_VOL_ATR_PERIOD) → inversée
-SMC_OB_VOL_ATR_PERIOD = 200
-SMC_OB_VOL_MULT       = 2.0
-
-# Vie de l'ordre
-SMC_ORDER_TIMEOUT_BARS = 8     # annulé après 8 barres = 2h sans fill
-SMC_SESSION_END_NY     = (16, 30)
-SMC_MAX_TRADES_PER_DAY = 2
-
-# Type de signal : "choch" | "bos" | "both"
-SMC_SIGNAL_TYPE = "both"
-
-# Niveau de structure : "swing" | "internal" | "both"
-# Analyse exploratoire → swing inutilisable (0 TP), internal uniquement
-SMC_STRUCTURE_LEVEL = "internal"
-
-# Durée de validité d'un CHoCH (barres max depuis l'événement)
-SMC_CHOCH_LOOKBACK_BARS = 30
-
-SMC_STRATEGY_VERSION = "smc-v1"
-
-# ==============================================================================
 # BROKER PROJECTX / TOPSTEPX
 # ==============================================================================
 # Mapping tickers internes → symboles ProjectX (recherche de contrats).
@@ -378,3 +382,203 @@ BACKTEST_CHART_CONTEXT_AFTER = 20    # Bougies après la sortie
 STRATEGY_VERSION = "v5.2"             # tag de la stratégie courante
 ANALYSIS_CHARTS_ENABLED = True        # générer ces graphiques par défaut en backtest
 ANALYSIS_CHART_CONTEXT_BEFORE = 200   # bougies 15m avant cutoff (cf. spec utilisateur)
+
+# ==============================================================================
+# STRATÉGIE VOLUME PROFILE CONFLUENCE (`vpc-v1`)
+# ==============================================================================
+# Concept :
+#   Approximation du Volume Profile journalier (POC, VAH, VAL, HVN, LVN) à
+#   partir des barres M15 de la session cash NY veille (9h30-16h NY). Trois
+#   setups hiérarchiques sont testés à chaque barre de la session courante :
+#
+#     1) OPEN_OUTSIDE  — l'open du jour est hors du Value Area veille (gap).
+#                        Entrée market dans le sens du gap, SL au bord du
+#                        Value Area opposé + buffer, TP = 2 × SL.
+#     2) BREAKOUT_RETEST — cassure de VAH/VAL sur volume confirmé,
+#                          retest du niveau pour entrée limit.
+#     3) HVN_REBOUND   — touche d'un HVN avec bougie de rejet, entrée à
+#                        l'extrême du HVN, SL au-delà du HVN, TP vers POC.
+#
+# Filtres communs (PHASE 1) :
+#   - EMA20 > EMA50 pour long (inverse pour short) — sauf setup 1 (gap pur)
+#   - Volume > VOL_MULT_THRESHOLD × moyenne(20) sur la bougie de déclenchement
+#   - Fenêtre NY = US_HOUR_START_NY → US_HOUR_END_NY (cash session)
+#   - YM1 désactivé jusqu'à preuve OOS (cohérence avec OPR)
+#
+# Voir strategies/vpc.py — c'est un module de RECHERCHE pur (pas live).
+
+VPC_ENABLED = True
+
+# Tickers actifs (YM1 désactivé jusqu'à preuve OOS — cohérence portfolio)
+VPC_TICKERS = ["MES1", "NQ1"]
+
+# Fenêtre US cash NY (heures NY, DST-aware via zoneinfo)
+VPC_HOUR_START_NY = 9    # début 9h30 NY (la condition est >= 9, et minute=30 testé séparément)
+VPC_HOUR_END_NY   = 16   # fin 16h00 NY (forçage close à 16h00)
+VPC_OPEN_HOUR_NY  = 9    # heure de la bougie "open NY" pour test gap
+VPC_OPEN_MIN_NY   = 30   # minute exacte de l'open NY (9:30)
+
+# Construction du Value Area / Volume Profile (sur veille)
+# Le profil veille est construit sur la session cash 9h30-16h00 NY veille.
+# Buckets de prix de taille BUCKET_TICKS × tick_size par actif.
+VPC_PROFILE_BUCKET_TICKS  = 4         # 4 ticks par bucket (MES: 1pt, NQ: 1pt, YM: 4pts)
+VPC_VALUE_AREA_PCT        = 0.60      # walk-forward v4 : VA 60 % (optimal MES + NQ)
+VPC_HVN_VOL_MULT          = 1.5       # bucket "HVN" si volume ≥ 1.5 × moyenne
+VPC_LVN_VOL_MULT          = 0.5       # bucket "LVN" si volume ≤ 0.5 × moyenne
+
+# Filtre volume sur bougie de déclenchement
+# Note: vol_mult_threshold optimal diffère par ticker (MES=1.0, NQ=2.0)
+# La valeur ci-dessous est utilisée comme défaut si params=None passé à run_backtest.
+# L'optimizer walk-forward applique le bon vol_mult par ticker au moment de l'eval.
+VPC_VOL_AVG_WINDOW        = 20        # moyenne mobile 20 barres
+VPC_VOL_MULT_THRESHOLD    = 1.5       # volume bougie > 1.5 × moyenne (défaut)
+
+# Filtre tendance
+VPC_EMA_FAST_PERIOD       = 20
+VPC_EMA_SLOW_PERIOD       = 50
+
+# ATR pour SL/TP (multiplicateurs)
+VPC_ATR_PERIOD            = 14
+
+# Multiplicateurs SL/TP par actif (calibrés walk-forward)
+# Valeurs walk-forward v4 (IS déc 2024 → sept 2025, OOS oct 2025 → mars 2026)
+# MES1 : sl=2.5  tp=4.0  vol_thr=1.0  va_pct=0.6  → IS PF 1.74 / OOS PF 1.89
+# NQ1  : sl=2.0  tp=4.0  vol_thr=2.0  va_pct=0.6  → IS PF 2.55 / OOS PF 1.50
+VPC_SL_ATR_MULT_PER_TICKER = {"MES1": 2.5, "NQ1": 2.0, "YM1": 2.0}
+VPC_TP_ATR_MULT_PER_TICKER = {"MES1": 4.0, "NQ1": 4.0, "YM1": 4.0}
+
+# Buffer ticks au-delà du niveau de SL (protection front-run / stop hunt)
+VPC_SL_BUFFER_TICKS       = 2
+
+# Gestion d'ordre / position
+VPC_ORDER_TIMEOUT_BARS    = 2         # vie de l'ordre limite (30 min) avant annulation
+VPC_MAX_HOLD_BARS         = 24        # close forcé après ~6h ou fin session NY (le plus tôt)
+VPC_MAX_TRADES_PER_DAY    = 2         # cohérence portfolio (= MAX_TRADES_PER_DAY)
+
+# Setups activés (peuvent être désactivés individuellement pour ablations)
+# vpc-v1 (initial)   : 3 setups → P&L portfolio -$12 003, PF 0.76, BS 2.7 %
+# vpc-v2             : HVN_REBOUND seul + filtres → 4 trades, trop rare
+# vpc-v3 (fade gap)  : OPEN_OUTSIDE inversé (gap fade vers VA) + HVN_REBOUND
+VPC_ENABLE_OPEN_OUTSIDE    = True
+VPC_ENABLE_BREAKOUT_RETEST = False
+VPC_ENABLE_HVN_REBOUND     = True
+
+# vpc-v3 : OPEN_OUTSIDE en mode FADE (inversé)
+# Hypothèse : un gap qui ouvre hors VA veille a tendance à se refermer vers VA
+# Si vrai → WR doit passer de ~40% à ~60% sur ce setup
+VPC_OPEN_OUTSIDE_FADE      = True
+# Filtre additionnel : le gap doit être ≥ 0.5 × ATR pour être tradable
+# (sinon = pas de vraie ouverture hors profil)
+VPC_OPEN_OUTSIDE_MIN_GAP_ATR = 0.3
+
+# vpc-v4 : exclusion jours macro + filtre ADX modéré (gap fade ne marche pas
+# en trending pur)
+VPC_EXCLUDE_MACRO_DAYS     = True
+VPC_OPEN_OUTSIDE_ADX_MAX   = 35.0      # gap fade évite trending fort (gap continue souvent)
+
+# Filtres supplémentaires pour HVN_REBOUND (vpc-v2/v3)
+VPC_HVN_ADX_MIN            = 18.0      # ADX > 18 (relâché un peu)
+VPC_HVN_HOUR_START_NY      = 10        # restriction matin (10h NY)
+VPC_HVN_HOUR_END_NY        = 15        # restriction fin (15h NY → avant clôture)
+VPC_HVN_MIN_RR             = 1.2       # rejette setups où le TP/SL < 1.2
+
+# Tag de version (à bumper à chaque changement structurel)
+VPC_STRATEGY_VERSION       = "vpc-v4"
+
+# ==============================================================================
+# STRATÉGIE ARF (Asia Range Failure) — arf-v1
+# ==============================================================================
+# Concept : pendant la session asiatique (19h-02h NY), un range se forme.
+# Pendant Londres (02h-05h NY), on attend une fausse cassure : cassure du
+# Asia_High puis retour sous Asia_High → ordre limit SHORT au niveau Asia_High
+# (symétrique long sur Asia_Low). SL au-delà du range + buffer ATR. TP à un
+# multiple R:R configurable.
+#
+# Edge : les stops mécaniques retail/momentum sont placés juste au-delà des
+# extrêmes asiatiques. La session asiatique étant peu liquide, les cassures
+# manquent souvent de suivi → retour dans le range = position contrarian
+# rentable.
+#
+# Falsification : PF OOS < 1.0 sur 60 trades consécutifs en live.
+# ──────────────────────────────────────────────────────────────────────────────
+
+ARF_ENABLED                  = False  # désactivé jusqu'à validation OOS
+
+# Tickers — V1 limitée aux indices US (CSV TradingView, déc24-mars26).
+# Gold (MGC) et Oil (MCLE) écartés faute d'historique suffisant (< 60 jours).
+ARF_TICKERS                  = ["MES1", "NQ1", "YM1"]
+# Note : MGC1 et MCLE1 ont été testés en mai 2026 — résultat ❌ structurel.
+# Sur le Gold, 1 seul signal en 49 jours ; sur Crude, 4 signaux en 28 jours,
+# PF=0.55. Sur ces actifs, les cassures du range asiatique sont des
+# CONTINUATIONS, pas des faux breakouts (pas de "retour dans le range").
+# Cf. rapport_arf-v4.md § 10 pour le détail.
+
+# Fenêtre de session asiatique (heure NY, DST-aware) — Tokyo+Sydney+early HK.
+# 19h NY veille → 02h NY courant = ~7 h de range.
+ARF_ASIA_HOUR_START_NY       = 19   # heure de début (veille NY)
+ARF_ASIA_HOUR_END_NY         = 2    # heure de fin exclusive (courant NY)
+
+# Fenêtre de trading Londres (heure NY, DST-aware).
+# 02h NY → 05h NY = session londonienne typique avant overlap NY.
+ARF_LONDON_HOUR_START_NY     = 2
+ARF_LONDON_HOUR_END_NY       = 5
+
+# Buffer pour valider la fausse cassure (= retour) et le placement du SL.
+# Exprimés en multiples d'ATR(14) → adaptatif à la volatilité.
+ARF_SL_BUFFER_ATR_PER_TICKER     = {"MES1": 1.20, "NQ1": 1.20, "YM1": 1.20}
+ARF_ENTRY_BUFFER_ATR_PER_TICKER  = {"MES1": 0.10, "NQ1": 0.10, "YM1": 0.10}
+
+# TP en multiple R:R (TP = entry ± rr * sl_dist)
+ARF_TP_RR_PER_TICKER         = {"MES1": 2.0, "NQ1": 2.0, "YM1": 2.0}
+
+# v3 : mode d'entrée
+#   "limit_level"   : ordre limit au niveau Asia_High/Low (v1/v2)
+#   "market_return" : entrée market au close de la barre de retour confirmée
+ARF_ENTRY_MODE               = "market_return"
+
+# v3 : TP en fraction du range vers l'opposé (mode market_return)
+#   target_pct=0.5 → TP = 50% retracement vers l'autre côté du range
+#   target_pct=1.0 → TP = côté opposé du range
+ARF_TP_RANGE_PCT             = 0.5
+
+# v4 : ATR percentile filter (skip si ATR trop faible ou trop fort)
+ARF_ATR_PCT_MIN              = 0.10   # skip si ATR < P10 (range trop calme)
+ARF_ATR_PCT_MAX              = 0.90   # skip si ATR > P90 (vol extrême)
+
+# Filtres de range pour qualité de setup.
+# - min_range_atr : range asiatique trop étroit = bruit, false breakouts triviaux
+# - max_range_atr : range asiatique trop large = news overnight, R:R défavorable
+ARF_MIN_RANGE_ATR_PER_TICKER = {"MES1": 1.0, "NQ1": 1.0, "YM1": 1.0}
+ARF_MAX_RANGE_ATR_PER_TICKER = {"MES1": 4.0, "NQ1": 4.0, "YM1": 4.0}
+
+# ATR period (sur barres 15m)
+ARF_ATR_PERIOD               = 14
+
+# Vie de l'ordre limit (en barres M15) — après ce délai, ordre annulé
+ARF_ORDER_TIMEOUT_BARS       = 6   # = 1h30 d'attente max pour fill
+
+# Durée max de hold (en barres M15) — fermeture forcée après ce délai
+ARF_MAX_HOLD_BARS            = 16  # = 4h max → couvre fin Londres + early NY
+
+# Max 1 trade par jour par actif (1 setup directionnel par session asiatique)
+ARF_MAX_TRADES_PER_DAY       = 1
+
+# Buffer plancher en ticks (au cas où ATR est très faible)
+ARF_SL_BUFFER_TICKS_FLOOR    = 2
+
+# Exclusion jours macro US (FOMC/CPI/NFP perturbent Londres)
+ARF_EXCLUDE_MACRO_DAYS       = True
+
+# ── v2 : filtres anti-trending + anti-whipsaw + confirmation forte ──
+# ADX max sur la barre courante (au-dessus = trending fort → skip)
+ARF_ADX_MAX                  = 25.0
+
+# Skip si DOUBLE cassure détectée dans la session (whipsaw → range mort)
+ARF_SKIP_DOUBLE_BREAKOUT     = True
+
+# Force du retour : la barre prev doit clôturer à AU MOINS ce multiple d'ATR
+# DANS le range (pour valider que le rejet de la cassure est franc)
+ARF_RETURN_CONFIRM_ATR       = 0.10
+
+# Tag de version
+ARF_STRATEGY_VERSION         = "arf-v4"

@@ -61,8 +61,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Passer des ordres réels (sinon dry-run)")
     p.add_argument("--ticker",   type=str, default=None,
                    help="Restreindre à un seul actif (NQ1, MES1, YM1)")
-    p.add_argument("--strategy", type=str, default="opr_fib",
-                   choices=["opr", "fib", "opr_fib"],
+    p.add_argument("--strategy", type=str, default="opr_fib_vpc",
+                   choices=["opr", "fib", "vpc", "opr_fib", "opr_fib_vpc"],
                    help="Stratégie(s) à exécuter")
     p.add_argument("--state",    type=str, default=LIVE_STATE_FILE,
                    help="Chemin du fichier d'état JSON")
@@ -177,14 +177,20 @@ def main():
 
         # Attente jusqu'à la prochaine bougie M15 (:01, :16, :31, :46)
         # Pendant l'attente, on poll Telegram toutes les 30 s pour répondre
-        # immédiatement aux commandes /status sans attendre le prochain tick.
+        # immédiatement aux commandes (/status, /risk, /pause…) sans attendre
+        # le prochain tick.
         import datetime as _dt
         import zoneinfo as _zi
         _NY = _zi.ZoneInfo("America/New_York")
 
-        now = _dt.datetime.utcnow()
+        now = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
         minutes_to_next = 15 - (now.minute % 15)
-        seconds_offset  = 60  # 60 s après la clôture de la bougie
+        # vpc-v4 production : signal capté le plus tôt après la clôture M15
+        # pour minimiser le délai entre fermeture de bougie et placement d'ordre.
+        # 15 s suffit pour que TopstepX publie la barre fermée (vérifié sur les
+        # ticks récents). Si la barre attendue n'est pas dans le DF, le tick
+        # suivant la rattrapera (idempotence par custom_tag).
+        seconds_offset = 15
         wait = minutes_to_next * 60 - now.second + seconds_offset
         log.info("Prochaine exécution dans %d s", wait)
 
@@ -196,7 +202,10 @@ def main():
             elapsed += sleep_chunk
             if elapsed < wait:
                 try:
-                    now_utc_poll = _dt.datetime.utcnow()
+                    now_utc_poll = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+                    today_str    = (_dt.datetime.now(_dt.timezone.utc)
+                                    .astimezone(_NY)
+                                    .date().isoformat())
                     now_ny_str   = (_dt.datetime.now(_dt.timezone.utc)
                                     .astimezone(_NY)
                                     .strftime("%Y-%m-%d %H:%M NY"))
@@ -210,6 +219,10 @@ def main():
                         placed_tags = runner.state.get("placed_tags", {}),
                         rm_status   = rm_snap,
                         now_ny      = now_ny_str,
+                        on_pause    = lambda: runner.set_paused(True),
+                        on_resume   = lambda: runner.set_paused(False),
+                        paused      = runner.is_paused(),
+                        today_str   = today_str,
                     )
                 except Exception as exc:
                     log.debug("Poll Telegram entre ticks : %s", exc)

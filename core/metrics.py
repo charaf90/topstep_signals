@@ -158,6 +158,53 @@ def verdict(oos_stats: dict, oos_topstep: dict) -> tuple[str, str]:
     return "🔴", "REJET"
 
 
+def augment_verdict(base_verdict: str, robustness: dict) -> tuple[str, list[str]]:
+    """
+    Affine le verdict 🟢🟡🔴 à la lumière des analyses de core/robustness.py.
+
+    Rétrograde d'un cran si au moins un drapeau rouge est levé :
+      - bootstrap PF observé < seuil corrigé Bonferroni
+      - PSR(0) < 80 %
+      - probabilité que le DD MC dépasse la limite Topstep > 5 %
+      - ≥ 2 régimes en ❌
+
+    Retourne (verdict_ajusté, drapeaux). Si robustness est vide ou en erreur,
+    base_verdict est renvoyé inchangé.
+    """
+    if not robustness:
+        return base_verdict, []
+
+    flags = []
+
+    bp = robustness.get("bootstrap_pf", {})
+    bf = robustness.get("bonferroni", {})
+    if "error" not in bp and bf:
+        if bp.get("p_above_threshold", 100.0) < bf.get("bootstrap_threshold_pct", 0.0):
+            flags.append(
+                f"bootstrap {bp['p_above_threshold']:.1f}% < "
+                f"seuil Bonferroni {bf['bootstrap_threshold_pct']:.1f}%"
+            )
+
+    psr = robustness.get("psr", {})
+    if "error" not in psr and psr.get("psr_pct", 100.0) < 80.0:
+        flags.append(f"PSR(0) {psr['psr_pct']:.1f}% < 80%")
+
+    mc = robustness.get("monte_carlo_dd", {})
+    if "error" not in mc and mc.get("dd_topstep_breach_pct", 0.0) > 5.0:
+        flags.append(f"P(DD > Topstep) {mc['dd_topstep_breach_pct']:.1f}% > 5%")
+
+    regime_fails = sum(1 for r in robustness.get("regime_stress", [])
+                       if r.get("verdict") == "❌")
+    if regime_fails >= 2:
+        flags.append(f"{regime_fails} régimes en échec")
+
+    if not flags:
+        return base_verdict, []
+
+    downgrade = {"🟢": "🟡", "🟡": "🔴", "🔴": "🔴"}
+    return downgrade.get(base_verdict, base_verdict), flags
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Affichage
 # ══════════════════════════════════════════════════════════════════════════════

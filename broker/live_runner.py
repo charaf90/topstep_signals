@@ -32,6 +32,7 @@ from config import (
     INSTRUMENTS, RISK_PER_TRADE_USD,
     OPR_ENABLED, OPR_TIMEZONE, OPR_SESSION_END,
     FIB_ENABLED, FIB_MAX_HOLD_BARS,
+    VPC_ENABLED, VPC_TICKERS, VPC_MAX_HOLD_BARS,
     PROJECTX_SYMBOLS, PROJECTX_BARS_WARMUP, PROJECTX_LIVE_MODE,
     LIVE_STATE_FILE,
     YM1_ENABLED,
@@ -40,6 +41,7 @@ from config import (
 )
 from core.opr import run_opr_day
 from core.strategy_fib import get_fib_live_signal
+from core.vpc import get_vpc_live_signal
 from core.risk_portfolio import PortfolioRiskManager, _Order
 from core.signal_selector import filter_correlated_signals
 from core.event_logger import EventLogger
@@ -145,6 +147,27 @@ def _opr_session_over(now_utc: datetime) -> bool:
     return (now_ny.hour, now_ny.minute) >= (h, m)
 
 
+def _vpc_session_over(now_utc: datetime) -> bool:
+    """Vrai si l'heure NY courante est ≥ 16h00 NY (fin session cash VPC)."""
+    now_ny = now_utc.replace(tzinfo=timezone.utc).astimezone(_NY_TZ)
+    return (now_ny.hour, now_ny.minute) >= (16, 0)
+
+
+def _is_trading_session(now_utc: datetime) -> bool:
+    """
+    Vrai si les futures CME US sont potentiellement ouverts.
+    Faux le samedi (toute la journée) et le dimanche avant 18h NY
+    (réouverture du marché à 18h00 NY le dimanche soir).
+    """
+    now_ny  = now_utc.replace(tzinfo=timezone.utc).astimezone(_NY_TZ)
+    weekday = now_ny.weekday()   # 0=lundi … 5=samedi, 6=dimanche
+    if weekday == 5:             # samedi : fermé toute la journée
+        return False
+    if weekday == 6:             # dimanche : ouverture à 18h00 NY
+        return (now_ny.hour, now_ny.minute) >= (18, 0)
+    return True
+
+
 def _current_day_ny(now_utc: datetime) -> date:
     return now_utc.replace(tzinfo=timezone.utc).astimezone(_NY_TZ).date()
 
@@ -197,6 +220,10 @@ class SessionRunner:
         tickers = ["NQ1", "MES1"]
         if YM1_ENABLED:
             tickers.append("YM1")
+        # On dédup'/préserve l'ordre : tickers union VPC_TICKERS
+        for t in (VPC_TICKERS or []):
+            if t not in tickers:
+                tickers.append(t)
         return tickers
 
     # ─────────────────────────────────────────────────────────────────────
@@ -225,8 +252,26 @@ class SessionRunner:
             "session_report_sent":   None,   # date YYYY-MM-DD du dernier rapport envoyé
             "session_start_notified":None,   # date YYYY-MM-DD du dernier start notifié
             "telegram_update_id":    -1,
+            "paused":                False,  # commandé via Telegram /pause /resume
         }
         self.rm = PortfolioRiskManager()
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Pause / resume (persistant via state)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def is_paused(self) -> bool:
+        return bool(self.state.get("paused", False))
+
+    def set_paused(self, paused: bool):
+        """Met à jour l'état de pause et persiste immédiatement."""
+        self.state["paused"] = bool(paused)
+        try:
+            self._save_state()
+        except Exception as exc:
+            _log.warning("Échec persistance pause=%s : %s", paused, exc)
+        _log.info("Bot %s par commande Telegram", "EN PAUSE" if paused else "REPRIS")
+        _evlog._write("SYSTEM", f"Bot {'pausé' if paused else 'repris'} via Telegram")
 
     def _save_state(self):
         """Persiste l'état dans le fichier JSON."""
@@ -372,6 +417,28 @@ class SessionRunner:
         imp_key = live_state["impulse_key"]
         today = _current_day_ny(datetime.utcnow()).strftime("%Y%m%d")
         tag = f"FIB_{ticker}_{today}_{imp_key}"
+        return {**sig, "tag": tag}
+
+    def _get_vpc_signal(self, df: pd.DataFrame, ticker: str) -> Optional[Dict]:
+        """
+        Appelle get_vpc_live_signal et retourne le signal si état PENDING.
+        Le ticker est filtré par VPC_TICKERS côté core/vpc.py.
+        """
+        if not VPC_ENABLED:
+            return None
+        if ticker not in VPC_TICKERS:
+            return None
+
+        live_state = get_vpc_live_signal(df, ticker)
+        if live_state is None:
+            return None
+        if live_state["state"] != "PENDING":
+            return None
+
+        sig       = live_state["signal"]
+        setup_key = live_state["setup_key"]
+        # setup_key déjà préfixé YYYYMMDD → tag : VPC_NQ1_20260511_OPEN_OUTSIDE_long
+        tag = f"VPC_{ticker}_{setup_key}"
         return {**sig, "tag": tag}
 
     # ─────────────────────────────────────────────────────────────────────
@@ -612,15 +679,18 @@ class SessionRunner:
             if status == _ST_ACTIVE:
                 cid = info["contract_id"]
                 if cid in pos_by_cid:
-                    if (info.get("strategy") == "FIB"
-                            and info.get("fill_time")):
+                    strat   = info.get("strategy")
+                    ft_iso  = info.get("fill_time")
+                    if ft_iso and strat in ("FIB", "VPC"):
                         fill_dt = datetime.fromisoformat(
-                            info["fill_time"].replace("Z", "+00:00")
+                            ft_iso.replace("Z", "+00:00")
                         ).replace(tzinfo=None)
                         elapsed_bars = int(
                             (now_utc - fill_dt).total_seconds() / 900
                         )
-                        if elapsed_bars >= FIB_MAX_HOLD_BARS:
+                        max_hold = (FIB_MAX_HOLD_BARS if strat == "FIB"
+                                    else VPC_MAX_HOLD_BARS)
+                        if elapsed_bars >= max_hold:
                             self._close_position_market(tag, info, now_utc)
                     continue
 
@@ -776,6 +846,25 @@ class SessionRunner:
         # ── 1. Chargement état ────────────────────────────────────────────
         self._load_state()
 
+        # ── 1b. Vérification marché ouvert ────────────────────────────────
+        if not _is_trading_session(now_utc):
+            now_ny_str = (now_utc.replace(tzinfo=timezone.utc)
+                          .astimezone(_NY_TZ)
+                          .strftime("%Y-%m-%d %H:%M NY"))
+            _log.info("Marché fermé (week-end) — tick ignoré (%s)", now_ny_str)
+            # Telegram reste actif pour répondre aux /status sans trader
+            self.tg.check_commands(
+                placed_tags = self.state.get("placed_tags", {}),
+                rm_status   = self.rm.status(),
+                now_ny      = now_ny_str,
+                on_pause    = lambda: self.set_paused(True),
+                on_resume   = lambda: self.set_paused(False),
+                paused      = self.is_paused(),
+                today_str   = _current_day_ny(now_utc).isoformat(),
+            )
+            self._save_state()
+            return
+
         # ── 2. Découverte contrats front-month ────────────────────────────
         try:
             self._ensure_contracts()
@@ -804,12 +893,25 @@ class SessionRunner:
             placed_tags = self.state.get("placed_tags", {}),
             rm_status   = rm_snap,
             now_ny      = now_ny_str,
+            on_pause    = lambda: self.set_paused(True),
+            on_resume   = lambda: self.set_paused(False),
+            paused      = self.is_paused(),
+            today_str   = today_str,
         )
 
-        # ── 5. Fin de session OPR ? ───────────────────────────────────────
+        # ── 5a. Fin de session VPC (16h00 NY — avant OPR) ─────────────────
+        if VPC_ENABLED and _vpc_session_over(now_utc) and not _opr_session_over(now_utc):
+            _log.info("Session VPC terminée (16h00 NY) — clôture VPC en cours")
+            self._close_all_pending_and_active(strategy_filter="VPC",
+                                               now_utc=now_utc)
+
+        # ── 5b. Fin de session OPR ? ──────────────────────────────────────
         if _opr_session_over(now_utc):
             _log.info("Session OPR terminée (16h30 NY) — clôture en cours")
             self._close_all_pending_and_active(strategy_filter="OPR",
+                                               now_utc=now_utc)
+            # Sécurité : si VPC n'a pas été nettoyé en 5a (race condition)
+            self._close_all_pending_and_active(strategy_filter="VPC",
                                                now_utc=now_utc)
             if self.state.get("session_report_sent") != today_str:
                 snap        = self.rm.status()
@@ -891,13 +993,18 @@ class SessionRunner:
                     f"fetch_bars {ticker}", "Aucune barre reçue")
                 continue
 
-            if self.strategy in ("opr_fib", "opr") and OPR_ENABLED:
+            if self.strategy in ("opr_fib", "opr_fib_vpc", "opr") and OPR_ENABLED:
                 sig = self._get_opr_signal(df, ticker, day_ny)
                 if sig and not self._already_placed(sig["tag"]):
                     new_signals.append(sig)
 
-            if self.strategy in ("opr_fib", "fib") and FIB_ENABLED:
+            if self.strategy in ("opr_fib", "opr_fib_vpc", "fib") and FIB_ENABLED:
                 sig = self._get_fib_signal(df, ticker)
+                if sig and not self._already_placed(sig["tag"]):
+                    new_signals.append(sig)
+
+            if self.strategy in ("opr_fib_vpc", "vpc") and VPC_ENABLED:
+                sig = self._get_vpc_signal(df, ticker)
                 if sig and not self._already_placed(sig["tag"]):
                     new_signals.append(sig)
 
@@ -910,8 +1017,15 @@ class SessionRunner:
                            before, len(new_signals))
 
         # ── 9. Placement des ordres ───────────────────────────────────────
-        for sig in new_signals:
-            self._place_order(sig)
+        if self.is_paused():
+            if new_signals:
+                _log.info("Bot en pause — %d signal(s) ignoré(s) ce tick",
+                          len(new_signals))
+                _evlog._write("SYSTEM",
+                              f"Pause active — {len(new_signals)} signal(s) ignoré(s)")
+        else:
+            for sig in new_signals:
+                self._place_order(sig)
 
         # ── 10. Résumé risk manager ───────────────────────────────────────
         status = self.rm.status()
