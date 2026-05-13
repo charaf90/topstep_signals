@@ -317,6 +317,43 @@ FIB_TRIGGER_FILTERS_PER_TICKER = {
 FIB_STRATEGY_VERSION = "fib-v3"
 
 # ==============================================================================
+# STRATÉGIE ARES — Asian Range European Session Breakout
+# ==============================================================================
+# Concept : la session asiatique (20h NY veille → 02h NY courant) définit un
+# range. En session européenne (02h → 07h NY), on trade le breakout pur de ce
+# range dans le sens du biais directionnel (position du dernier close asiatique
+# vs midpoint du range), confirmé par la première bougie 02h-02h15 NY.
+#
+# SL = extrémité opposée du range ± buffer (full range).
+# TP calculé DEPUIS le high/low asiatique (pas depuis entry) :
+#   TP LONG  = asian_high + buffer + asian_range × TP_MULT
+#   TP SHORT = asian_low  - buffer - asian_range × TP_MULT
+# RR attendu ≈ 0.45-0.55 (asian_range × tp_mult / (asian_range + 2 × buffer)).
+#
+# Voir strategies/ares.py — RECHERCHE pure.
+
+ARES_STRATEGY_VERSION    = "ares-v1"
+
+# Buffer de cassure en points au-delà des extrêmes asiatiques.
+# Calibré par ticker en fonction du tick et de la volatilité habituelle.
+ARES_BUFFER_PTS = {"NQ1": 4, "MES1": 1, "YM1": 4}
+
+# Multiplicateur du range asiatique pour le calcul du TP.
+# TP_MULT = 0.5 → TP à 50 % du range au-delà du point d'entrée.
+ARES_TP_MULT    = {"NQ1": 0.5, "MES1": 0.6, "YM1": 0.5}
+
+# Range minimum en points pour valider le setup (élimine les jours trop calmes).
+ARES_MIN_RANGE  = {"NQ1": 79, "MES1": 16, "YM1": 95}
+
+# Coupure horaire en heure NY : tout break ≥ ENTRY_CUTOFF_HOUR est ignoré.
+ARES_ENTRY_CUTOFF_HOUR = 7
+
+# Fenêtres de session (heures NY, DST-aware via zoneinfo).
+ARES_ASIAN_START_HOUR  = 20   # début session asiatique (soirée veille NY)
+ARES_ASIAN_END_HOUR    = 2    # fin session asiatique (exclusive, matin NY)
+ARES_EURO_START_HOUR   = 2    # début fenêtre d'entrée européenne (NY)
+
+# ==============================================================================
 # BROKER PROJECTX / TOPSTEPX
 # ==============================================================================
 # Mapping tickers internes → symboles ProjectX (recherche de contrats).
@@ -582,3 +619,38 @@ ARF_RETURN_CONFIRM_ATR       = 0.10
 
 # Tag de version
 ARF_STRATEGY_VERSION         = "arf-v4"
+
+# ==============================================================================
+# STRATÉGIE OPR_GOLD (évolution OPR v4)
+# ==============================================================================
+# Améliorations vs OPR v4 :
+#   F1 — Time-based exit à 15h45 NY
+#   F2 — Profit lock à +0.5R → breakeven
+#   F3 — Filtre tendance J-1 via MA20 daily (long si veille > MA20)
+#   F4 — Sizing adaptatif : demi-lot si ATR(5j) > 1.5 × ATR(14j)
+#   F5 — Pullback qualifié (≤ 4 barres M15, retracement max 50 % range OPR)
+#   F6 — TP multi-niveau : TP1 = 1.2R (50 % position), TP2 = 2.5R (50 % restants)
+#   Bonus — Filtre macro (skip si jour dans MACRO_EVENT_DATES)
+#
+# v2 — corrections post-diagnostic PHASE 3/4 :
+#   • SL_ATR_MULT augmenté (MES1 0.15→0.25, NQ1 0.05→0.30) pour garantir
+#     n_ct >= 2 et activer le split TP1/TP2 (sinon n_tp2=0 → F6 inopérant)
+#   • YM1 exclu (PF OOS systématiquement < 0.40 sur toutes combinaisons,
+#     dérive persistante oct2025→fév2026 — cohérence avec OPR_v4 YM1_ENABLED=False)
+#   • tp1_rr 1.0→1.2, tp2_rr 2.0→2.5 (paramètres retenus walk-forward v2)
+OPR_GOLD_STRATEGY_VERSION     = "opr_gold-v2"
+OPR_GOLD_TICKERS              = ["MES1", "NQ1"]  # YM1 exclu jusqu'à preuve OOS
+OPR_GOLD_ATR_PERIOD           = 14           # période ATR journalier
+OPR_GOLD_TREND_MA_PERIOD      = 20           # MA daily pour filtre tendance J-1
+# sl_mult augmenté vs v1 : garantit n_ct >= 2 sur MES1/NQ1 → split TP1/TP2 actif
+OPR_GOLD_SL_ATR_MULT          = {"MES1": 0.25, "NQ1": 0.30, "YM1": 0.12}
+OPR_GOLD_TP1_RR               = 1.2          # TP1 en multiple du SL_dist (v2: 1.0→1.2)
+OPR_GOLD_TP2_RR               = 2.5          # TP2 en multiple du SL_dist (v2: 2.0→2.5)
+OPR_GOLD_PROFIT_LOCK_R        = 0.5          # déclencheur profit lock (en R)
+OPR_GOLD_PULLBACK_MAX_BARS    = 4            # max barres M15 pour le retest
+OPR_GOLD_PULLBACK_MAX_RETRACE = 0.5          # max retracement (fraction de la range OPR)
+OPR_GOLD_ATR_FILTER_MULT      = 1.5          # filtre jour trop volatil (ATR_court > MULT × ATR_long)
+OPR_GOLD_TIME_EXIT_HOUR       = 15           # fermeture forcée heure NY
+OPR_GOLD_TIME_EXIT_MINUTE     = 45           # fermeture forcée minute NY
+OPR_GOLD_SKIP_MACRO           = True         # skip si jour macro (MACRO_EVENT_DATES)
+OPR_GOLD_SESSION_END          = (16, 30)     # clôture session US (heure NY)

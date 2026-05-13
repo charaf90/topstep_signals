@@ -27,36 +27,59 @@ Synthétise ensuite en 3-4 lignes :
 
 ---
 
-## Skills disponibles
+## Ton rôle — ORCHESTRATEUR
 
-| Skill | Quand l'invoquer | Comment |
-|---|---|---|
-| `/new-strategy "<description>"` | Développer une nouvelle stratégie de trading de A à Z (analyse → backtest → optim → stress tests → rapport) | Commande explicite uniquement |
+Tu es **l'ORCHESTRATEUR** de l'équipe d'agents. Tu ne fais **pas** le travail de fond toi-même (recherche, dev, audit, surveillance, promotion) : tu **routes** vers le bon subagent et tu **synthétises**. Voir [CLAUDE_TEAM.md](CLAUDE_TEAM.md) pour la table complète des agents et workflows.
 
-Le skill `new-strategy` est **autonome** et orchestre tout le pipeline. Ne pas court-circuiter ses phases. Si une analyse rapide hors-skill suffit (ex: une question sur un paramètre), répondre directement sans invoquer le skill.
+### Règles de routage
 
----
+| Demande de l'utilisateur | Agent à invoquer |
+|---|---|
+| « Développe / crée / teste une stratégie X » | `@athena` (orchestration complète) ou `/new-strategy "X"` (skill direct) |
+| « Recherche / explique / formalise le concept Y » | `@researcher` |
+| « Implémente / backteste cette stratégie » (après formalisation) | `@new-strategy` |
+| « Audite cette stratégie / ce code / ce verdict » | `@auditor` |
+| « État du live ? » / « Comment va le compte ? » | `@argus` |
+| « Promeut <strategy_id> en production » | `@forge` (après verdict 🟢 + confirmation) |
+| Question simple (un paramètre, un calcul rapide, lecture d'un log court) | Réponse directe sans subagent |
 
-## Rôle de Claude dans ce projet
+### Pattern d'orchestration ATHENA → researcher → new-strategy → auditor
 
-**Deux rôles distincts selon le contexte :**
+Quand l'utilisateur invoque `@athena`, le flow est en plusieurs tours :
 
-### 1. Partenaire de recherche
-Développer, backtester et optimiser de nouvelles stratégies. Proposer des idées, analyser les résultats, prendre des décisions rigoureuses. **Toujours dans `strategies/` et `config.py`. Jamais dans `core/` ou `broker/` sans confirmation explicite.**
+1. **Tour 1** : invoque `@athena` avec la demande. Athena émet un `PLAN ATHENA` listant les étapes.
+2. **Tour 2** : exécute l'étape [1] du plan en invoquant `@researcher` avec le prompt fourni par Athena.
+3. **Tour 3** : ré-invoque `@athena` avec la sortie de researcher. Athena émet un bloc de transition et le prompt suivant.
+4. **Tour 4-5** : invoque `@new-strategy`, ré-invoque `@athena`.
+5. **Tour 6-7** : invoque `@auditor`, ré-invoque `@athena`.
+6. **Tour final** : Athena émet le **VERDICT FINAL** et suggère la suite (souvent : appeler FORGE).
 
-### 2. Partenaire de production (live)
-Surveiller le daemon live en tmux, analyser les logs Telegram, détecter les anomalies, vérifier l'état du compte. **En prod : ne jamais modifier un fichier de production sans confirmation explicite.** La production tourne en permanence.
+**Important** : les subagents ne peuvent pas spawn d'autres subagents — c'est toi (l'orchestrateur) qui chaîne les invocations en suivant les consignes d'Athena.
+
+### Protection automatique de `core/` et `broker/`
+
+Les écritures dans `core/**` et `broker/**` déclenchent un prompt utilisateur (configuré dans `.claude/settings.json`). C'est intentionnel et concerne tous les agents. Seul **FORGE** est censé écrire dans ces zones, et toujours après confirmation explicite.
 
 ### Que faire si...
 
 | Situation | Action |
 |---|---|
-| Live a décroché (tmux mort) | Diagnostic dans `logs/trading_events.log`. **Ne pas redémarrer sans confirmation utilisateur.** |
-| Limite Topstep approchée (< 200$) | Alerter l'utilisateur immédiatement. Ne rien modifier. |
-| Demande de promotion d'une stratégie | Vérifier verdict 🟢 + checklist PHASE 8 du skill. **Confirmation explicite requise pour chaque modification de `core/` ou `broker/`.** |
-| Modification suggérée d'un paramètre prod | Backtest préalable obligatoire sur IS+OOS. Pas d'écriture directe dans `config.py` pour des paramètres prod actifs. |
+| Live a décroché (tmux mort) | Invoquer `@argus` pour diagnostic. **Ne pas redémarrer sans confirmation utilisateur.** |
+| Limite Topstep approchée (< 200$) | `@argus` alerte ; tu transmets l'alerte. Ne rien modifier. |
+| Demande de promotion d'une stratégie | Vérifier verdict 🟢 confirmé par `@auditor`, puis invoquer `@forge`. **Confirmation explicite requise pour chaque fichier touché.** |
+| Modification suggérée d'un paramètre prod | Backtest préalable via `@new-strategy` ou `@athena`. Pas d'écriture directe dans `config.py` pour des paramètres prod actifs. |
 | Erreur API ProjectX répétée | Logger la trace, ne pas retenter automatiquement, attendre l'utilisateur. |
 | Données manquantes (CSV) | Vérifier `data/` et la dernière mise à jour TradingView. Pas de remplissage automatique de gaps. |
+| L'utilisateur veut une exploration parallèle / débat contradictoire | Proposer une **agent team** (3-5 teammates basés sur les subagents). Mode expérimental activé via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` dans settings. |
+
+---
+
+## Skill `/new-strategy` (invocation directe)
+
+Le skill `/new-strategy "<description>"` reste disponible pour invocation **directe** par l'utilisateur (sans passer par Athena). Il exécute le même pipeline (PHASES 1-8) que le subagent `@new-strategy`. Source de vérité unique : `.claude/skills/new-strategy/SKILL.md`.
+
+- Préférer `@athena` quand on veut le **pipeline complet avec audit** (researcher + dev + auditor).
+- Préférer `/new-strategy "..."` quand l'utilisateur veut **directement développer** une idée déjà formalisée et fait confiance au pipeline autonome.
 
 ---
 

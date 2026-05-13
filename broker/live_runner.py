@@ -38,6 +38,7 @@ from config import (
     YM1_ENABLED,
     USER_DAILY_LOSS_MAX, USER_MAX_TRADES_PER_DAY,
     CONSEC_LOSS_PAUSE_DAYS,
+    TOPSTEP_ACCOUNT_SIZE,
 )
 from core.opr import run_opr_day
 from core.strategy_fib import get_fib_live_signal
@@ -396,7 +397,7 @@ class SessionRunner:
             return None  # déjà fermé (TP/SL/TE)
 
         date_str = day_ny.strftime("%Y%m%d")
-        tag = f"OPR_{ticker}_{date_str}_{last_sig['direction']}"
+        tag = f"OPR_{ticker}_{date_str}_{last_sig['direction']}_{last_idx}"
         return {**last_sig, "tag": tag}
 
     def _get_fib_signal(self, df: pd.DataFrame, ticker: str) -> Optional[Dict]:
@@ -632,11 +633,14 @@ class SessionRunner:
         day_start = (now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
                      - timedelta(hours=5))  # marge DST
         trades_today = self.client.get_trades_since(self.account_id, day_start)
-        # Index par orderId → P&L de clôture (profitAndLoss ≠ None)
-        closing_pnl: Dict[int, float] = {}
+        # Index par contractId → liste des closing trades (profitAndLoss ≠ None).
+        # On n'indexe PAS par orderId car le trade de clôture (bracket TP/SL)
+        # a un orderId différent de l'ordre d'entrée stocké dans placed_tags.
+        closing_by_cid: Dict[str, List[Dict]] = {}
         for t in trades_today:
             if t.get("profitAndLoss") is not None and not t.get("voided"):
-                closing_pnl[t["orderId"]] = float(t["profitAndLoss"])
+                cid_key = str(t.get("contractId", ""))
+                closing_by_cid.setdefault(cid_key, []).append(t)
 
         # ── Traitement par tag ────────────────────────────────────────────
         for tag, info in list(placed.items()):
@@ -695,7 +699,23 @@ class SessionRunner:
                     continue
 
                 # Position disparue → clôturée (TP/SL/TE/market)
-                pnl = closing_pnl.get(order_id, 0.0)
+                # Cherche le(s) closing trade(s) pour ce contrat apparus
+                # après le fill (les brackets TP/SL ont un orderId distinct
+                # de l'ordre d'entrée — on ne peut pas matcher par orderId).
+                fill_ts  = info.get("fill_time", "")
+                cid_key  = str(info["contract_id"])
+                candidates = [
+                    t for t in closing_by_cid.get(cid_key, [])
+                    if t.get("creationTimestamp", "") >= fill_ts
+                ]
+                if not candidates:
+                    _log.warning(
+                        "[%s] Aucun closing trade trouvé "
+                        "(contract_id=%s, fill_ts=%s). "
+                        "Clés closing_by_cid disponibles : %s",
+                        tag, cid_key, fill_ts, list(closing_by_cid.keys()),
+                    )
+                pnl = sum(float(t["profitAndLoss"]) for t in candidates) if candidates else 0.0
                 _log.info("[%s] Position clôturée — P&L = %+.2f $", tag, pnl)
                 info["status"]    = _ST_CLOSED
                 info["close_pnl"] = pnl
@@ -965,6 +985,23 @@ class SessionRunner:
                         "Solde d'ouverture recalculé : %.2f $ "
                         "(balance=%.2f, pnl=%.2f, fees=%.2f)",
                         opening, balance, today_pnl, today_fees)
+
+                    # Réconciliation du cum_pnl RM depuis le solde broker.
+                    # Le solde broker est la source de vérité : il inclut tous
+                    # les trades (même ceux dont le P&L n'a pas été capté par le
+                    # RM à cause d'un bug ou d'un redémarrage).
+                    # On utilise opening_balance (solde en début de session, donc
+                    # hors trades intra-jour) pour ne pas polluer avec de
+                    # l'unrealized P&L.
+                    cum_broker = round(opening - TOPSTEP_ACCOUNT_SIZE, 2)
+                    if abs(cum_broker - self.rm.cum_pnl) > 1.0:
+                        _log.warning(
+                            "Réconciliation cum_pnl : RM=%.2f$ → broker=%.2f$ "
+                            "(opening=%.2f, start=%.2f)",
+                            self.rm.cum_pnl, cum_broker, opening, TOPSTEP_ACCOUNT_SIZE,
+                        )
+                        self.rm.cum_pnl  = cum_broker
+                        self.rm.peak_pnl = max(self.rm.peak_pnl, cum_broker)
             except Exception as exc:
                 _log.warning("Impossible de calculer le solde d'ouverture : %s", exc)
 

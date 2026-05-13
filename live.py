@@ -21,11 +21,67 @@ Options CLI :
 """
 
 import argparse
+import atexit
 import logging
 import os
+import signal
 import sys
 import time
 from pathlib import Path
+
+_PID_FILE = Path(__file__).parent / "state" / "live_daemon.pid"
+
+
+_GRACEFUL_TIMEOUT = 10   # secondes avant SIGKILL si SIGTERM ignoré
+
+
+def _acquire_pid_lock():
+    """
+    Garantit qu'une seule instance daemon tourne à tout moment.
+
+    Si un ancien daemon est détecté (PID vivant) :
+      → SIGTERM + attente jusqu'à _GRACEFUL_TIMEOUT secondes → SIGKILL si besoin.
+    La nouvelle instance prend ensuite le relais.
+    Lock périmé (process mort) : remplacé silencieusement.
+    """
+    if _PID_FILE.exists():
+        try:
+            old_pid = int(_PID_FILE.read_text().strip())
+            os.kill(old_pid, 0)   # lève OSError si le process n'existe plus
+            # Process vivant → on le remplace
+            logging.warning(
+                "Ancien daemon détecté (PID %d) — arrêt en cours (mise à jour)…",
+                old_pid,
+            )
+            os.kill(old_pid, signal.SIGTERM)
+            for _ in range(_GRACEFUL_TIMEOUT * 10):
+                time.sleep(0.1)
+                try:
+                    os.kill(old_pid, 0)
+                except OSError:
+                    break   # process terminé
+            else:
+                # Toujours vivant après le délai → SIGKILL
+                logging.warning("PID %d ne répond pas — SIGKILL", old_pid)
+                try:
+                    os.kill(old_pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            logging.info("Ancien daemon arrêté. Démarrage de la nouvelle instance.")
+        except (ValueError, OSError):
+            pass   # PID invalide ou process déjà mort → lock périmé
+
+    _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PID_FILE.write_text(str(os.getpid()))
+
+    def _cleanup(*_):
+        try:
+            _PID_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    atexit.register(_cleanup)
+    signal.signal(signal.SIGTERM, _cleanup)
 
 # Support .env simple (pas de dépendance python-dotenv)
 _env_file = Path(__file__).parent / ".env"
@@ -154,6 +210,9 @@ def main():
     _setup_logging(args.log_level)
     log = logging.getLogger("live")
 
+    if args.daemon:
+        _acquire_pid_lock()
+
     if not args.execute:
         log.warning("Mode DRY-RUN actif — aucun ordre réel ne sera passé")
         log.warning("Ajoutez --execute pour passer en mode réel")
@@ -211,6 +270,9 @@ def main():
                                     .strftime("%Y-%m-%d %H:%M NY"))
                     # Sync broker pour avoir l'état réel (fills, clôtures)
                     runner._sync_broker(now_utc_poll)
+                    # Persiste immédiatement : fills/closes détectés ici
+                    # seraient perdus si _load_state() tourne au prochain tick.
+                    runner._save_state()
                     rm_snap = {
                         **runner.rm.status(),
                         **runner._get_broker_day_summary(now_utc_poll),

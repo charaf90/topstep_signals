@@ -314,10 +314,13 @@ def _print_global_report(strategy_id: str, best_per_ticker: dict):
     # Verdict global (sur la moyenne des OOS)
     if best_per_ticker:
         avg_oos_pf = sum(r["oos"]["pf"] for r in best_per_ticker.values()) / len(best_per_ticker)
-        avg_bs     = sum(r["oos_topstep"]["bootstrap_pass_rate"]
-                         for r in best_per_ticker.values()) / len(best_per_ticker)
+        # Moyenne arithmétique des taux de passage du challenge Topstep par ticker (indicatif).
+        # ⚠ Ce n'est PAS un block-bootstrap portefeuille agrégé — le vrai bootstrap
+        #   portefeuille est dans output/robustness_<strategy_id>.json (core/robustness.py).
+        topstep_bs_per_ticker = sum(r["oos_topstep"]["bootstrap_pass_rate"]
+                                    for r in best_per_ticker.values()) / len(best_per_ticker)
         oos_global = {**oos_all, "pf": avg_oos_pf}
-        oos_ts_global = {"bootstrap_pass_rate": avg_bs,
+        oos_ts_global = {"bootstrap_pass_rate": topstep_bs_per_ticker,
                          "trailing_dd": min(r["oos_topstep"].get("trailing_dd", 0)
                                             for r in best_per_ticker.values())}
         m.print_verdict_report(
@@ -328,6 +331,8 @@ def _print_global_report(strategy_id: str, best_per_ticker: dict):
             is_period  = IS_LABEL,
             oos_period = OOS_LABEL,
         )
+        print(f"  ⚠  Bootstrap ci-dessus = moyenne Topstep challenge per-ticker (indicatif).")
+        print(f"     Bootstrap portfolio agrégé (block-bootstrap) → output/robustness_{strategy_id}.json")
 
     print(f"\n  Paramètres retenus :")
     for ticker, res in best_per_ticker.items():
