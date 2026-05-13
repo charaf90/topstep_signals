@@ -4,10 +4,9 @@ core/vpc.py — exécution live de la stratégie Volume Profile Confluence (vpc-
 Promu en production le 2026-05-11 après skill new-strategy → verdict 🟢.
 
 Architecture :
-    Réutilise les helpers déjà validés en backtest (strategies/vpc.py) pour
-    garantir une parité exacte backtest/live. C'est volontaire : toute
-    divergence entre la fonction qui simule et celle qui place les ordres
-    réels est une source d'écart inacceptable pour une stratégie financière.
+    Ce module est la source de vérité pour tous les helpers VPC (indicateurs,
+    profil, détection de setups). strategies/vpc.py les importe depuis ici
+    pour garantir une parité exacte backtest/live — zéro risque de divergence.
 
 Interface symétrique avec :
     • core/opr.py :: run_opr_day(df, ticker, day_ny)
@@ -34,7 +33,7 @@ et le passe au broker en custom_tag.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -62,20 +61,283 @@ from config import (
     VPC_OPEN_OUTSIDE_FADE, VPC_OPEN_OUTSIDE_MIN_GAP_ATR,
     VPC_EXCLUDE_MACRO_DAYS, VPC_OPEN_OUTSIDE_ADX_MAX,
 )
-# Helpers validés en backtest — réutilisation directe pour parité parfaite
-# avec strategies/vpc.py (zéro risque de divergence).
-from strategies.vpc import (
-    _compute_atr,
-    _compute_adx,
-    _compute_emas,
-    _build_previous_day_profile,
-    _detect_setup_open_outside,
-    _detect_setup_breakout_retest,
-    _detect_setup_hvn_rebound,
-)
-
-
 _NY = ZoneInfo("America/New_York")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Helpers indicateurs — source de vérité (importés par strategies/vpc.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high, low, close = df["high"], df["low"], df["close"]
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    return tr.ewm(span=period, adjust=False).mean()
+
+
+def _compute_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high, low, close = df["high"], df["low"], df["close"]
+    up_move   = high.diff()
+    down_move = -low.diff()
+    plus_dm   = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm  = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr      = tr.ewm(span=period, adjust=False).mean()
+    plus_di  = 100 * plus_dm.ewm(span=period, adjust=False).mean()  / atr.replace(0, np.nan)
+    minus_di = 100 * minus_dm.ewm(span=period, adjust=False).mean() / atr.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    return dx.ewm(span=period, adjust=False).mean()
+
+
+def _compute_emas(df: pd.DataFrame, fast: int, slow: int) -> Tuple[pd.Series, pd.Series]:
+    return (
+        df["close"].ewm(span=fast, adjust=False).mean(),
+        df["close"].ewm(span=slow, adjust=False).mean(),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Volume Profile (approximation à partir des barres M15)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _compute_profile(
+    day_bars: pd.DataFrame,
+    tick_size: float,
+    bucket_ticks: int,
+    value_area_pct: float,
+    hvn_mult: float,
+    lvn_mult: float,
+) -> Optional[Dict]:
+    if day_bars is None or len(day_bars) == 0:
+        return None
+    bucket_size = bucket_ticks * tick_size
+    p_low  = float(day_bars["low"].min())
+    p_high = float(day_bars["high"].max())
+    if p_high <= p_low:
+        return None
+    n_buckets = int(np.ceil((p_high - p_low) / bucket_size)) + 1
+    if n_buckets < 3:
+        return None
+    if n_buckets > 500:
+        bucket_size = (p_high - p_low) / 200.0
+        n_buckets = int(np.ceil((p_high - p_low) / bucket_size)) + 1
+    edges   = p_low + np.arange(n_buckets + 1) * bucket_size
+    centers = edges[:-1] + bucket_size / 2.0
+    vols    = np.zeros(n_buckets, dtype=np.float64)
+    for _, bar in day_bars.iterrows():
+        b_low, b_high, b_vol = float(bar["low"]), float(bar["high"]), float(bar["volume"])
+        if b_high <= b_low:
+            continue
+        i_lo  = max(0, int(np.floor((b_low  - p_low) / bucket_size)))
+        i_hi  = min(n_buckets - 1, int(np.floor((b_high - p_low) / bucket_size)))
+        n_span = max(1, i_hi - i_lo + 1)
+        vols[i_lo:i_hi + 1] += b_vol / n_span
+    total = vols.sum()
+    if total <= 0:
+        return None
+    poc_idx = int(np.argmax(vols))
+    poc     = float(centers[poc_idx])
+    target  = total * value_area_pct
+    cum     = vols[poc_idx]
+    lo, hi  = poc_idx, poc_idx
+    while cum < target and (lo > 0 or hi < n_buckets - 1):
+        left_v  = vols[lo - 1] if lo > 0 else -1.0
+        right_v = vols[hi + 1] if hi < n_buckets - 1 else -1.0
+        if right_v >= left_v and hi < n_buckets - 1:
+            hi += 1; cum += vols[hi]
+        elif lo > 0:
+            lo -= 1; cum += vols[lo]
+        else:
+            break
+    val = float(edges[lo])
+    vah = float(edges[hi + 1])
+    mean_v = vols[vols > 0].mean() if (vols > 0).any() else 0.0
+    if mean_v <= 0:
+        hvn_levels, lvn_levels = [], []
+    else:
+        hvn_levels = [float(centers[i]) for i in np.where(vols >= hvn_mult * mean_v)[0]]
+        lvn_levels = [float(centers[i]) for i in np.where((vols > 0) & (vols <= lvn_mult * mean_v))[0]]
+    return {
+        "poc": poc, "vah": vah, "val": val,
+        "hvn_levels": hvn_levels, "lvn_levels": lvn_levels,
+        "profile_high": p_high, "profile_low": p_low,
+        "bucket_size": bucket_size, "total_volume": float(total),
+    }
+
+
+def _build_previous_day_profile(
+    df_15m: pd.DataFrame,
+    day_ny: pd.Timestamp,
+    tick_size: float,
+    bucket_ticks: int,
+    value_area_pct: float,
+    hvn_mult: float,
+    lvn_mult: float,
+) -> Optional[Dict]:
+    if df_15m.index.tz is None:
+        idx_ny = df_15m.index.tz_localize("UTC").tz_convert(_NY)
+    else:
+        idx_ny = df_15m.index.tz_convert(_NY)
+    day_norm = day_ny.normalize()
+    for back in range(1, 6):
+        prev_day = day_norm - pd.Timedelta(days=back)
+        if prev_day.weekday() >= 5:
+            continue
+        start = prev_day.replace(hour=9, minute=30)
+        end   = prev_day.replace(hour=16, minute=0)
+        mask  = (idx_ny >= start) & (idx_ny < end)
+        if mask.sum() < 4:
+            continue
+        day_bars = df_15m.iloc[np.asarray(mask)]
+        prof = _compute_profile(day_bars, tick_size, bucket_ticks, value_area_pct, hvn_mult, lvn_mult)
+        if prof is not None:
+            prof["session_date"] = prev_day.strftime("%Y-%m-%d")
+            return prof
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Détection de setups
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _detect_setup_open_outside(
+    bar: pd.Series,
+    open_ny_bar: Optional[pd.Series],
+    profile: Dict,
+    tick_size: float,
+    sl_buffer_ticks: int,
+    sl_atr_mult: float,
+    tp_atr_mult: float,
+    atr: float,
+    fade: bool = False,
+    min_gap_atr: float = 0.0,
+) -> Optional[Dict]:
+    if open_ny_bar is None:
+        return None
+    open_px = float(open_ny_bar["open"])
+    vah, val, poc = profile["vah"], profile["val"], profile["poc"]
+    buf = sl_buffer_ticks * tick_size
+    if atr <= 0:
+        return None
+    if open_px > vah:
+        gap_size, gap_dir = open_px - vah, "above"
+    elif open_px < val:
+        gap_size, gap_dir = val - open_px, "below"
+    else:
+        return None
+    if gap_size < min_gap_atr * atr:
+        return None
+    if fade:
+        if gap_dir == "above":
+            entry = open_px
+            sl    = open_px + max(buf, atr * sl_atr_mult)
+            tp    = max(vah if (open_px - vah) >= 0.5 * atr else poc, open_px - atr * tp_atr_mult)
+            return {"setup": "OPEN_OUTSIDE", "direction": "short", "entry": entry, "sl": sl, "tp": tp,
+                    "setup_low": val, "setup_high": vah}
+        else:
+            entry = open_px
+            sl    = open_px - max(buf, atr * sl_atr_mult)
+            tp    = min(val if (val - open_px) >= 0.5 * atr else poc, open_px + atr * tp_atr_mult)
+            return {"setup": "OPEN_OUTSIDE", "direction": "long", "entry": entry, "sl": sl, "tp": tp,
+                    "setup_low": val, "setup_high": vah}
+    if gap_dir == "above":
+        sl = max(val - buf, open_px - atr * sl_atr_mult)
+        return {"setup": "OPEN_OUTSIDE", "direction": "long", "entry": open_px,
+                "sl": sl, "tp": open_px + atr * tp_atr_mult, "setup_low": val, "setup_high": vah}
+    else:
+        sl = min(vah + buf, open_px + atr * sl_atr_mult)
+        return {"setup": "OPEN_OUTSIDE", "direction": "short", "entry": open_px,
+                "sl": sl, "tp": open_px - atr * tp_atr_mult, "setup_low": val, "setup_high": vah}
+
+
+def _detect_setup_breakout_retest(
+    bar: pd.Series,
+    prev: pd.Series,
+    profile: Dict,
+    ema_fast_val: float,
+    ema_slow_val: float,
+    avg_vol: float,
+    vol_threshold: float,
+    tick_size: float,
+    sl_buffer_ticks: int,
+    sl_atr_mult: float,
+    tp_atr_mult: float,
+    atr: float,
+) -> Optional[Dict]:
+    if pd.isna(prev["close"]) or pd.isna(bar["high"]):
+        return None
+    if avg_vol <= 0 or float(prev["volume"]) <= vol_threshold * avg_vol:
+        return None
+    vah, val, poc = profile["vah"], profile["val"], profile["poc"]
+    buf = sl_buffer_ticks * tick_size
+    if (float(prev["close"]) > vah and ema_fast_val > ema_slow_val
+            and float(bar["low"]) <= vah <= float(bar["high"])):
+        tp_atr_ = vah + atr * tp_atr_mult
+        tp = max(poc, tp_atr_) if poc > vah else tp_atr_
+        return {"setup": "BREAKOUT_RETEST", "direction": "long", "entry": vah,
+                "sl": vah - max(buf, atr * sl_atr_mult), "tp": tp, "setup_low": val, "setup_high": vah}
+    if (float(prev["close"]) < val and ema_fast_val < ema_slow_val
+            and float(bar["low"]) <= val <= float(bar["high"])):
+        tp_atr_ = val - atr * tp_atr_mult
+        tp = min(poc, tp_atr_) if poc < val else tp_atr_
+        return {"setup": "BREAKOUT_RETEST", "direction": "short", "entry": val,
+                "sl": val + max(buf, atr * sl_atr_mult), "tp": tp, "setup_low": val, "setup_high": vah}
+    return None
+
+
+def _detect_setup_hvn_rebound(
+    bar: pd.Series,
+    profile: Dict,
+    ema_fast_val: float,
+    ema_slow_val: float,
+    avg_vol: float,
+    vol_threshold: float,
+    tick_size: float,
+    sl_buffer_ticks: int,
+    sl_atr_mult: float,
+    tp_atr_mult: float,
+    atr: float,
+    adx_val: float,
+    min_rr: float,
+) -> Optional[Dict]:
+    if not profile["hvn_levels"]:
+        return None
+    if avg_vol <= 0 or float(bar["volume"]) <= vol_threshold * avg_vol:
+        return None
+    if adx_val < VPC_HVN_ADX_MIN:
+        return None
+    o, h, l, c = float(bar["open"]), float(bar["high"]), float(bar["low"]), float(bar["close"])
+    body = abs(c - o)
+    if body <= 0:
+        return None
+    poc = profile["poc"]
+    buf = sl_buffer_ticks * tick_size
+    if c > o and ema_fast_val > ema_slow_val:
+        lower_wick = min(o, c) - l
+        if lower_wick >= 0.5 * body:
+            candidates = [hvn for hvn in profile["hvn_levels"] if l <= hvn <= min(o, c) and hvn < poc]
+            if candidates:
+                hvn   = max(candidates)
+                sl    = hvn - max(buf, atr * sl_atr_mult * 0.7)
+                sl_d  = hvn - sl
+                tp_d  = poc - hvn
+                if sl_d <= 0 or tp_d <= 0 or (tp_d / sl_d) < min_rr:
+                    return None
+                return {"setup": "HVN_REBOUND", "direction": "long", "entry": hvn,
+                        "sl": sl, "tp": poc, "setup_low": l, "setup_high": h}
+    if c < o and ema_fast_val < ema_slow_val:
+        upper_wick = h - max(o, c)
+        if upper_wick >= 0.5 * body:
+            candidates = [hvn for hvn in profile["hvn_levels"] if max(o, c) <= hvn <= h and hvn > poc]
+            if candidates:
+                hvn   = min(candidates)
+                sl    = hvn + max(buf, atr * sl_atr_mult * 0.7)
+                sl_d  = sl - hvn
+                tp_d  = hvn - poc
+                if sl_d <= 0 or tp_d <= 0 or (tp_d / sl_d) < min_rr:
+                    return None
+                return {"setup": "HVN_REBOUND", "direction": "short", "entry": hvn,
+                        "sl": sl, "tp": poc, "setup_low": l, "setup_high": h}
+    return None
 _STRATEGY = "VPC"
 
 
