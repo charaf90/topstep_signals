@@ -10,4 +10,9 @@ analyse/charts/
 draft_fibo_50/output/
 state/
 logs/
-.claude/
+# Infrastructure cognitive du projet : versionner agents/skills/settings partagés,
+# ignorer uniquement les fichiers locaux et personnels
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/projects/
+.claude/commands/

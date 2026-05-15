@@ -39,22 +39,38 @@ Tu es **l'ORCHESTRATEUR** de l'équipe d'agents. Tu ne fais **pas** le travail d
 | « Recherche / explique / formalise le concept Y » | `@researcher` |
 | « Implémente / backteste cette stratégie » (après formalisation) | `@new-strategy` |
 | « Audite cette stratégie / ce code / ce verdict » | `@auditor` |
+| « Explore visuellement le marché X / trouve-moi un edge » | `python -m core.explore_chart --ticker X --multi-tf` puis `@chartist MODE: idea` |
+| « Audite visuellement les signaux de <strategy_id> » | `@chartist MODE: audit` (warnings → `@auditor`) |
 | « État du live ? » / « Comment va le compte ? » | `@argus` |
 | « Promeut <strategy_id> en production » | `@forge` (après verdict 🟢 + confirmation) |
 | Question simple (un paramètre, un calcul rapide, lecture d'un log court) | Réponse directe sans subagent |
 
-### Pattern d'orchestration ATHENA → researcher → new-strategy → auditor
+### Pattern d'orchestration ATHENA → [chartist idea] → researcher → new-strategy → [chartist audit] → auditor
 
-Quand l'utilisateur invoque `@athena`, le flow est en plusieurs tours :
+Quand l'utilisateur invoque `@athena`, le flow est en plusieurs tours (étapes chartist conditionnelles) :
 
-1. **Tour 1** : invoque `@athena` avec la demande. Athena émet un `PLAN ATHENA` listant les étapes.
-2. **Tour 2** : exécute l'étape [1] du plan en invoquant `@researcher` avec le prompt fourni par Athena.
-3. **Tour 3** : ré-invoque `@athena` avec la sortie de researcher. Athena émet un bloc de transition et le prompt suivant.
-4. **Tour 4-5** : invoque `@new-strategy`, ré-invoque `@athena`.
-5. **Tour 6-7** : invoque `@auditor`, ré-invoque `@athena`.
-6. **Tour final** : Athena émet le **VERDICT FINAL** et suggère la suite (souvent : appeler FORGE).
+1. **Tour 1** : invoque `@athena` avec la demande. Athena émet un `PLAN ATHENA` listant les étapes (en précisant si les étapes [0.5] et [4.5] chartist sont incluses).
+2. **Tour 2a** *(optionnel — étape [0.5])* : si Athena le demande, exécute `python -m core.explore_chart --ticker <X> --n 10 --multi-tf` puis invoque `@chartist MODE: idea` sur les charts générés. Sortie : hypothèses d'edge transmises à @researcher.
+3. **Tour 2** : exécute l'étape [1] du plan en invoquant `@researcher` avec le prompt fourni par Athena (incluant les hypothèses du chartist si étape 2a faite).
+4. **Tour 3** : ré-invoque `@athena` avec la sortie de researcher. Athena émet un bloc de transition et le prompt suivant.
+5. **Tour 4** : invoque `@new-strategy`, ré-invoque `@athena`.
+6. **Tour 4a** *(optionnel — étape [4.5], recommandé si verdict 🟢 revendiqué)* : invoque `@chartist MODE: audit` sur `output/charts/<STRATEGY_ID>/`. Rapport sauvegardé dans `output/audit_visuel_<id>.md`.
+7. **Tour 5-6** : invoque `@auditor` (qui lit aussi le rapport visuel), ré-invoque `@athena`.
+8. **Tour final** : Athena émet le **VERDICT FINAL** et suggère la suite (souvent : appeler FORGE).
 
 **Important** : les subagents ne peuvent pas spawn d'autres subagents — c'est toi (l'orchestrateur) qui chaîne les invocations en suivant les consignes d'Athena.
+
+### Quand invoquer `@chartist`
+
+| Situation | Mode | Décision |
+|---|---|---|
+| Concept ouvert / non formalisé / multi-marché | `idea` | Recommandé en PHASE 0.5 |
+| Concept déjà clair (ex: "ORB pullback NQ 09:30-11:00") | `idea` | Skip — passer direct à `@researcher` |
+| Verdict 🟢 revendiqué par `@new-strategy` | `audit` | Recommandé en PHASE 6.5 avant `@auditor` |
+| Verdict 🟡 revendiqué | `audit` | Optionnel (utile si on veut comprendre pourquoi pas 🟢) |
+| Verdict 🔴 | `audit` | Skip — inutile de challenger un rejet |
+
+Le chartist **ne décide jamais du verdict** : en `idea` il propose des hypothèses à `@researcher`, en `audit` il flag des warnings à `@auditor`.
 
 ### Protection automatique de `core/` et `broker/`
 
@@ -76,7 +92,7 @@ Les écritures dans `core/**` et `broker/**` déclenchent un prompt utilisateur 
 
 ## Skill `/new-strategy` (invocation directe)
 
-Le skill `/new-strategy "<description>"` reste disponible pour invocation **directe** par l'utilisateur (sans passer par Athena). Il exécute le même pipeline (PHASES 1-8) que le subagent `@new-strategy`. Source de vérité unique : `.claude/skills/new-strategy/SKILL.md`.
+Le skill `/new-strategy "<description>"` reste disponible pour invocation **directe** par l'utilisateur (sans passer par Athena). Il exécute le même pipeline (PHASES 0.5 → 8, dont 0.5 et 6.5 optionnelles via `@chartist`) que le subagent `@new-strategy`. Source de vérité unique : `.claude/skills/new-strategy/SKILL.md`.
 
 - Préférer `@athena` quand on veut le **pipeline complet avec audit** (researcher + dev + auditor).
 - Préférer `/new-strategy "..."` quand l'utilisateur veut **directement développer** une idée déjà formalisée et fait confiance au pipeline autonome.
@@ -142,7 +158,8 @@ topstep_signals/
 │   ├── signal_selector.py   # Sélection actif corrélé NQ1 > YM1 > MES1
 │   ├── event_logger.py      # Log structuré des événements live
 │   ├── analysis_chart.py    # Graphiques journaliers
-│   └── chart.py             # Graphiques par trade
+│   ├── chart.py             # Graphiques par trade
+│   └── explore_chart.py     # Idéation visuelle (charts stratifiés, multi-TF)
 │
 ├── broker/                  # ← PRODUCTION — ne pas toucher
 │   ├── live_runner.py       # Daemon de session (SessionRunner)
@@ -177,6 +194,21 @@ python optimize.py --strategy opr --csv-dir ./data
 python optimize.py --strategy fib --csv-dir ./data --ticker NQ1
 python optimize.py --strategy all --csv-dir ./data
 python optimize.py --strategy opr --csv-dir ./data --is-end 2025-09-30
+```
+
+### Idéation visuelle (PHASE 0.5)
+```bash
+# Mono-TF (15m uniquement) — 20 jours stratifiés par régime
+python -m core.explore_chart --ticker NQ1 --n 20
+
+# Multi-TF (trio 15m + H1 + D1 par jour) — recommandé pour ICT, Wyckoff
+python -m core.explore_chart --ticker NQ1 --n 10 --multi-tf
+
+# Échantillonnage aléatoire (au lieu de stratifié par régime)
+python -m core.explore_chart --ticker MES1 --stratify random --seed 7
+
+# Sortie : output/explore/<TICKER>/<YYYY-MM-DD>_<TF>.png
+# Régimes classifiés : trending / ranging / macro / vol_h / vol_b / mixed
 ```
 
 ### Production (live)

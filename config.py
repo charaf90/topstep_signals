@@ -230,6 +230,37 @@ OPR_VOL_ZSCORE_WINDOW  = 20   # bougies de session pour le z-score volume
 OPR_STRATEGY_VERSION = "opr-v4"
 
 # ==============================================================================
+# STRATÉGIE OPR_H4 (`opr_h4-v1`) — recherche, variante d'opr-v4
+# ==============================================================================
+# Hypothèse H4 (chartist mode idea, NQ1 weeklies) : les setups OPR déclenchés
+# alors que le prix est DANS le cloud Ichimoku 15m sont des faux signaux
+# fréquents (zone de fair value contestée). Les filtrer doit améliorer la
+# qualité au prix d'un volume de trades réduit.
+#
+# Filtre appliqué AVANT armement de l'ordre limite OPR, à la bougie i :
+#   close[i-1] vs cloud Ichimoku [senkou_a[i-1], senkou_b[i-1]] (déjà shift +26)
+#   buffer = OPR_H4_BUFFER_ATR × ATR_15m_Wilder(14)[i-1]
+#   LONG  autorisé si close[i-1] > max(s_a, s_b) + buffer
+#   SHORT autorisé si close[i-1] < min(s_a, s_b) - buffer
+#
+# Voir strategies/opr_h4.py.
+
+OPR_H4_STRATEGY_VERSION = "opr_h4-v1"
+OPR_H4_TICKERS          = ["MES1", "NQ1", "YM1"]
+
+# Filtre cloud — paramètre principal (1 dimension, calibré walk-forward)
+OPR_H4_BUFFER_ATR = 0.3   # défaut. Grille testée : [0.0, 0.3, 0.5, 0.8]
+
+# Ichimoku 15m (mêmes constantes que core.explore_chart.compute_ichimoku)
+OPR_H4_ICHIMOKU_TENKAN   = 9
+OPR_H4_ICHIMOKU_KIJUN    = 26
+OPR_H4_ICHIMOKU_SENKOU_B = 52
+OPR_H4_ICHIMOKU_SHIFT    = 26   # Senkou A/B portent déjà shift(+26)
+
+# ATR intraday 15m pour le buffer (Wilder)
+OPR_H4_INTRADAY_ATR_PERIOD = 14
+
+# ==============================================================================
 # STRATÉGIE FIBONACCI 50% RETRACEMENT (`fib-v1`)
 # ==============================================================================
 # Promotion depuis draft_fibo_50/ après validation walk-forward IS/OOS :
@@ -654,3 +685,86 @@ OPR_GOLD_TIME_EXIT_HOUR       = 15           # fermeture forcée heure NY
 OPR_GOLD_TIME_EXIT_MINUTE     = 45           # fermeture forcée minute NY
 OPR_GOLD_SKIP_MACRO           = True         # skip si jour macro (MACRO_EVENT_DATES)
 OPR_GOLD_SESSION_END          = (16, 30)     # clôture session US (heure NY)
+
+# ==============================================================================
+# STRATÉGIE KIJUN_PB — Kijun pullback bidirectionnel (kijun_pb-v1)
+# ==============================================================================
+# Concept :
+#   En régime trending (prix nettement hors Cloud Ichimoku 15m), la Kijun(26)
+#   sert de fair value à moyen terme. Les retracements vers la Kijun en
+#   alignement avec un cross StochRSI (depuis survente pour LONG, depuis
+#   surachat pour SHORT) offrent une entrée limit à fort R:R.
+#
+# Edge théorique :
+#   Beaucoup de stratégies retail/quant utilisent Ichimoku → confluence
+#   d'ordres limit autour de la Kijun. Le filtre Cloud écarte les régimes
+#   plats où la Kijun n'a pas de "défense" significative. Le cross StochRSI
+#   filtre les pullbacks sans rebond effectif.
+#
+# Risque :
+#   La Kijun est un indicateur ultra-populaire ; si l'edge subsiste, c'est
+#   probablement parce que le filtre StochRSI extreme cross + Cloud breakout
+#   sélectionne un sous-ensemble très étroit de setups (vs les implémentations
+#   "Ichimoku simple" massivement arbitrées). À surveiller en live.
+#
+# Falsification :
+#   - Bootstrap portfolio OOS < 50 %, OU
+#   - PF OOS < 1.0 sur 50 trades consécutifs en live.
+# ──────────────────────────────────────────────────────────────────────────────
+
+KIJUN_PB_STRATEGY_VERSION    = "kijun_pb-v1"
+
+# V1 : pilote NQ1. Extension MES1/YM1 conditionnée à OOS NQ1 ≥ 🟡.
+KIJUN_PB_TICKERS             = ["NQ1"]
+
+# Fenêtre NY (DST-aware via zoneinfo) : skip 09:30 (open noise) et fin de journée
+KIJUN_PB_TIMEZONE            = "America/New_York"
+KIJUN_PB_SESSION_START       = (9, 45)
+KIJUN_PB_SESSION_END         = (14, 0)
+
+# Paramètres Ichimoku (standards) — utilisés via core.explore_chart.compute_ichimoku
+KIJUN_PB_TENKAN_PERIOD       = 9
+KIJUN_PB_KIJUN_PERIOD        = 26
+KIJUN_PB_SENKOU_B_PERIOD     = 52
+KIJUN_PB_KUMO_SHIFT          = 26
+
+# Paramètres StochRSI (standards) — utilisés via core.explore_chart.compute_stochrsi
+KIJUN_PB_RSI_PERIOD          = 14
+KIJUN_PB_STOCH_PERIOD        = 14
+KIJUN_PB_STOCH_K             = 3
+KIJUN_PB_STOCH_D             = 3
+KIJUN_PB_STOCHRSI_OVERSOLD   = 30.0   # K[i-2] < 30 pour LONG
+KIJUN_PB_STOCHRSI_OVERBOUGHT = 70.0   # K[i-2] > 70 pour SHORT
+
+# Pente Kijun (lookback en barres M15 pour évaluer la tendance moyen terme)
+KIJUN_PB_SLOPE_LOOKBACK      = 5
+
+# ATR pour SL et buffer Cloud (Wilder 14)
+KIJUN_PB_ATR_PERIOD          = 14
+
+# Grille d'optimisation (24 combinaisons → Bonferroni n_tests=24)
+#   BUFFER_ATR     : marge d'extension hors Cloud (avant Kijun) → trending fort
+#   LOOKBACK       : profondeur du pullback récent (en barres M15)
+#   SL_BUFFER_ATR  : marge sous le low du pullback pour le SL
+#   TP_ATR_MULT    : objectif en multiples d'ATR (entry ± mult × ATR)
+KIJUN_PB_BUFFER_ATR_DEFAULT     = 0.5
+KIJUN_PB_LOOKBACK_DEFAULT       = 5
+KIJUN_PB_SL_BUFFER_ATR_DEFAULT  = 0.5
+KIJUN_PB_TP_ATR_MULT_DEFAULT    = 2.0
+
+# Sécurité : floor en ticks au cas où l'ATR serait très faible
+KIJUN_PB_SL_BUFFER_TICKS_FLOOR  = 2
+
+# Max trades/jour/ticker
+KIJUN_PB_MAX_TRADES_PER_DAY  = 2
+
+# Vie de l'ordre limit (en barres M15) — 1 barre = fill à la barre i si touché,
+# sinon NOT_FILLED (conservateur : pas de courir après le marché)
+KIJUN_PB_ORDER_TIMEOUT_BARS  = 1
+
+# Durée max de hold (en barres M15) — fermeture forcée au close
+# 16 barres = 4h, couvre la session 09:45→14:00 même pour entrée tardive
+KIJUN_PB_MAX_HOLD_BARS       = 16
+
+# Exclusion jours macro US (FOMC/CPI/NFP perturbent la structure Ichimoku)
+KIJUN_PB_EXCLUDE_MACRO_DAYS  = False  # V1 : on garde tout pour mesurer l'impact

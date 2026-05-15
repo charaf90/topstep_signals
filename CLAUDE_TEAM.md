@@ -2,7 +2,7 @@
 
 Architecture hybride pour le développement et l'exploitation de stratégies de trading algorithmique sur le challenge Topstep 50K.
 
-- **Quotidien (90 %)** : pipeline séquentiel via 6 subagents — isolation de contexte, sécurité, sobriété tokens.
+- **Quotidien (90 %)** : pipeline séquentiel via 7 subagents — isolation de contexte, sécurité, sobriété tokens.
 - **Exploration intensive (10 %)** : agent teams (expérimental, déjà activé dans `.claude/settings.json`) pour parallélisme et débat contradictoire.
 
 ## Table des agents
@@ -14,6 +14,7 @@ Architecture hybride pour le développement et l'exploitation de stratégies de 
 | **@researcher** | Recherche web, formalisation algorithmique de concepts trading, pièges classiques. | `@researcher` ou « Recherche / formalise ... » | Sonnet | Lecture seule (+ WebFetch/WebSearch) |
 | **@new-strategy** | Pipeline complet (PHASES 1-8) — implémentation, backtest, optimisation, stress tests. | `@new-strategy` ou `/new-strategy "..."` | Inherit (Opus) | Écriture limitée à `strategies/`, `config.py`, `output/` |
 | **@auditor** | Audit indépendant de la fidélité concept↔code. Peut rétrograder le verdict. | `@auditor` ou « Audite ... » | Inherit (Opus) | Lecture seule stricte |
+| **@chartist** | Expert en analyse technique multimodale. Mode `idea` (idéation visuelle PHASE 0.5) ou `audit` (audit visuel PHASE 6.5). Lit les PNG (mono-TF ou trio 15m+H1+D1). Ne décide pas du verdict. | `@chartist MODE: idea` ou `@chartist MODE: audit` | Inherit (Opus, multimodal) | Lecture seule absolue |
 | **@argus** | Surveillance du daemon live (tmux, state, logs, Telegram). | `@argus` ou « État du live ? » | Sonnet | Lecture seule absolue (interdiction `kill`, `rm`, `tmux send-keys`, etc.) |
 | **@forge** | Promotion en production : crée `core/<id>.py`, modifie `broker/live_runner.py`. | `@forge` + verdict 🟢 confirmé + confirmation utilisateur **par fichier** | Inherit (Opus) | Modification autorisée de `core/` et `broker/`, mais chaque écriture déclenche un prompt utilisateur |
 
@@ -25,10 +26,14 @@ Architecture hybride pour le développement et l'exploitation de stratégies de 
 Utilisateur : « ATHENA, développe une stratégie ICT order block sur NQ1 »
 ```
 
-Flow exécuté par l'orchestrateur :
+Flow exécuté par l'orchestrateur (étapes chartist conditionnelles selon décision d'Athena) :
 
 ```
 [Orchestrateur] → @athena                    (Tour 1 — émet PLAN ATHENA)
+              ↓
+[Optionnel — concept ouvert, mono-/multi-TF]
+[Orchestrateur] → python -m core.explore_chart --ticker <X> --n 10 [--multi-tf]
+[Orchestrateur] → @chartist MODE: idea       (Tour 2a — hypothèses d'edge)
               ↓
 [Orchestrateur] → @researcher                (Tour 2 — formalisation + sources)
               ↓
@@ -36,14 +41,21 @@ Flow exécuté par l'orchestrateur :
               ↓
 [Orchestrateur] → @new-strategy              (Tour 4 — pipeline PHASES 1-8)
               ↓
+[Optionnel — recommandé si verdict 🟢 revendiqué]
+[Orchestrateur] → @chartist MODE: audit      (Tour 4a — warnings visuels)
+              ↓
 [Orchestrateur] → @athena                    (Tour 5 — transition + prompt auditor)
               ↓
-[Orchestrateur] → @auditor                   (Tour 6 — audit fidélité)
+[Orchestrateur] → @auditor                   (Tour 6 — audit fidélité + intègre warnings chartist)
               ↓
 [Orchestrateur] → @athena                    (Tour 7 — VERDICT FINAL)
               ↓
 [Orchestrateur] → Utilisateur                (synthèse + suggestion : @forge si 🟢)
 ```
+
+**Décision d'invoquer le chartist** :
+- Mode `idea` (avant @researcher) : oui si concept ouvert / non formalisé / exploration multi-marché. Non si concept clair (ex: "ORB pullback NQ 09:30").
+- Mode `audit` (après @new-strategy) : oui dès qu'un verdict 🟢 est revendiqué. Non si verdict 🔴 (inutile).
 
 ### 2. Développer une stratégie (workflow rapide — skill direct)
 
@@ -115,7 +127,8 @@ Les teammates communiquent entre eux via la mailbox d'agent teams. Voir la doc [
 
 ## Référence aux sources
 
-- **Pipeline `new-strategy`** : `.claude/skills/new-strategy/SKILL.md` (source de vérité unique, PHASES 1-8)
+- **Pipeline `new-strategy`** : `.claude/skills/new-strategy/SKILL.md` (source de vérité unique, PHASES 0.5 → 8 dont 0.5 et 6.5 optionnelles via chartist)
 - **Templates** : `.claude/skills/new-strategy/templates/strategy_template.md`, `rapport_template.md`
+- **Outil idéation visuelle** : `core/explore_chart.py` (génère N jours stratifiés par régime, flag `--multi-tf` pour trio 15m+H1+D1)
 - **Permissions** : `.claude/settings.json` (équipe + protection) et `.claude/settings.local.json` (allowlist Bash personnelle)
 - **Convention projet** : `CLAUDE.md` (architecture, paramètres, performances prod)

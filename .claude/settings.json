@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "teammateMode": "in-process",
+  "permissions": {
+    "allow": [
+      "Bash(tmux ls)",
+      "Bash(tmux capture-pane *)",
+      "Write(strategies/*)",
+      "Edit(strategies/*)",
+      "Write(output/*)"
+    ],
+    "ask": [
+      "Edit(/core/**)",
+      "Write(/core/**)",
+      "Edit(/broker/**)",
+      "Write(/broker/**)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)",
+      "Bash(git reset --hard *)",
+      "Edit(/state/**)",
+      "Write(/state/**)",
+      "Edit(/logs/**)",
+      "Write(/logs/**)"
+    ],
+    "defaultMode": "bypassPermissions"
+  }
+}
