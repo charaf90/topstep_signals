@@ -268,7 +268,9 @@ def main():
                     now_ny_str   = (_dt.datetime.now(_dt.timezone.utc)
                                     .astimezone(_NY)
                                     .strftime("%Y-%m-%d %H:%M NY"))
-                    # Sync broker pour avoir l'état réel (fills, clôtures)
+                    # Drain WS d'abord (fast path, no-op si realtime désactivé)
+                    runner._drain_realtime()
+                    # Sync broker REST pour avoir l'état réel (fills, clôtures)
                     runner._sync_broker(now_utc_poll)
                     # Persiste immédiatement : fills/closes détectés ici
                     # seraient perdus si _load_state() tourne au prochain tick.

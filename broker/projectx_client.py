@@ -75,6 +75,22 @@ class ProjectXClient:
             if not self.login():
                 raise AuthError("Impossible de s'authentifier à ProjectX")
 
+    @property
+    def token(self) -> str:
+        """
+        JWT actuel — déclenche un (re-)login si absent ou expiré.
+
+        Utilisable comme `access_token_factory` pour le hub SignalR :
+            client = ProjectXClient(...)
+            ws = ProjectXRealtimeClient(..., token_provider=lambda: client.token)
+
+        Cette property est volontairement refresh-aware : chaque appel passe par
+        `_maybe_reauth()`, ce qui permet au client realtime de toujours obtenir
+        un JWT frais au moment d'une reconnexion (notamment après la TTL 23 h).
+        """
+        self._maybe_reauth()
+        return self._token  # type: ignore[return-value]
+
     # ─────────────────────────────────────────────────────────────────────
     # Requête POST générique avec retry sur 401
     # ─────────────────────────────────────────────────────────────────────

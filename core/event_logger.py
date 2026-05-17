@@ -107,3 +107,32 @@ class EventLogger:
     def session_end(self, date_str: str, session_pnl: float, n_fills: int):
         self._write("SESSION", f"Fin  {date_str}",
                     session_pnl=f"${session_pnl:+.0f}", fills=n_fills)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Realtime (SignalR User Hub) — lifecycle et santé connexion WS
+    # ─────────────────────────────────────────────────────────────────────
+    # Le mode realtime est OFF par défaut (config PROJECTX_REALTIME_ENABLED).
+    # Ces méthodes ne sont appelées que si le WS client est instancié.
+
+    def realtime_starting(self):
+        self._write("INFO", "Realtime WS démarrage")
+
+    def realtime_connected(self):
+        self._write("INFO", "Realtime WS connecté")
+
+    def realtime_disconnected(self, reason: str = ""):
+        self._write("WARN", "Realtime WS déconnecté", raison=reason or "?")
+
+    def realtime_event(self, kind: str, tag: str = None):
+        # Gated par PROJECTX_REALTIME_DEBUG_EVENTS dans le runner —
+        # ne pas appeler en mode prod, sinon spamme le log.
+        self._write("INFO", f"WS {kind}", tag=tag)
+
+    def realtime_event_error(self, kind: str, err: str):
+        self._write("ERROR", f"WS event {kind} échec", detail=err)
+
+    def realtime_silence(self, age_s: float):
+        self._write("WARN", "Realtime WS silencieux", age_s=f"{age_s:.0f}")
+
+    def realtime_dropped(self, n: int):
+        self._write("WARN", "Realtime queue saturée", dropped=n)

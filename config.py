@@ -261,6 +261,101 @@ OPR_H4_ICHIMOKU_SHIFT    = 26   # Senkou A/B portent déjà shift(+26)
 OPR_H4_INTRADAY_ATR_PERIOD = 14
 
 # ==============================================================================
+# STRATÉGIE OPR v5 (`opr-v5`) — recherche, variante d'opr-v4 + 3 features
+# ==============================================================================
+# OPR v4 augmenté de 3 features de filtrage causal (post-traitement walk-forward) :
+#   F1 : nb de bougies M15 entre fin OPR (label OPR + 15min = ~9h45 NY) et la
+#        bougie de cassure (trigger_time). Filtre les cassures trop rapides
+#        (réaction émotionnelle non digérée) ou trop tardives (post-momentum).
+#   F2 : excursion max (normalisée par ATR daily) dans le sens de la cassure
+#        entre trigger_time et fill_time. Filtre les "longs mouvements" suggérant
+#        retournement plutôt qu'un pullback propre vers le niveau OPR.
+#   F3 : nb de bougies M15 entre trigger_time et fill_time. Filtre pullbacks
+#        trop tardifs (la mécanique aller-retour n'est plus réactive).
+#
+# Approche : wrapper post-traitement de core/opr.run_opr_day() — équivalent
+# causal au filtre pré-fill. Sémantique de rejet :
+#   F1 rejet → trade marqué NOT_FILLED, F2/F3 perdus (non évaluables)
+#   F2/F3 rejet → trade marqué NOT_FILLED (uniquement sur trades filled natifs)
+#
+# Causalité (zero look-ahead) :
+#   F1 utilise bougies sur (opr_ts_ny + 15min, trigger_time]   → tous ≤ trigger
+#   F2/F3 utilisent bougies sur [trigger_time, fill_time]      → tous ≤ fill
+#   Asserté algorithmiquement dans _compute_features_for_signal.
+#
+# Note frictions : core/opr.py retourne du P&L brut (pas de slippage/commission
+# appliqué). Pour comparaison apples-to-apples avec opr-v4 baseline en
+# production, opr-v5 reste sur le même régime gross. Cf. note opr_h4-v1
+# strategies/opr_h4.py L41-42 pour la même décision.
+#
+# Voir strategies/opr_v5.py.
+
+OPR_V5_STRATEGY_VERSION = "opr-v5"
+OPR_V5_TICKERS          = ["MES1", "NQ1", "YM1"]
+
+# ── Filtres (None = filtre désactivé) ────────────────────────────────────────
+# Bornes par défaut à None pour test de non-régression critique : avec tous
+# les filtres désactivés, opr-v5 doit produire exactement les mêmes trades
+# qu'opr-v4. Les bornes finales sont écrites après walk-forward (PHASE 4).
+#
+# Valeurs renseignées : optimum walk-forward IS=déc2024→sept2025 / OOS=oct2025→mars2026
+# (cf. output/robustness_opr-v5.json) :
+#   MES1 : filtres tous None → équivalent opr-v4 (pas d'edge marginal)
+#   NQ1  : f2_max_atr=0.5    → OOS PF=1.55, P&L=+$5,560, n=221, BS=100 %
+#   YM1  : f1_max=10, f2_max_atr=1.0 → OOS PF=3.76, P&L=+$3,032, n=53, BS=100 %
+# Portfolio OOS : PF=2.17, P&L=+$9,267, BS=66.6 % → 🟡 VEILLE
+OPR_V5_F1_MIN     = {"MES1": None, "NQ1": None, "YM1": None}   # borne basse F1
+OPR_V5_F1_MAX     = {"MES1": None, "NQ1": None, "YM1": 10}     # borne haute F1
+OPR_V5_F2_MAX_ATR = {"MES1": None, "NQ1": 0.5,  "YM1": 1.0}    # borne haute F2
+OPR_V5_F3_MAX     = {"MES1": None, "NQ1": None, "YM1": None}   # borne haute F3
+
+# ==============================================================================
+# STRATÉGIE OPR v5.1 (recherche — extension v5 avec filtre data-driven f2_min_atr)
+# ==============================================================================
+# v5.1 ajoute UN filtre INFÉRIEUR sur F2 (`f2_min_atr`) au-dessus de la grille
+# v5 existante. Motivation : l'analyse data science approfondie
+# (output/data_science_opr_v5.md) a confirmé via 5 méthodes ML indépendantes
+# (Random Forest, Logistic Regression, Decision Tree, grid search, permutation
+# test 10 000 itér) qu'un seuil ~0.15 ATR sur F2 sépare significativement les
+# trades gagnants/perdants — pattern non testé par la grille v5 (qui n'avait
+# que des bornes SUPÉRIEURES).
+#
+# Nouveau motif de rejet : F2_excursion_too_narrow.
+#
+# Causalité : F2 reste calculé sur [trigger_time, fill_time] → causal au moment
+# du fill, comme v5. Pas de look-ahead.
+#
+# Note frictions : héritage v4/v5 — P&L brut (gross) pour comparaison
+# apples-to-apples avec la baseline.
+#
+# Voir strategies/opr_v5_1.py.
+
+OPR_V5_1_STRATEGY_VERSION = "opr-v5.1"
+OPR_V5_1_TICKERS          = ["MES1", "NQ1", "YM1"]
+
+# ── Filtres (None = filtre désactivé) ────────────────────────────────────────
+# IMPORTANT : f1_max, f2_max_atr, f3_max sont FIGÉS sur les optima v5
+# walk-forward déjà validés (cf rapport_opr-v5.md PHASE 4) pour isoler
+# strictement le test de la nouveauté v5.1 = f2_min_atr.
+#
+# La grille d'optimisation v5.1 (cf strategies/opr_v5_1.py PARAM_GRID) ne fait
+# varier QUE f2_min_atr. Les autres bornes sont héritées de la config v5 par
+# ticker, recopiées ici pour autonomie de la stratégie v5.1.
+#
+# Valeurs renseignées : optimum walk-forward IS=déc2024→sept2025 / OOS=oct2025→mai2026
+# (cf output/robustness_opr-v5.1.json) :
+#   MES1 : f2_min_atr=0.15  → OOS PF=1.23, P&L=+$288, n=29, BS=0% (caveat ML p=0.23)
+#   NQ1  : f2_min_atr=0.10  → OOS PF=2.15, P&L=+$7211, n=161, BS=100%
+#   YM1  : f2_min_atr=0.15  → OOS PF=5.75, P&L=+$3216, n=45, BS=100%
+# Portfolio OOS : PF=3.04, P&L=+$10715, n=235, BS=66.7% (moyenne Topstep per-ticker)
+# Block-bootstrap stationnaire P(PF>1)=100% (cf robustness_opr-v5.1.md)
+OPR_V5_1_F1_MIN     = {"MES1": None, "NQ1": None, "YM1": None}   # borne basse F1
+OPR_V5_1_F1_MAX     = {"MES1": None, "NQ1": None, "YM1": 10}     # ← optimum v5
+OPR_V5_1_F2_MIN_ATR = {"MES1": 0.15, "NQ1": 0.10, "YM1": 0.15}   # ← optimum v5.1
+OPR_V5_1_F2_MAX_ATR = {"MES1": None, "NQ1": 0.5,  "YM1": 1.0}    # ← optimum v5
+OPR_V5_1_F3_MAX     = {"MES1": None, "NQ1": None, "YM1": None}   # ← optimum v5
+
+# ==============================================================================
 # STRATÉGIE FIBONACCI 50% RETRACEMENT (`fib-v1`)
 # ==============================================================================
 # Promotion depuis draft_fibo_50/ après validation walk-forward IS/OOS :
@@ -421,6 +516,30 @@ PROJECTX_BARS_WARMUP = 2000
 # Fichier d'état persistant du live runner
 LIVE_STATE_FILE = "state/live_state.json"
 
+# ==============================================================================
+# REALTIME (SignalR User Hub) — fast path event-driven
+# ==============================================================================
+# Connexion WebSocket SignalR au User Hub ProjectX (rtc.topstepx.com/hubs/user).
+# Reçoit en temps réel les events GatewayUserOrder/Position/Trade/Account →
+# détection fill/close < 1 s au lieu de 30 s (polling REST). Le polling REST 30 s
+# reste actif comme filet de sécurité — idempotence garantie par
+# placed_tags[tag].status (helpers _handle_*_transition vérifient l'état avant
+# tout register_fill/close/cancel_open sur le RM).
+#
+# SignalR n'a pas de replay — les events émis pendant un outage WS sont perdus.
+# C'est exactement pour ça que le polling REST reste autoritatif.
+#
+# Désactivé par défaut, à flipper après burn-in sur compte sim.
+
+PROJECTX_REALTIME_ENABLED          = False  # OFF par défaut, flip après burn-in
+PROJECTX_REALTIME_HUB_URL          = "https://rtc.topstepx.com/hubs/user"
+PROJECTX_REALTIME_QUEUE_MAXSIZE    = 2048       # ~3 min de full-speed à 10 evt/s
+PROJECTX_REALTIME_RECONNECT_DELAYS = (0, 2, 5, 10, 30, 60, 120)  # secondes
+PROJECTX_REALTIME_MAX_SILENCE_S    = 180        # > 3 min sans event → rebuild
+PROJECTX_REALTIME_FORCE_REAUTH_S   = 22 * 3600  # rebuild forcé pour JWT frais
+PROJECTX_REALTIME_ALERT_OUTAGE_S   = 600        # alerte Telegram si WS down > 10 min
+PROJECTX_REALTIME_DEBUG_EVENTS     = False      # logger chaque event (debug)
+
 CHART_STYLE = {
     "figure.facecolor": "#131722",
     "axes.facecolor": "#131722",
@@ -478,7 +597,7 @@ ANALYSIS_CHART_CONTEXT_BEFORE = 200   # bougies 15m avant cutoff (cf. spec utili
 VPC_ENABLED = True
 
 # Tickers actifs (YM1 désactivé jusqu'à preuve OOS — cohérence portfolio)
-VPC_TICKERS = ["MES1", "NQ1"]
+VPC_TICKERS = ["MES1"]  # NQ1 retiré : 1 contrat NQ1 (SL 2.0×ATR) risque ~$300+ > USER_DAILY_LOSS_MAX $200
 
 # Fenêtre US cash NY (heures NY, DST-aware via zoneinfo)
 VPC_HOUR_START_NY = 9    # début 9h30 NY (la condition est >= 9, et minute=30 testé séparément)
@@ -768,3 +887,87 @@ KIJUN_PB_MAX_HOLD_BARS       = 16
 
 # Exclusion jours macro US (FOMC/CPI/NFP perturbent la structure Ichimoku)
 KIJUN_PB_EXCLUDE_MACRO_DAYS  = False  # V1 : on garde tout pour mesurer l'impact
+
+# ==============================================================================
+# STRATÉGIE SMC (Smart Money Concepts - LuxAlgo) — smc-v1
+# ==============================================================================
+# Concept :
+#   Multi-zone Smart Money Concepts : 5 types de zones détectées en temps réel
+#   sur M15 (causal) :
+#     - OB_internal  : Order Block sur pivots length=5  (latence +5 barres)
+#     - OB_swing     : Order Block sur pivots length=50 (latence +50 barres)
+#     - FVG bull/bear: Fair Value Gap (gap 3-bougies)   (latence +0, à la close)
+#     - EQH bearish  : 2 pivots high égaux (length=3)   (latence +3 barres)
+#     - EQL bullish  : 2 pivots low égaux  (length=3)   (latence +3 barres)
+#
+#   Entry : LIMIT au bord PROCHE de la zone (variante V_A).
+#   Filtre dur Premium/Discount : long autorisé uniquement si fill_price ≤ mid
+#   du dernier swing range confirmé (Discount), short si ≥ mid (Premium).
+#
+#   Exits :
+#     SL = bord opposé de la zone ± SMC_SL_BUFFER_TICKS
+#     TP = prochain swing HH (long) / LL (short) confirmé APRÈS fill_bar
+#          (scan à partir de fill_bar + SMC_SWING_FILTER_LENGTH)
+#     TP fallback : entry ± SMC_TP_FALLBACK_RR × sl_dist si pas de pivot
+#                   dans SMC_TP_FALLBACK_BARS barres.
+#
+#   Priorité multi-zone : OB_swing > OB_internal > FVG > EQH/EQL
+#   Max SMC_MAX_TRADES_PER_DAY trades/jour/ticker.
+#   Macro days : SKIP via MACRO_EVENT_DATES.
+#
+# Edge théorique :
+#   Confluence d'ordres institutionnels (entry liquidity zones) renforcée par
+#   le filtre Premium/Discount. Les pivots length=50 + filtre directionnel
+#   sélectionnent un sous-ensemble étroit de setups à fort R:R asymétrique
+#   (SL serré au bord opposé de la zone, TP au prochain swing).
+#
+# Falsification :
+#   Bootstrap portfolio OOS < 50 %, OU PF OOS < 1.0 sur 60 trades live.
+# ──────────────────────────────────────────────────────────────────────────────
+
+SMC_STRATEGY_VERSION = "smc-v1"
+
+# Tickers (M15) — actifs standards
+SMC_TICKERS = ["MES1", "NQ1", "YM1"]
+
+# Détection des pivots (LuxAlgo style)
+SMC_PIVOT_LENGTH_INTERNAL = 5      # OB_internal
+SMC_PIVOT_LENGTH_SWING    = 50     # OB_swing
+SMC_PIVOT_LENGTH_EQHL     = 3      # EQH/EQL
+
+# FVG
+SMC_FVG_MIN_GAP_TICKS = 1          # gap minimum (≥1 tick) pour valider FVG
+
+# EQH/EQL : seuil de "quasi-égalité" entre 2 pivots, normalisé par ATR
+SMC_EQH_EQL_THRESHOLD = 0.10       # |h2 - h1| ≤ 0.10 × ATR
+
+# Swing filter length : utilisé pour scan TP (next swing HH/LL) après fill
+SMC_SWING_FILTER_LENGTH = 10
+
+# Âge max d'une zone avant qu'elle soit considérée obsolète (en barres M15)
+SMC_ZONE_MAX_AGE_BARS = 96         # ~4 jours de session NY M15
+
+# SL : buffer en ticks au-delà du bord opposé de la zone
+SMC_SL_BUFFER_TICKS = 2
+
+# TP fallback (si aucun swing HH/LL trouvé)
+SMC_TP_FALLBACK_RR    = 1.5        # entry ± 1.5 × sl_dist
+SMC_TP_FALLBACK_BARS  = 40         # bornes max du scan post-fill
+
+# Sizing
+SMC_MAX_CONTRACTS_PER_TRADE = 3    # plafond contrats (sécurité Topstep)
+SMC_MAX_TRADES_PER_DAY      = 2    # par ticker
+
+# Fenêtre NY (DST-aware via zoneinfo) — session cash
+SMC_SESSION_START_NY = (9, 30)
+SMC_SESSION_END_NY   = (12, 0)
+
+# Priorité multi-zones (du plus fort au plus faible)
+SMC_ZONE_PRIORITY = ["OB_swing", "OB_internal", "FVG", "EQH", "EQL"]
+
+# ATR période pour calculs zone_width_atr et adx_at_entry
+SMC_ATR_PERIOD = 14
+SMC_ADX_PERIOD = 14
+
+# Exclusion jours macro (FOMC/CPI/NFP)
+SMC_EXCLUDE_MACRO_DAYS = True

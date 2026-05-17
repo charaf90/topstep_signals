@@ -39,6 +39,10 @@ from config import (
     USER_DAILY_LOSS_MAX, USER_MAX_TRADES_PER_DAY,
     CONSEC_LOSS_PAUSE_DAYS,
     TOPSTEP_ACCOUNT_SIZE,
+    PROJECTX_REALTIME_ENABLED, PROJECTX_REALTIME_HUB_URL,
+    PROJECTX_REALTIME_QUEUE_MAXSIZE, PROJECTX_REALTIME_RECONNECT_DELAYS,
+    PROJECTX_REALTIME_MAX_SILENCE_S, PROJECTX_REALTIME_FORCE_REAUTH_S,
+    PROJECTX_REALTIME_ALERT_OUTAGE_S, PROJECTX_REALTIME_DEBUG_EVENTS,
 )
 from core.opr import run_opr_day
 from core.strategy_fib import get_fib_live_signal
@@ -48,6 +52,7 @@ from core.signal_selector import filter_correlated_signals
 from core.event_logger import EventLogger
 from broker.projectx_client import ProjectXClient
 from broker.telegram_bot import TelegramBot
+from broker.projectx_realtime import ProjectXRealtimeClient, RealtimeEvent
 
 _log   = logging.getLogger(__name__)
 _evlog = EventLogger("logs/trading_events.log")
@@ -211,6 +216,30 @@ class SessionRunner:
         self.state: Dict = {}
         self.rm:  PortfolioRiskManager = PortfolioRiskManager()
         self.tg: TelegramBot = telegram or TelegramBot("", "")  # noop si absent
+
+        # ── Client realtime SignalR (fast path, hybride avec polling REST) ──
+        # OFF par défaut (PROJECTX_REALTIME_ENABLED) → instancié uniquement
+        # si flag activé en config. Polling REST 30 s reste autoritatif.
+        self.rt: Optional[ProjectXRealtimeClient] = None
+        self._rt_error_count_hour: int = 0
+        self._rt_error_hour_start: float = 0.0
+        if PROJECTX_REALTIME_ENABLED:
+            try:
+                self.rt = ProjectXRealtimeClient(
+                    account_id      = self.account_id,
+                    token_provider  = lambda: self.client.token,
+                    hub_url         = PROJECTX_REALTIME_HUB_URL,
+                    queue_maxsize   = PROJECTX_REALTIME_QUEUE_MAXSIZE,
+                    reconnect_delays= PROJECTX_REALTIME_RECONNECT_DELAYS,
+                    max_silence_s   = PROJECTX_REALTIME_MAX_SILENCE_S,
+                    force_reauth_s  = PROJECTX_REALTIME_FORCE_REAUTH_S,
+                )
+                _evlog.realtime_starting()
+                self.rt.start()
+            except Exception as exc:
+                _log.error("Realtime: init échouée (%s) — fallback REST seul",
+                           exc, exc_info=True)
+                self.rt = None
 
     # ─────────────────────────────────────────────────────────────────────
     # Tickers actifs
@@ -657,27 +686,10 @@ class SessionRunner:
                 cid = info["contract_id"]
                 if cid in pos_by_cid:
                     # Fill confirmé : une position est ouverte pour ce contrat
-                    _log.info("[%s] FILL confirmé — position ouverte", tag)
-                    info["status"]    = _ST_ACTIVE
-                    info["fill_time"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-                    self.rm.register_fill(tag, when=now_utc)
-                    status_snap = self.rm.status()
-                    _evlog.fill(tag, info["ticker"], info["direction"],
-                                info["entry"],
-                                status_snap["daily_fills_count"],
-                                self.rm.user_max_trades_per_day)
-                    self.tg.notify_fill(
-                        tag, info,
-                        fills_today = status_snap["daily_fills_count"],
-                        fills_max   = self.rm.user_max_trades_per_day,
-                    )
-                    self._maybe_warn_daily_limit(status_snap)
+                    self._handle_fill_transition(tag, info, now_utc)
                 else:
                     # Pas de position → ordre annulé ou expiré sans fill
-                    _log.info("[%s] Ordre annulé / expiré sans fill", tag)
-                    _evlog.order_cancelled(tag, "expiré sans fill")
-                    info["status"] = _ST_CANCELLED
-                    self.rm.cancel_open(tag)
+                    self._handle_cancel_transition(tag, info, "expiré sans fill")
                 continue
 
             if status == _ST_ACTIVE:
@@ -716,26 +728,244 @@ class SessionRunner:
                         tag, cid_key, fill_ts, list(closing_by_cid.keys()),
                     )
                 pnl = sum(float(t["profitAndLoss"]) for t in candidates) if candidates else 0.0
-                _log.info("[%s] Position clôturée — P&L = %+.2f $", tag, pnl)
-                info["status"]    = _ST_CLOSED
-                info["close_pnl"] = pnl
-                breached, reason  = self.rm.register_close(tag, pnl,
-                                                            when=now_utc)
-                status_snap = self.rm.status()
-                _evlog.close(tag, info["ticker"], pnl,
-                             status_snap["realized_day_pnl"],
-                             status_snap["cum_pnl"])
-                self.tg.notify_close(
-                    tag, info, pnl,
-                    session_pnl = status_snap["realized_day_pnl"],
-                    cum_pnl     = status_snap["cum_pnl"],
-                )
-                if breached:
-                    _log.critical("LIMITE TOPSTEP FRANCHIE : %s", reason)
-                    _evlog.risk_breach(reason)
-                    self.tg.notify_risk_breach(reason)
-                else:
-                    self._maybe_warn_daily_limit(status_snap)
+                self._handle_close_transition(tag, info, pnl, now_utc)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Helpers idempotents de transition d'état
+    # ─────────────────────────────────────────────────────────────────────
+    # Extraits de `_sync_broker` pour permettre le double-path :
+    #   - polling REST 30 s (path historique, autoritatif)
+    #   - WebSocket User Hub (`_apply_realtime_event`, fast path < 1 s)
+    #
+    # Idempotence garantie par la garde `info["status"]` en tête de chaque
+    # helper : un même transition détectée par les deux paths ne déclenche
+    # `register_fill/close/cancel_open` qu'une seule fois côté RM, et
+    # ne notifie Telegram qu'une seule fois. C'est la pierre angulaire du
+    # mode hybride : on peut appeler chaque helper plusieurs fois sans risque.
+
+    def _handle_fill_transition(self, tag: str, info: Dict,
+                                  now_utc: datetime):
+        """Transition PENDING → ACTIVE. No-op si status != PENDING."""
+        if info.get("status") != _ST_PENDING:
+            return
+
+        _log.info("[%s] FILL confirmé — position ouverte", tag)
+        info["status"]    = _ST_ACTIVE
+        info["fill_time"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.rm.register_fill(tag, when=now_utc)
+        status_snap = self.rm.status()
+        _evlog.fill(tag, info["ticker"], info["direction"],
+                    info["entry"],
+                    status_snap["daily_fills_count"],
+                    self.rm.user_max_trades_per_day)
+        self.tg.notify_fill(
+            tag, info,
+            fills_today = status_snap["daily_fills_count"],
+            fills_max   = self.rm.user_max_trades_per_day,
+        )
+        self._maybe_warn_daily_limit(status_snap)
+
+    def _handle_cancel_transition(self, tag: str, info: Dict,
+                                    reason: str = "expiré sans fill"):
+        """Transition PENDING → CANCELLED. No-op si status != PENDING."""
+        if info.get("status") != _ST_PENDING:
+            return
+
+        _log.info("[%s] Ordre annulé / expiré sans fill (%s)", tag, reason)
+        _evlog.order_cancelled(tag, reason)
+        info["status"] = _ST_CANCELLED
+        self.rm.cancel_open(tag)
+
+    def _handle_close_transition(self, tag: str, info: Dict,
+                                   pnl: float, now_utc: datetime):
+        """Transition ACTIVE → CLOSED. No-op si status != ACTIVE."""
+        if info.get("status") != _ST_ACTIVE:
+            return
+
+        _log.info("[%s] Position clôturée — P&L = %+.2f $", tag, pnl)
+        info["status"]    = _ST_CLOSED
+        info["close_pnl"] = pnl
+        breached, reason  = self.rm.register_close(tag, pnl, when=now_utc)
+        status_snap = self.rm.status()
+        _evlog.close(tag, info["ticker"], pnl,
+                     status_snap["realized_day_pnl"],
+                     status_snap["cum_pnl"])
+        self.tg.notify_close(
+            tag, info, pnl,
+            session_pnl = status_snap["realized_day_pnl"],
+            cum_pnl     = status_snap["cum_pnl"],
+        )
+        if breached:
+            _log.critical("LIMITE TOPSTEP FRANCHIE : %s", reason)
+            _evlog.risk_breach(reason)
+            self.tg.notify_risk_breach(reason)
+        else:
+            self._maybe_warn_daily_limit(status_snap)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Realtime — drain + dispatch events SignalR
+    # ─────────────────────────────────────────────────────────────────────
+    # Le drain est appelé :
+    #   • Au début de chaque run_tick() — pour que le _sync_broker REST qui
+    #     suit voie déjà l'état mis à jour par le WS
+    #   • Au début de chaque micro-sync 30 s (live.py:272) — pour réagir
+    #     aux fills/closes en quasi-temps réel
+    #
+    # `_apply_realtime_event` route l'event vers l'un des 3 helpers
+    # idempotents. Si le WS et le polling détectent le même event, le 2e
+    # appel est un no-op (status check en tête de chaque helper).
+
+    def _drain_realtime(self):
+        """Drain non-bloquant de la queue WS. Sans effet si realtime désactivé."""
+        if self.rt is None:
+            return
+        # Maintenance compteur d'erreurs horaire (auto-disable >10 err/h)
+        now_mono = __import__("time").monotonic()
+        if self._rt_error_hour_start == 0.0 or \
+                (now_mono - self._rt_error_hour_start) > 3600:
+            self._rt_error_hour_start = now_mono
+            self._rt_error_count_hour = 0
+
+        try:
+            events = self.rt.drain_events(max_events=500)
+        except Exception as exc:
+            _log.exception("Realtime: drain_events échoué : %s", exc)
+            return
+
+        if not events:
+            self._check_realtime_outage()
+            return
+
+        for evt in events:
+            try:
+                self._apply_realtime_event(evt)
+                if PROJECTX_REALTIME_DEBUG_EVENTS:
+                    _evlog.realtime_event(evt.kind, tag=evt.custom_tag)
+            except Exception as exc:
+                self._rt_error_count_hour += 1
+                _log.exception("Realtime: apply_event(%s) échoué : %s",
+                               evt.kind, exc)
+                _evlog.realtime_event_error(evt.kind, str(exc))
+
+        # Auto-disable si > 10 erreurs/heure
+        if self._rt_error_count_hour > 10:
+            _log.critical("Realtime: > 10 erreurs/h — auto-disable WS")
+            self.tg.notify_system_error(
+                "realtime_auto_disabled",
+                f"WS désactivé après {self._rt_error_count_hour} erreurs/h. "
+                "Polling REST continue.",
+            )
+            try:
+                self.rt.stop()
+            except Exception:
+                pass
+            self.rt = None
+            self.state["realtime_auto_disabled_until"] = (
+                __import__("datetime").datetime.utcnow()
+                + __import__("datetime").timedelta(hours=1)
+            ).isoformat()
+
+    def _check_realtime_outage(self):
+        """Alerte Telegram si WS down > seuil ET marché ouvert (throttle 1 h)."""
+        if self.rt is None:
+            return
+        h = self.rt.health()
+        if h["connected"]:
+            return
+        if h["last_event_age_s"] < PROJECTX_REALTIME_ALERT_OUTAGE_S:
+            return
+        # Anti-flap : 1 alerte / heure max
+        from datetime import datetime as _dt
+        last = self.state.get("realtime_last_alert_ts")
+        now = _dt.utcnow()
+        if last:
+            try:
+                last_dt = _dt.fromisoformat(last)
+                if (now - last_dt).total_seconds() < 3600:
+                    return
+            except Exception:
+                pass
+        self.state["realtime_last_alert_ts"] = now.isoformat()
+        _evlog.realtime_disconnected(
+            f"WS down {h['last_event_age_s']:.0f}s, polling REST intact"
+        )
+        try:
+            self.tg.notify_system_error(
+                "realtime_outage",
+                f"WS down {h['last_event_age_s']:.0f}s, REST polling intact.",
+            )
+        except Exception as exc:
+            _log.debug("Telegram outage notify échoué : %s", exc)
+
+    def _apply_realtime_event(self, evt: "RealtimeEvent"):
+        """
+        Dispatch un event WS vers le bon helper de transition.
+
+        Lookup du tag : d'abord par `customTag`, sinon fallback par
+        `contract_id` + status (même logique que `_sync_broker` L702-710 :
+        les closing trades n'embarquent pas toujours le customTag d'entrée).
+
+        Idempotence : les helpers _handle_*_transition checkent le status
+        au début, donc un event répété ou en concurrence avec le polling
+        REST est silencieusement ignoré.
+        """
+        from datetime import datetime as _dt
+
+        now_utc = _dt.utcnow()
+        placed  = self.state.get("placed_tags", {})
+
+        # ── Lookup du tag ────────────────────────────────────────────────
+        tag = None
+        info = None
+        if evt.custom_tag and evt.custom_tag in placed:
+            tag = evt.custom_tag
+            info = placed[tag]
+        elif evt.contract_id:
+            # Fallback : chercher un tag PENDING/ACTIVE sur ce contractId
+            for t, i in placed.items():
+                if str(i.get("contract_id")) == evt.contract_id and \
+                        i.get("status") in (_ST_PENDING, _ST_ACTIVE):
+                    tag, info = t, i
+                    break
+        if tag is None or info is None:
+            return  # event sans tag matchable (account / contract inconnu)
+
+        # ── Dispatch par kind ────────────────────────────────────────────
+        if evt.kind == "trade" and evt.pnl is not None:
+            # Closing trade → ACTIVE → CLOSED (helper idempotent)
+            self._handle_close_transition(tag, info, float(evt.pnl), now_utc)
+            return
+
+        if evt.kind == "position":
+            if evt.size is None:
+                return
+            if evt.size == 0:
+                # Position flat sans pnl encore — on attend le trade event
+                # qui suivra (le polling REST 30 s rattrape sinon)
+                info["_close_seen"] = True
+                return
+            if evt.size > 0 and info.get("status") == _ST_PENDING:
+                # Fill confirmé via WS avant que le poll REST n'arrive
+                self._handle_fill_transition(tag, info, now_utc)
+            return
+
+        if evt.kind == "order":
+            # Mapping status codes ProjectX (confirmé via smoke test 2026-05-18) :
+            #   1 = actif / placed (entry order, après placement)
+            #   2 = filled (ordre exécuté — pour l'entry, on s'appuie sur le
+            #       Position event size>0 plutôt qu'écouter status=2)
+            #   3 = cancelled (cible de notre handler)
+            #   6 = market in-flight (transitionnel, dure ~100ms → pas terminal)
+            #   8 = bracket en attente (SL/TP juste après placement entry)
+            # status 5 (rejected) supposé mais non observé au smoke
+            # → inclus par robustesse, à valider au burn-in si vu.
+            TERMINAL_CANCEL = (3, 5)   # cancelled / rejected (PAS 6 = in-flight)
+            if evt.status in TERMINAL_CANCEL and info.get("status") == _ST_PENDING:
+                self._handle_cancel_transition(tag, info,
+                                                f"WS status={evt.status}")
+            return
+
+        # account → ignoré pour v1 (diagnostic uniquement)
 
     # ─────────────────────────────────────────────────────────────────────
     # Clôture forcée d'une position (Fib timeout ou fin de session OPR)
@@ -896,6 +1126,11 @@ class SessionRunner:
             return
 
         # ── 3. Synchronisation broker (fills / clôtures) ──────────────────
+        # 3a. Drain WS d'abord — le polling REST qui suit voit l'état à jour.
+        #     Aucun effet si PROJECTX_REALTIME_ENABLED=False (self.rt is None).
+        self._drain_realtime()
+
+        # 3b. Polling REST autoritatif (autour de 30 s en micro-sync via live.py)
         try:
             self._sync_broker(now_utc)
         except Exception as exc:
