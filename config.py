@@ -155,7 +155,7 @@ DAILY_LOCKIN_THRESHOLD = 0      # lock-in après gain cumulé (0 = désactivé)
 # Voir core/opr.py.
 
 OPR_ENABLED  = True
-YM1_ENABLED  = False  # désactivé jusqu'à preuve OOS (PF ≥ 1.2)
+YM1_ENABLED  = True   # activé 2026-05-18 — promotion v5.1 (BS=100%, PF=1.87)
 
 # Fuseau horaire de référence pour la zone OPR et l'horaire de session.
 # `America/New_York` gère automatiquement DST (EST/EDT) — l'OPR reste à
@@ -557,6 +557,39 @@ PROJECTX_REALTIME_MAX_SILENCE_S    = 180        # > 3 min sans event → rebuild
 PROJECTX_REALTIME_FORCE_REAUTH_S   = 22 * 3600  # rebuild forcé pour JWT frais
 PROJECTX_REALTIME_ALERT_OUTAGE_S   = 600        # alerte Telegram si WS down > 10 min
 PROJECTX_REALTIME_DEBUG_EVENTS     = False      # logger chaque event (debug)
+
+# ==============================================================================
+# PROJECTX MARKET HUB STREAMING (Phase C — running F2 sur bars M1 intra-bar)
+# ==============================================================================
+# Connexion WebSocket au Market Hub ProjectX (rtc.topstepx.com/hubs/market) pour
+# recevoir les trades exécutés (GatewayTrade) et reconstruire en RAM des bars M1
+# OHLCV. Permet à OPR v5.1 de mesurer le running F2 intra-bar M15 au lieu de
+# n'avoir l'info qu'à la close M15 (fidélité backtest 74 % → cible 90 % +).
+#
+# Architecture (cf. broker/projectx_market_realtime.py + broker/m1_buffer.py) :
+#   - Volume événements ~30-200 evt/s par contract en RTH → queue 10k+
+#   - max_silence_s plus court (60 s) car Market Hub est très bavard
+#   - Bars M1 = trades only (quotes ignorées pour OHLCV)
+#   - SignalR sans replay → fallback M15 si buffer indispo ou bars manquants
+#
+# Désactivé par défaut. Le code est additif : si OFF, OPR v5.1 reste en M15
+# strict (comportement actuel). Flip ON après burn-in sim 1 session OPR
+# complète sans crash thread.
+
+PROJECTX_MARKET_REALTIME_ENABLED      = True   # flip ON 2026-05-18 (burn-in Phase C)
+PROJECTX_MARKET_REALTIME_HUB_URL      = "https://rtc.topstepx.com/hubs/market"
+PROJECTX_MARKET_REALTIME_QUEUE_MAXSIZE = 20_000  # ~1-2 min full-speed à 200 evt/s
+PROJECTX_MARKET_REALTIME_RECONNECT_DELAYS = (0, 2, 5, 10, 30, 60, 120)
+PROJECTX_MARKET_REALTIME_MAX_SILENCE_S = 60      # > 60s sans event → rebuild
+PROJECTX_MARKET_REALTIME_FORCE_REAUTH_S = 22 * 3600
+PROJECTX_MARKET_REALTIME_ALERT_OUTAGE_S = 600
+PROJECTX_MARKET_REALTIME_BUFFER_MINUTES = 120    # bars M1 historisés en RAM
+PROJECTX_MARKET_REALTIME_DEBUG_EVENTS  = False
+
+# Activation du buffer M1 dans le calcul F2 running d'OPR v5.1.
+# Si False : v5.1 reste en M15 strict (fallback). Pour passer True, le buffer
+# doit avoir été démarré (PROJECTX_MARKET_REALTIME_ENABLED=True).
+OPR_V5_1_USE_M1_BUFFER = True   # flip ON 2026-05-18 — F2 intra-bar M15
 
 CHART_STYLE = {
     "figure.facecolor": "#131722",

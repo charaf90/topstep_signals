@@ -270,6 +270,8 @@ def main():
                                     .strftime("%Y-%m-%d %H:%M NY"))
                     # Drain WS d'abord (fast path, no-op si realtime désactivé)
                     runner._drain_realtime()
+                    # Drain Market Hub (buffer M1 — Phase C, no-op si OFF)
+                    runner._drain_market_realtime()
                     # Sync broker REST pour avoir l'état réel (fills, clôtures)
                     runner._sync_broker(now_utc_poll)
                     # Persiste immédiatement : fills/closes détectés ici

@@ -186,3 +186,108 @@ def test_threshold_none_yields_v4(df_nq1, monkeypatch):
     sigs_v4, _, _ = run_opr_day(df_nq1, "NQ1", day)
     sigs_v51, _, _ = get_opr_v5_1_live_signals(df_nq1, "NQ1", day)
     assert sigs_v51 == sigs_v4
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test 7-9 : Phase C — intégration M1 buffer (paramètres optionnels)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _trigger_ts_for(df, ticker: str, day: pd.Timestamp) -> pd.Timestamp:
+    """Helper : retourne le trigger_time du premier signal v4 du jour."""
+    sigs_v4, _, _ = run_opr_day(df, ticker, day)
+    if not sigs_v4:
+        return None
+    t = pd.Timestamp(sigs_v4[0]["trigger_time"])
+    if t.tz is None:
+        t = t.tz_localize(_TZ)
+    return t
+
+
+def test_m1_buffer_overrides_m15_extremum(df_nq1):
+    """
+    Si un buffer M1 contient un bar avec un high SUPÉRIEUR au max des bars M15
+    post-trigger, l'excursion calculée doit utiliser le high M1 (et donc
+    déclencher l'émission plus tôt ou avec un F2 plus élevé que sans buffer).
+    """
+    from broker.m1_buffer import M1Buffer, M1Bar
+    from datetime import timezone
+
+    day = _trading_day("2025-12-01")
+    trigger_ts = _trigger_ts_for(df_nq1, "NQ1", day)
+    if trigger_ts is None:
+        pytest.skip("Pas de signal v4 sur cette date")
+
+    # Sans buffer : baseline
+    sigs_baseline, _, _ = get_opr_v5_1_live_signals(df_nq1, "NQ1", day)
+    if not sigs_baseline:
+        pytest.skip("Pas de signal v5.1 baseline — choisir autre date")
+
+    baseline_f2 = sigs_baseline[0]["v5_1_f2_running_at_emit"]
+    opr_high = sigs_baseline[0]["opr_high"]
+    atr_daily = sigs_baseline[0]["atr_daily"]
+
+    # Avec buffer M1 contenant un bar avec un high 50 pts au-dessus du baseline
+    # → l'excursion long doit augmenter
+    buf = M1Buffer(max_minutes=120)
+    spike_high = opr_high + (baseline_f2 + 0.5) * atr_daily  # bien au-dessus seuil
+    spike_bar = M1Bar(
+        contract_id="CON.F.US.MNQ.M26",
+        start_ts=trigger_ts.tz_convert("UTC").to_pydatetime().replace(
+            tzinfo=timezone.utc
+        ),
+        open=spike_high, high=spike_high, low=spike_high - 1,
+        close=spike_high - 0.5, volume=10,
+    )
+    buf.inject_bars([spike_bar])
+
+    sigs_m1, _, _ = get_opr_v5_1_live_signals(
+        df_nq1, "NQ1", day,
+        m1_buffer=buf,
+        contract_id="CON.F.US.MNQ.M26",
+    )
+    assert sigs_m1, "Avec spike M1, on devrait toujours émettre"
+    assert sigs_m1[0]["v5_1_f2_source"] == "M1_buffer"
+    # Le F2 émis doit refléter le spike M1 (≥ baseline)
+    assert sigs_m1[0]["v5_1_f2_running_at_emit"] >= baseline_f2
+
+
+def test_m1_buffer_empty_falls_back_to_m15(df_nq1):
+    """Buffer M1 fourni mais aucun bar depuis trigger → fallback M15 +
+    annotation source=M15."""
+    from broker.m1_buffer import M1Buffer
+
+    day = _trading_day("2025-12-01")
+    buf = M1Buffer(max_minutes=120)  # vide
+
+    sigs_baseline, _, _ = get_opr_v5_1_live_signals(df_nq1, "NQ1", day)
+    sigs_with_empty_buf, _, _ = get_opr_v5_1_live_signals(
+        df_nq1, "NQ1", day,
+        m1_buffer=buf,
+        contract_id="CON.F.US.MNQ.M26",
+    )
+
+    # Même résultat numérique (mêmes signals)
+    assert len(sigs_baseline) == len(sigs_with_empty_buf)
+    for s1, s2 in zip(sigs_baseline, sigs_with_empty_buf):
+        assert s1["v5_1_f2_running_at_emit"] == pytest.approx(
+            s2["v5_1_f2_running_at_emit"]
+        )
+    # Annotation source = M15 pour les deux
+    for s in sigs_with_empty_buf:
+        assert s["v5_1_f2_source"] == "M15"
+
+
+def test_m1_buffer_without_contract_id_uses_m15(df_nq1):
+    """Buffer M1 fourni SANS contract_id → fallback M15 (sécurité)."""
+    from broker.m1_buffer import M1Buffer
+
+    day = _trading_day("2025-12-01")
+    buf = M1Buffer(max_minutes=10)
+    # Même sans contract_id, le code doit ignorer le buffer
+    sigs, _, _ = get_opr_v5_1_live_signals(
+        df_nq1, "NQ1", day,
+        m1_buffer=buf,
+        contract_id=None,
+    )
+    for s in sigs:
+        assert s["v5_1_f2_source"] == "M15"

@@ -55,7 +55,7 @@ pass-through vers `core.opr.run_opr_day` (v4). Aujourd'hui :
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -71,11 +71,18 @@ from config import (
 )
 from core.opr import run_opr_day, _ny_session_view
 
+if TYPE_CHECKING:
+    # Couplage faible : on n'importe le type qu'à la vérif statique.
+    # Le module reste utilisable sans broker.m1_buffer installé.
+    from broker.m1_buffer import M1Buffer
+
 
 def get_opr_v5_1_live_signals(
     df_15m: pd.DataFrame,
     ticker: str,
     day_ny: pd.Timestamp,
+    m1_buffer: Optional["M1Buffer"] = None,
+    contract_id: Optional[str] = None,
 ) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     """
     Variante live d'OPR v5.1 avec schéma A (entrée différée).
@@ -86,14 +93,23 @@ def get_opr_v5_1_live_signals(
     quand le push de cassure est confirmé.
 
     Args:
-        df_15m  : DataFrame M15 (UTC ou tz-aware), bars FERMÉES uniquement
-                  pour respecter la causalité.
-        ticker  : "MES1" | "NQ1" | "YM1".
-        day_ny  : Timestamp tz-aware NY à 00:00 (jour à jouer).
+        df_15m   : DataFrame M15 (UTC ou tz-aware), bars FERMÉES uniquement
+                   pour respecter la causalité.
+        ticker   : "MES1" | "NQ1" | "YM1".
+        day_ny   : Timestamp tz-aware NY à 00:00 (jour à jouer).
+        m1_buffer    : (Phase C, optionnel) `broker.m1_buffer.M1Buffer` alimenté
+                       par le Market Hub WS. Si fourni avec `contract_id` et
+                       qu'au moins 1 bar M1 existe depuis le trigger, F2 est
+                       calculé sur les bars M1 (closed + forming) pour capter
+                       les pushes intra-bar M15. Sinon fallback M15 strict.
+        contract_id  : (Phase C, optionnel) clé du buffer M1 pour ce ticker
+                       (ex: "CON.F.US.MNQ.M26"). Ignoré si m1_buffer is None.
 
     Returns:
         Même format que `run_opr_day` : `(signals, trades, opr_zone)`.
-        signals/trades filtrés sur la condition F2_running ≥ seuil.
+        signals/trades filtrés sur la condition F2_running ≥ seuil. Lorsque
+        le filtrage M1 est appliqué, le signal est annoté `v5_1_f2_source =
+        "M1_buffer"` (sinon "M15") pour traçabilité.
     """
     # 1. Run v4 pour détecter trigger + obtenir le signal
     signals, trades, opr_zone = run_opr_day(df_15m, ticker, day_ny)
@@ -148,14 +164,31 @@ def get_opr_v5_1_live_signals(
         if atr_daily <= 0:
             continue   # protection division par zéro
 
+        # Source des extrêmes pour F2 running : M1 buffer si dispo + ≥1 bar
+        # depuis le trigger, sinon fallback M15 strict (comportement initial).
+        # Le buffer M1 est alimenté par le Market Hub WS (Phase C) ; les bars
+        # closed + forming sont inclus pour capter les pushes intra-bar M15.
+        m1_bars = None
+        if m1_buffer is not None and contract_id is not None:
+            bars = m1_buffer.get_bars_since(
+                contract_id, trigger_ts.to_pydatetime(),
+                include_forming=True,
+            )
+            if bars:
+                m1_bars = bars
+
         if direction == "long":
-            excursion_pts = max(
-                float(bars_post_trigger["high"].max()) - opr_high, 0.0
-            )
+            if m1_bars is not None:
+                post_high = max(b.high for b in m1_bars)
+            else:
+                post_high = float(bars_post_trigger["high"].max())
+            excursion_pts = max(post_high - opr_high, 0.0)
         else:
-            excursion_pts = max(
-                opr_low - float(bars_post_trigger["low"].min()), 0.0
-            )
+            if m1_bars is not None:
+                post_low = min(b.low for b in m1_bars)
+            else:
+                post_low = float(bars_post_trigger["low"].min())
+            excursion_pts = max(opr_low - post_low, 0.0)
 
         f2_running = excursion_pts / atr_daily
 
@@ -165,6 +198,7 @@ def get_opr_v5_1_live_signals(
             sig = dict(sig)   # copie pour éviter mutation cross-call
             sig["v5_1_f2_running_at_emit"] = float(f2_running)
             sig["v5_1_f2_threshold"] = float(threshold)
+            sig["v5_1_f2_source"] = "M1_buffer" if m1_bars is not None else "M15"
             filtered_signals.append(sig)
             filtered_trades.append(trade)
         # Sinon : F2 pas encore suffisant → on attend (silence, pas d'émission)

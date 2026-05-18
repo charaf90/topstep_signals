@@ -43,6 +43,13 @@ from config import (
     PROJECTX_REALTIME_QUEUE_MAXSIZE, PROJECTX_REALTIME_RECONNECT_DELAYS,
     PROJECTX_REALTIME_MAX_SILENCE_S, PROJECTX_REALTIME_FORCE_REAUTH_S,
     PROJECTX_REALTIME_ALERT_OUTAGE_S, PROJECTX_REALTIME_DEBUG_EVENTS,
+    PROJECTX_MARKET_REALTIME_ENABLED, PROJECTX_MARKET_REALTIME_HUB_URL,
+    PROJECTX_MARKET_REALTIME_QUEUE_MAXSIZE,
+    PROJECTX_MARKET_REALTIME_RECONNECT_DELAYS,
+    PROJECTX_MARKET_REALTIME_MAX_SILENCE_S,
+    PROJECTX_MARKET_REALTIME_FORCE_REAUTH_S,
+    PROJECTX_MARKET_REALTIME_BUFFER_MINUTES,
+    OPR_V5_1_USE_M1_BUFFER,
 )
 from core.opr import run_opr_day
 from core.opr_v5_1 import get_opr_v5_1_live_signals
@@ -54,6 +61,8 @@ from core.event_logger import EventLogger
 from broker.projectx_client import ProjectXClient
 from broker.telegram_bot import TelegramBot
 from broker.projectx_realtime import ProjectXRealtimeClient, RealtimeEvent
+from broker.projectx_market_realtime import ProjectXMarketRealtimeClient
+from broker.m1_buffer import M1Buffer
 
 _log   = logging.getLogger(__name__)
 _evlog = EventLogger("logs/trading_events.log")
@@ -242,6 +251,17 @@ class SessionRunner:
                            exc, exc_info=True)
                 self.rt = None
 
+        # ── Client Market Hub realtime + buffer M1 (Phase C) ────────────────
+        # OFF par défaut (PROJECTX_MARKET_REALTIME_ENABLED). Init différée car
+        # les contract_ids ne sont résolus qu'en début de session via
+        # _ensure_contracts. Cf _maybe_start_market_realtime() appelé dans
+        # run_tick après _ensure_contracts. Le buffer M1 alimente OPR v5.1
+        # pour mesurer F2 intra-bar M15 (fidélité cible 90 %+).
+        self.market_rt: Optional[ProjectXMarketRealtimeClient] = None
+        self.m1_buffer: Optional[M1Buffer] = None
+        self._market_rt_error_count_hour: int = 0
+        self._market_rt_error_hour_start: float = 0.0
+
     # ─────────────────────────────────────────────────────────────────────
     # Tickers actifs
     # ─────────────────────────────────────────────────────────────────────
@@ -420,7 +440,23 @@ class SessionRunner:
         if not OPR_ENABLED:
             return None
 
-        signals, trades, _zone = get_opr_v5_1_live_signals(df, ticker, day_ny)
+        # Phase C : si le buffer M1 est dispo ET le flag config ON, on passe
+        # le buffer + contract_id au wrapper v5.1 pour mesurer F2 intra-bar.
+        # Sinon comportement actuel (M15 strict) — pass-through transparent.
+        contract_id = self._contract_id(ticker)
+        m1_buffer = (
+            self.m1_buffer
+            if (OPR_V5_1_USE_M1_BUFFER
+                and self.m1_buffer is not None
+                and contract_id)
+            else None
+        )
+
+        signals, trades, _zone = get_opr_v5_1_live_signals(
+            df, ticker, day_ny,
+            m1_buffer=m1_buffer,
+            contract_id=contract_id if m1_buffer is not None else None,
+        )
         if not signals:
             return None
 
@@ -906,6 +942,106 @@ class SessionRunner:
         except Exception as exc:
             _log.debug("Telegram outage notify échoué : %s", exc)
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Market Hub realtime (Phase C — buffer M1 pour F2 intra-bar M15)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _maybe_start_market_realtime(self) -> None:
+        """
+        Démarre lazily le client Market Hub + buffer M1 dès que les
+        contract_ids sont résolus (post `_ensure_contracts`). Sans effet si :
+          - PROJECTX_MARKET_REALTIME_ENABLED=False
+          - déjà démarré
+          - aucun contract_id résolu
+
+        Auto-disable a posteriori géré par `_drain_market_realtime`.
+        """
+        if not PROJECTX_MARKET_REALTIME_ENABLED:
+            return
+        if self.market_rt is not None:
+            return
+        contract_ids = [
+            v for v in (self.state.get("contracts") or {}).values() if v
+        ]
+        if not contract_ids:
+            _log.warning("MarketRT: aucun contract_id résolu, skip start")
+            return
+        try:
+            self.m1_buffer = M1Buffer(
+                max_minutes=PROJECTX_MARKET_REALTIME_BUFFER_MINUTES
+            )
+            self.market_rt = ProjectXMarketRealtimeClient(
+                contract_ids   = contract_ids,
+                token_provider = lambda: self.client.token,
+                hub_url        = PROJECTX_MARKET_REALTIME_HUB_URL,
+                queue_maxsize  = PROJECTX_MARKET_REALTIME_QUEUE_MAXSIZE,
+                reconnect_delays = PROJECTX_MARKET_REALTIME_RECONNECT_DELAYS,
+                max_silence_s  = PROJECTX_MARKET_REALTIME_MAX_SILENCE_S,
+                force_reauth_s = PROJECTX_MARKET_REALTIME_FORCE_REAUTH_S,
+            )
+            self.market_rt.start()
+            _log.info("MarketRT: démarré pour %d contracts", len(contract_ids))
+        except Exception as exc:
+            _log.error("MarketRT: init échouée (%s) — fallback M15",
+                       exc, exc_info=True)
+            self.market_rt = None
+            self.m1_buffer = None
+
+    def _drain_market_realtime(self) -> None:
+        """
+        Drain non-bloquant du Market Hub → alimente le buffer M1. Idempotent.
+        Auto-disable si > 10 erreurs/h (même pattern que `_drain_realtime`).
+        """
+        if self.market_rt is None or self.m1_buffer is None:
+            return
+        # Maintenance du compteur horaire
+        import time as _time
+        now_mono = _time.monotonic()
+        if self._market_rt_error_hour_start == 0.0 or \
+                (now_mono - self._market_rt_error_hour_start) > 3600:
+            self._market_rt_error_hour_start = now_mono
+            self._market_rt_error_count_hour = 0
+
+        try:
+            events = self.market_rt.drain_events(max_events=5000)
+        except Exception as exc:
+            _log.exception("MarketRT: drain_events échoué : %s", exc)
+            self._market_rt_error_count_hour += 1
+            events = []
+
+        for evt in events:
+            try:
+                self.m1_buffer.consume(evt)
+            except Exception as exc:
+                self._market_rt_error_count_hour += 1
+                _log.exception("MarketRT: buffer.consume échoué : %s", exc)
+
+        # Force-close des bars dont la minute est passée (utile en début/fin
+        # de session où aucun trade ne déclencherait la rotation automatique).
+        try:
+            self.m1_buffer.flush_stale_bars()
+        except Exception as exc:
+            _log.exception("MarketRT: flush_stale_bars échoué : %s", exc)
+
+        # Auto-disable si > 10 erreurs/heure
+        if self._market_rt_error_count_hour > 10:
+            _log.critical("MarketRT: > 10 erreurs/h — auto-disable")
+            try:
+                self.tg.notify_system_error(
+                    "market_realtime_auto_disabled",
+                    f"Market Hub désactivé après "
+                    f"{self._market_rt_error_count_hour} erreurs/h. "
+                    "OPR v5.1 retombe sur M15.",
+                )
+            except Exception:
+                pass
+            try:
+                self.market_rt.stop()
+            except Exception:
+                pass
+            self.market_rt = None
+            self.m1_buffer = None
+
     def _apply_realtime_event(self, evt: "RealtimeEvent"):
         """
         Dispatch un event WS vers le bon helper de transition.
@@ -1134,10 +1270,17 @@ class SessionRunner:
             self._save_state()
             return
 
+        # ── 2b. Phase C : démarrer Market Hub WS dès que les contracts ────
+        # sont résolus. Idempotent — no-op si déjà actif ou flag OFF.
+        self._maybe_start_market_realtime()
+
         # ── 3. Synchronisation broker (fills / clôtures) ──────────────────
         # 3a. Drain WS d'abord — le polling REST qui suit voit l'état à jour.
         #     Aucun effet si PROJECTX_REALTIME_ENABLED=False (self.rt is None).
         self._drain_realtime()
+        # 3a-bis. Drain Market Hub (buffer M1 alimenté). Sans effet si
+        # PROJECTX_MARKET_REALTIME_ENABLED=False.
+        self._drain_market_realtime()
 
         # 3b. Polling REST autoritatif (autour de 30 s en micro-sync via live.py)
         try:
