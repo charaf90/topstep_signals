@@ -45,6 +45,7 @@ from config import (
     PROJECTX_REALTIME_ALERT_OUTAGE_S, PROJECTX_REALTIME_DEBUG_EVENTS,
 )
 from core.opr import run_opr_day
+from core.opr_v5_1 import get_opr_v5_1_live_signals
 from core.strategy_fib import get_fib_live_signal
 from core.vpc import get_vpc_live_signal
 from core.risk_portfolio import PortfolioRiskManager, _Order
@@ -401,9 +402,17 @@ class SessionRunner:
     def _get_opr_signal(self, df: pd.DataFrame, ticker: str,
                         day_ny: pd.Timestamp) -> Optional[Dict]:
         """
-        Joue run_opr_day sur les barres du jour et retourne le dernier signal
-        non encore filé (si existant), sous la forme d'un dict avec le champ
-        supplémentaire "tag" utilisé pour l'idempotence.
+        Joue run_opr_day (v4) ou get_opr_v5_1_live_signals (v5.1, schéma A
+        entrée différée) selon le mapping config.OPR_V5_1_LIVE_TICKERS,
+        et retourne le dernier signal non encore filé.
+
+        Routing :
+          - MES1 → pass-through v4 (edge ML F2 non significatif p=0.23)
+          - NQ1, YM1 → v5.1 (filtre F2 actif, p<0.0001, BS=100 %)
+
+        Le wrapper get_opr_v5_1_live_signals gère le routing en interne :
+        pour les tickers hors OPR_V5_1_LIVE_TICKERS, il appelle directement
+        run_opr_day → comportement v4 strict.
 
         Retourne None si :
           • OPR désactivé, aucun trigger aujourd'hui, ou dernier trade clos.
@@ -411,7 +420,7 @@ class SessionRunner:
         if not OPR_ENABLED:
             return None
 
-        signals, trades, _zone = run_opr_day(df, ticker, day_ny)
+        signals, trades, _zone = get_opr_v5_1_live_signals(df, ticker, day_ny)
         if not signals:
             return None
 

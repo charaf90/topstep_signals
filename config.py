@@ -355,6 +355,24 @@ OPR_V5_1_F2_MIN_ATR = {"MES1": 0.15, "NQ1": 0.10, "YM1": 0.15}   # ← optimum v
 OPR_V5_1_F2_MAX_ATR = {"MES1": None, "NQ1": 0.5,  "YM1": 1.0}    # ← optimum v5
 OPR_V5_1_F3_MAX     = {"MES1": None, "NQ1": None, "YM1": None}   # ← optimum v5
 
+# ──────────────────────────────────────────────────────────────────────────────
+# DÉPLOIEMENT LIVE v5.1 — schéma A (entrée différée)
+# ──────────────────────────────────────────────────────────────────────────────
+# Tickers où la stratégie v5.1 est ACTIVE en live. Les tickers absents de cette
+# liste utilisent v4 (core.opr.run_opr_day) en pass-through.
+#
+# MES1 exclu car edge ML F2 non significatif (p=0.23 sur 10 000 permutations,
+# BS Topstep OOS = 0 % sur n=29). NQ1 et YM1 inclus (p<0.0001, BS=100 % chacun).
+# Cf. rapport opr-v5.1 §7 et output/no_mes1/robustness_opr-v5.1.{json,md}.
+#
+# Fidélité attendue (mesurée par scripts/live_eq_v5_1.py) :
+#   - 74 % avec granularité M15 strict
+#   - 26 % des trades backtest sont rejetés en live (F2 cross dans la M15
+#     de fill, non distinguable avant le fill)
+# Phase A (M1 polling) pourrait améliorer cette fidélité — à évaluer après
+# le burn-in.
+OPR_V5_1_LIVE_TICKERS = ["NQ1", "YM1"]   # MES1 reste sur v4
+
 # ==============================================================================
 # STRATÉGIE FIBONACCI 50% RETRACEMENT (`fib-v1`)
 # ==============================================================================
