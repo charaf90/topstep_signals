@@ -300,7 +300,11 @@ class ProjectXMarketRealtimeClient:
                 "type":               "raw",
                 "keep_alive_interval": 10,
                 "reconnect_interval":  5,
-                "max_attempts":        None,
+                # max_attempts=-1 : désactive le reconnect AUTO de signalrcore.
+                # Cf. broker/projectx_realtime.py — fix bug double-reconnect /
+                # HTTP 429. Notre supervisor (boucle 10 s) gère tous les
+                # reconnects. Keep_alive_interval reste actif (handler séparé).
+                "max_attempts":        -1,
             })
             .build()
         )

@@ -232,7 +232,14 @@ class ProjectXRealtimeClient:
                 "type":               "raw",
                 "keep_alive_interval": 10,
                 "reconnect_interval":  5,
-                "max_attempts":        None,
+                # max_attempts=-1 : désactive le reconnect AUTO de signalrcore
+                # (lève ValueError au 1er essai → la lib n'enchaîne pas). Le
+                # keep_alive_interval reste actif (géré par ConnectionStateChecker,
+                # indépendant du ReconnectionHandler). Notre supervisor (boucle
+                # 10 s + zombie detection) devient le SEUL responsable du
+                # reconnect → plus de course double-rebuild / HTTP 429.
+                # Fix bug observé en burn-in 2026-05-18 (95 erreurs / 6 min).
+                "max_attempts":        -1,
             })
             .build()
         )
