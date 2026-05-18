@@ -549,7 +549,7 @@ LIVE_STATE_FILE = "state/live_state.json"
 #
 # Désactivé par défaut, à flipper après burn-in sur compte sim.
 
-PROJECTX_REALTIME_ENABLED          = False  # OFF par défaut, flip après burn-in
+PROJECTX_REALTIME_ENABLED          = True   # flip ON 2026-05-18 (burn-in WS)
 PROJECTX_REALTIME_HUB_URL          = "https://rtc.topstepx.com/hubs/user"
 PROJECTX_REALTIME_QUEUE_MAXSIZE    = 2048       # ~3 min de full-speed à 10 evt/s
 PROJECTX_REALTIME_RECONNECT_DELAYS = (0, 2, 5, 10, 30, 60, 120)  # secondes
