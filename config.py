@@ -135,6 +135,34 @@ CONSEC_LOSS_PAUSE_DAYS = 5      # pause 1 jour après N jours perdants consécut
 DAILY_LOCKIN_THRESHOLD = 0      # lock-in après gain cumulé (0 = désactivé)
 
 # ==============================================================================
+# CHALLENGE — sizing adaptatif Topstep (mode mensuel)
+# ==============================================================================
+# Le risque par trade est calculé dynamiquement selon (a) distance au profit
+# target, (b) slack DD, (c) jours restants avant le 2 du mois (réinit du compte),
+# (d) edge OOS static par stratégie. Cf. core/adaptive_sizing.py.
+#
+# IMPORTANT : USER_DAILY_LOSS_MAX est bypassé quand ce mode est ON. Seules les
+# limites Topstep dures restent actives. Toute prise de risque > seuil de
+# notification déclenche un Telegram WARN.
+CHALLENGE_ADAPTIVE_SIZING_ENABLED       = True   # activation directe en prod
+CHALLENGE_RESET_DAY                     = 2      # jour du mois (marge sécurité vs vrai 4)
+CHALLENGE_TIME_PRESSURE_GAMMA           = 0.7    # adoucit l'effet temps restant
+CHALLENGE_DD_GUARD_BUFFER               = 2.3    # ne jamais risquer plus que slack/buffer (calibré MC)
+CHALLENGE_RISK_MIN_USD                  = 30     # plancher absolu par trade
+CHALLENGE_RISK_MAX_USD                  = 350    # plafond absolu (calibré MC : P(bust)≤15%)
+CHALLENGE_BYPASS_USER_DAILY_LIMIT       = True   # ignore USER_DAILY_LOSS_MAX en mode challenge
+CHALLENGE_NOTIFY_OVERRIDE_THRESHOLD_USD = 100    # alerte Telegram si risk_applied > ce seuil
+CHALLENGE_EXPECTED_TRADES_PER_DAY_FALLBACK = 3   # si historique < 30j observé
+CHALLENGE_LOCKIN_START_USD              = 2200   # cum_pnl à partir duquel le lockin s'active
+
+# Edge OOS par stratégie : e = WR × R − (1 − WR), calculé depuis le walk-forward.
+#   OPR opr-v4 (WR≈0.42, R≈2.2) → 0.34
+#   Fib fib-v3 (PF≈1.7, WR≈0.45, R≈2.0) → 0.40
+CHALLENGE_STRAT_EDGE  = {"OPR": 0.34, "FIB": 0.40}
+# Pondération multiplicative selon le PF OOS du portfolio (Fib > OPR).
+CHALLENGE_STRAT_BOOST = {"OPR": 1.0,  "FIB": 1.2}
+
+# ==============================================================================
 # STRATÉGIE OPR (Opening Range Breakout — pullback PineScript) — opr-v3
 # ==============================================================================
 # Réécriture fidèle au PineScript fourni par l'utilisateur (avr. 2026) :

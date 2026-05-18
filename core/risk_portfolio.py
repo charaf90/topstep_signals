@@ -47,6 +47,8 @@ from config import (
     TOPSTEP_DAILY_LOSS_MAX, TOPSTEP_TRAILING_DD, TOPSTEP_PROFIT_TARGET,
     TOPSTEP_SAFETY_MULT, RISK_PER_TRADE_USD, CONSEC_LOSS_PAUSE_DAYS,
     USER_DAILY_LOSS_MAX, USER_MAX_TRADES_PER_DAY, USER_MAX_OPEN_POSITIONS,
+    CHALLENGE_ADAPTIVE_SIZING_ENABLED, CHALLENGE_BYPASS_USER_DAILY_LIMIT,
+    CHALLENGE_RESET_DAY,
 )
 
 
@@ -108,6 +110,11 @@ class PortfolioRiskManager:
     user_max_trades_per_day: int = int(USER_MAX_TRADES_PER_DAY)
     user_max_open_positions: int = int(USER_MAX_OPEN_POSITIONS)
 
+    # Tracking du reset mensuel (challenge Topstep). Persistés dans live_state.json.
+    last_reset_month: Optional[int] = None
+    last_reset_year: Optional[int] = None
+    last_monthly_reset_at: Optional[datetime] = None
+
     # ────────────────────────────────────────────────────────────────────
     # Helpers internes
     # ────────────────────────────────────────────────────────────────────
@@ -121,13 +128,16 @@ class PortfolioRiskManager:
         """
         Si la date 'when' diffère de current_day, archive le P&L du jour
         précédent (mise à jour du streak consécutif) et reset les compteurs
-        journaliers.
+        journaliers. Vérifie aussi si un reset mensuel (challenge Topstep)
+        doit s'appliquer.
         """
         d = (when or datetime.utcnow()).date()
         if self.current_day is None:
             self.current_day = d
+            self._maybe_roll_month(when)
             return
         if d == self.current_day:
+            self._maybe_roll_month(when)
             return
         # Roll de jour
         if self.realized_day_pnl < 0:
@@ -138,6 +148,37 @@ class PortfolioRiskManager:
         self.realized_day_pnl = 0.0
         self.daily_fills_count = 0
         self.current_day = d
+        # Vérification reset mensuel après mise à jour du jour
+        self._maybe_roll_month(when)
+
+    def _maybe_roll_month(self, when: Optional[datetime] = None) -> bool:
+        """
+        Reset mensuel du challenge Topstep : remet à zéro cum_pnl, peak_pnl
+        et consec_loss_days quand on franchit CHALLENGE_RESET_DAY (jour 2 du
+        mois par défaut). Idempotent grâce à last_reset_month/year.
+
+        NE TOUCHE PAS aux positions ouvertes (pending_orders, active_positions)
+        — celles-ci suivent leur cycle de vie normal.
+
+        Retourne True si un reset a été effectué.
+        """
+        if not CHALLENGE_ADAPTIVE_SIZING_ENABLED:
+            return False
+        now = when or datetime.utcnow()
+        d = now.date() if isinstance(now, datetime) else now
+        if d.day < CHALLENGE_RESET_DAY:
+            return False
+        if (self.last_reset_month == d.month
+                and self.last_reset_year == d.year):
+            return False
+        # Exécute le reset
+        self.cum_pnl = 0.0
+        self.peak_pnl = 0.0
+        self.consec_loss_days = 0
+        self.last_reset_month = d.month
+        self.last_reset_year = d.year
+        self.last_monthly_reset_at = now if isinstance(now, datetime) else datetime.combine(d, datetime.min.time())
+        return True
 
     # ────────────────────────────────────────────────────────────────────
     # API publique
@@ -175,7 +216,14 @@ class PortfolioRiskManager:
             )
 
         # 3. Cap perte journalière sur P&L RÉALISÉ uniquement
-        if self.realized_day_pnl <= -self.user_daily_loss_max:
+        #    Bypassé en mode challenge adaptatif (seules les limites Topstep
+        #    dures restent actives — cf. config CHALLENGE_BYPASS_USER_DAILY_LIMIT).
+        challenge_bypass_user_daily = (
+            CHALLENGE_ADAPTIVE_SIZING_ENABLED
+            and CHALLENGE_BYPASS_USER_DAILY_LIMIT
+        )
+        if (not challenge_bypass_user_daily
+                and self.realized_day_pnl <= -self.user_daily_loss_max):
             return False, (
                 f"user_daily_loss_realized_{self.realized_day_pnl:+.0f}_"
                 f"below_{-self.user_daily_loss_max:.0f}"
@@ -207,8 +255,9 @@ class PortfolioRiskManager:
 
         # 6. Slack USER daily — pire cas : (reserved + nouveau trade) → tous SL
         #    garantit que même si tout le monde touche son SL simultanément,
-        #    la perte réalisée ne dépasse pas user_daily_loss_max
-        if self.user_daily_loss_max > 0:
+        #    la perte réalisée ne dépasse pas user_daily_loss_max.
+        #    Bypassé en mode challenge adaptatif.
+        if self.user_daily_loss_max > 0 and not challenge_bypass_user_daily:
             slack_user = (
                 self.user_daily_loss_max + self.realized_day_pnl - reserved
             )
@@ -327,4 +376,16 @@ class PortfolioRiskManager:
             ),
             "slack_trail": self.cum_pnl - trail_floor - reserved,
             "target_remaining": self.profit_target - self.cum_pnl,
+            # Challenge adaptatif — exposé pour core/adaptive_sizing.py
+            "observed_trades_per_day": None,  # v1 : fallback dans la formule
+            "last_reset_month": self.last_reset_month,
+            "last_reset_year": self.last_reset_year,
+            "last_monthly_reset_at": (
+                self.last_monthly_reset_at.isoformat()
+                if self.last_monthly_reset_at else None
+            ),
+            "challenge_bypass_user_daily": (
+                CHALLENGE_ADAPTIVE_SIZING_ENABLED
+                and CHALLENGE_BYPASS_USER_DAILY_LIMIT
+            ),
         }

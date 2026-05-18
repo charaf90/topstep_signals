@@ -253,6 +253,20 @@ def fmt_risk(rm_status: Dict, now_ny: str,
     pause_line = ("\n⏸ <b>Bot en pause</b>"
                   if paused else "")
 
+    # Bloc challenge — affiché si mode adaptatif actif
+    challenge_block = ""
+    bypass_active = rm_status.get("challenge_bypass_user_daily", False)
+    last_reset = rm_status.get("last_monthly_reset_at")
+    if bypass_active or last_reset:
+        challenge_block = (
+            f"{'─'*24}\n"
+            f"<b>Challenge adaptatif</b>\n"
+            f"  Mode: {'🟢 ON' if bypass_active else 'OFF'} "
+            f"(bypass USER_DAILY_LOSS_MAX: {'ACTIF' if bypass_active else 'inactif'})\n"
+        )
+        if last_reset:
+            challenge_block += f"  Dernier reset: {_esc(last_reset[:10])}\n"
+
     return (
         f"🛡 <b>Risk monitor</b>\n"
         f"<i>{_esc(now_ny)}</i>\n"
@@ -269,6 +283,7 @@ def fmt_risk(rm_status: Dict, now_ny: str,
         f"<b>Plafonds utilisateur</b>\n"
         f"  Perte jour restante : {user_remaining:.0f} $ / {user_daily_loss_max:.0f} $\n"
         + (f"⚠️ Streak perdant : {streak} jour(s)\n" if streak > 0 else "")
+        + challenge_block
         + pause_line
     )
 
@@ -549,6 +564,11 @@ class TelegramBot:
     def notify_consec_loss_pause(self, days: int):
         if self.enabled and self.level_risk:
             self.send(fmt_consec_loss_pause(days))
+
+    def send_warning(self, msg: str):
+        """Envoi d'une alerte WARN générique (override risk, bypass, etc.)."""
+        if self.enabled and self.level_risk:
+            self.send(_esc(msg))
 
     # ─────────────────────────────────────────────────────────────────────
     # Niveau 1 — Monitoring système

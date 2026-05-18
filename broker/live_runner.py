@@ -50,6 +50,9 @@ from config import (
     PROJECTX_MARKET_REALTIME_FORCE_REAUTH_S,
     PROJECTX_MARKET_REALTIME_BUFFER_MINUTES,
     OPR_V5_1_USE_M1_BUFFER,
+    CHALLENGE_ADAPTIVE_SIZING_ENABLED,
+    CHALLENGE_NOTIFY_OVERRIDE_THRESHOLD_USD,
+    CHALLENGE_BYPASS_USER_DAILY_LIMIT,
 )
 from core.opr import run_opr_day
 from core.opr_v5_1 import get_opr_v5_1_live_signals
@@ -58,6 +61,7 @@ from core.vpc import get_vpc_live_signal
 from core.risk_portfolio import PortfolioRiskManager, _Order
 from core.signal_selector import filter_correlated_signals
 from core.event_logger import EventLogger
+from core.adaptive_sizing import adaptive_risk_usd
 from broker.projectx_client import ProjectXClient
 from broker.telegram_bot import TelegramBot
 from broker.projectx_realtime import ProjectXRealtimeClient, RealtimeEvent
@@ -96,6 +100,13 @@ def _rm_to_dict(rm: PortfolioRiskManager) -> Dict:
         "daily_fills_count": rm.daily_fills_count,
         "pending_orders":    {k: _order_dict(v) for k, v in rm.pending_orders.items()},
         "active_positions":  {k: _order_dict(v) for k, v in rm.active_positions.items()},
+        # Challenge — état du reset mensuel (persistant)
+        "last_reset_month":      rm.last_reset_month,
+        "last_reset_year":       rm.last_reset_year,
+        "last_monthly_reset_at": (
+            rm.last_monthly_reset_at.isoformat()
+            if rm.last_monthly_reset_at else None
+        ),
     }
 
 
@@ -122,6 +133,15 @@ def _rm_from_dict(data: Dict) -> PortfolioRiskManager:
         rm.pending_orders[k] = _load_order(v)
     for k, v in data.get("active_positions", {}).items():
         rm.active_positions[k] = _load_order(v)
+    # Challenge — restauration du reset mensuel
+    if data.get("last_reset_month") is not None:
+        rm.last_reset_month = int(data["last_reset_month"])
+    if data.get("last_reset_year") is not None:
+        rm.last_reset_year = int(data["last_reset_year"])
+    if data.get("last_monthly_reset_at"):
+        rm.last_monthly_reset_at = datetime.fromisoformat(
+            data["last_monthly_reset_at"]
+        )
     return rm
 
 
@@ -261,6 +281,9 @@ class SessionRunner:
         self.m1_buffer: Optional[M1Buffer] = None
         self._market_rt_error_count_hour: int = 0
         self._market_rt_error_hour_start: float = 0.0
+
+        # Challenge — anti-spam de la notif "bypass actif" (1×/jour max)
+        self._last_bypass_notify_day: Optional[date] = None
 
     # ─────────────────────────────────────────────────────────────────────
     # Tickers actifs
@@ -576,8 +599,65 @@ class SessionRunner:
             _log.error("Pas de contractId pour %s — ordre non placé", ticker)
             return False
 
+        # ── Sizing adaptatif (challenge Topstep) ──────────────────────────
+        risk_static = float(signal.get("risk", RISK_PER_TRADE_USD))
+        risk_adaptive = None
+        sizing_factors = None
+        if CHALLENGE_ADAPTIVE_SIZING_ENABLED:
+            try:
+                rm_status = self.rm.status()
+                risk_adaptive, sizing_factors = adaptive_risk_usd(
+                    rm_status, signal, datetime.utcnow()
+                )
+                # Recalcul n_ct depuis le sl_dist du signal et le dpp du contrat
+                sl_dist = float(signal["sl_dist"])
+                dpp = float(INSTRUMENTS[ticker]["dollar_per_point"])
+                n_ct_new = max(1, int(risk_adaptive / (sl_dist * dpp)))
+                # Risque effectif réajusté à la granularité du contrat entier
+                risk_effective = n_ct_new * sl_dist * dpp
+                signal["n_ct"] = n_ct_new
+                signal["risk"] = risk_effective
+                risk = risk_effective
+                _evlog.sizing_decision(
+                    signal.get("strategy", "?"), ticker,
+                    risk_static, risk_adaptive, risk_effective,
+                    factors=sizing_factors,
+                )
+                # Notification Telegram si override significatif
+                if risk_effective > CHALLENGE_NOTIFY_OVERRIDE_THRESHOLD_USD:
+                    bypass_lbl = ("USER_DAILY_LOSS_MAX bypassé"
+                                  if CHALLENGE_BYPASS_USER_DAILY_LIMIT
+                                  else "limite utilisateur active")
+                    msg = (
+                        f"⚠️ [CHALLENGE] Override risk: ${risk_effective:.0f} "
+                        f"(static ${risk_static:.0f}, {bypass_lbl}) — "
+                        f"days_left={int(sizing_factors['days_left'])}, "
+                        f"distance=${sizing_factors['distance_target']:.0f}, "
+                        f"lockin={sizing_factors['lockin']:.2f}"
+                    )
+                    self.tg.send_warning(msg)
+                # Notification "première fois du jour" du bypass actif
+                today = datetime.utcnow().date()
+                if (CHALLENGE_BYPASS_USER_DAILY_LIMIT
+                        and self._last_bypass_notify_day != today):
+                    _evlog.challenge_bypass(ticker, risk_effective)
+                    self._last_bypass_notify_day = today
+            except Exception as exc:
+                _log.error("[%s] sizing adaptatif échoué : %s — fallback static", ticker, exc)
+                _evlog.error("adaptive_sizing", exc)
+                risk = risk_static
+                _evlog.sizing_decision(
+                    signal.get("strategy", "?"), ticker,
+                    risk_static, None, risk_static,
+                )
+        else:
+            risk = risk_static
+            _evlog.sizing_decision(
+                signal.get("strategy", "?"), ticker,
+                risk_static, None, risk_static,
+            )
+
         # ── Vérification risk manager ─────────────────────────────────────
-        risk = float(signal.get("risk", RISK_PER_TRADE_USD))
         ok, reason = self.rm.can_open(risk_usd=risk, when=datetime.utcnow())
         if not ok:
             _log.info("[%s] %s BLOQUÉ par risk manager : %s", ticker, tag, reason)

@@ -97,6 +97,50 @@ class EventLogger:
         self._write("WARN",
                     f"Pause consec-loss activée ({n_days} jours perdants)")
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Challenge — sizing adaptatif Topstep
+    # ─────────────────────────────────────────────────────────────────────
+
+    def sizing_decision(self, strategy: str, ticker: str,
+                        risk_static: float, risk_adaptive,
+                        risk_applied: float, factors: dict = None):
+        """
+        Log d'une décision de sizing adaptatif. risk_adaptive peut être None
+        (mode désactivé). factors est un dict des facteurs intermédiaires
+        utilisés par la formule (cum_pnl, days_left, lockin, etc.).
+        """
+        kw = {
+            "static": f"${risk_static:.0f}",
+            "applied": f"${risk_applied:.0f}",
+        }
+        if risk_adaptive is not None:
+            kw["adaptive"] = f"${risk_adaptive:.0f}"
+        if factors:
+            for k in ("cum_pnl", "days_left", "distance_target",
+                      "dd_cap", "daily_cap", "lockin"):
+                v = factors.get(k)
+                if v is not None:
+                    kw[k] = (f"${v:.0f}" if k.endswith("_pnl") or k.endswith("_cap")
+                             or k in ("distance_target",) else f"{v:.2f}")
+        self._write("SIZING", f"[{ticker}] {strategy}", **kw)
+
+    def monthly_reset(self, when_iso: str, prev_cum_pnl: float,
+                      prev_peak_pnl: float):
+        """Log du reset mensuel du challenge (réinit compte Topstep)."""
+        self._write("RESET",
+                    f"Reset mensuel challenge",
+                    when=when_iso,
+                    prev_cum=f"${prev_cum_pnl:+.0f}",
+                    prev_peak=f"${prev_peak_pnl:+.0f}")
+
+    def challenge_bypass(self, ticker: str, risk_applied: float,
+                         reason: str = "USER_DAILY_LOSS_MAX bypassé"):
+        """Notification du bypass de la limite utilisateur en mode challenge."""
+        self._write("WARN",
+                    f"[{ticker}] CHALLENGE bypass",
+                    risk=f"${risk_applied:.0f}",
+                    raison=reason)
+
     def error(self, context: str, exc):
         self._write("ERROR", f"Erreur système  {context}", detail=str(exc))
 
