@@ -2,7 +2,9 @@ __pycache__/
 *.pyc
 output/
 data/
+DATA_BACKTEST/
 *.csv
+*Zone.Identifier
 .env
 .venv/
 analyse/data/
