@@ -742,6 +742,7 @@ output/<strategy_id>/
   "verdict": "🟢" | "🟡" | "🔴",
   "skip_chartist_audit": <bool>,
   "skip_reason": "<text si skip>",
+  "datasets": {"<TICKER>": "sha256:<hex>", ...},
   "oos": {"pf": <float>, "pl_net": <int>, "n": <int>, "bootstrap": <pct>, "dd": <float>, "wr_pct": <float>},
   "is": {"pf": <float>, "pl_net": <int>, "n": <int>},
   "degradation_is_oos_pct": <float>,
@@ -753,6 +754,16 @@ output/<strategy_id>/
   "audit_warnings_count": <int>,
   "next_step": "<promotion | itération | rejet>"
 }
+```
+
+**Champ `datasets`** (obligatoire depuis PHASE 1.6 ROADMAP_SOLO) : empreintes
+SHA256 des CSV `data/<TICKER>_data_m15.csv` utilisés pour le backtest. Sert à
+détecter qu'un rapport a été produit avec des données différentes (gap comblé,
+correction a posteriori). Helper Python :
+
+```python
+from core.dataset_hash import snapshot_datasets
+summary["datasets"] = snapshot_datasets("data", tickers=["NQ1", "MES1", "MGC1"])
 ```
 
 ### Rapport `rapport.md` (~80 lignes max)
