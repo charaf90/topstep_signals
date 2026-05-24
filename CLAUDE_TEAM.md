@@ -2,7 +2,7 @@
 
 Architecture hybride pour le développement et l'exploitation de stratégies de trading algorithmique sur le challenge Topstep 50K.
 
-- **Quotidien (90 %)** : pipeline séquentiel via 7 subagents — isolation de contexte, sécurité, sobriété tokens.
+- **Quotidien (90 %)** : pipeline séquentiel via 8 subagents — isolation de contexte, sécurité, sobriété tokens.
 - **Exploration intensive (10 %)** : agent teams (expérimental, déjà activé dans `.claude/settings.json`) pour parallélisme et débat contradictoire.
 
 ## Table des agents
@@ -14,7 +14,8 @@ Architecture hybride pour le développement et l'exploitation de stratégies de 
 | **@researcher** | Recherche web, formalisation algorithmique de concepts trading, pièges classiques. | `@researcher` ou « Recherche / formalise ... » | Sonnet | Lecture seule (+ WebFetch/WebSearch) |
 | **@new-strategy** | Pipeline complet (PHASES 1-8) — implémentation, backtest, optimisation, stress tests. | `@new-strategy` ou `/new-strategy "..."` | Inherit (Opus) | Écriture limitée à `strategies/`, `config.py`, `output/` |
 | **@auditor** | Audit indépendant de la fidélité concept↔code. Peut rétrograder le verdict. | `@auditor` ou « Audite ... » | Inherit (Opus) | Lecture seule stricte |
-| **@chartist** | Expert en analyse technique multimodale. Mode `idea` (idéation visuelle PHASE 0.5) ou `audit` (audit visuel PHASE 6.5). Lit les PNG (mono-TF ou trio 15m+H1+D1). Ne décide pas du verdict. | `@chartist MODE: idea` ou `@chartist MODE: audit` | Inherit (Opus, multimodal) | Lecture seule absolue |
+| **@chartist** | Expert en analyse technique multimodale. Mode `idea` (idéation visuelle PHASE 0.5) ou `audit` (audit visuel PHASE 6.5 — **CONDITIONNEL** : skip si verdict 🟢 clair). Lit les PNG (mono-TF ou trio 15m+H1+D1). Ne décide pas du verdict. | `@chartist MODE: idea` ou `@chartist MODE: audit` | Inherit (Opus, multimodal) | Lecture seule absolue |
+| **@quant** | Data scientist trading senior. Mode `catalog` (PHASE 2.5 — propose features candidates) ou `discover` (PHASE 3.5 — sklearn RF + permutation test sur trades baseline, produit un patch Python). Ne modifie jamais de fichier de stratégie directement. | `@quant MODE: catalog` ou `@quant MODE: discover` | Inherit (Opus) | Écriture limitée à `output/<strategy_id>/` |
 | **@argus** | Surveillance du daemon live (tmux, state, logs, Telegram). | `@argus` ou « État du live ? » | Sonnet | Lecture seule absolue (interdiction `kill`, `rm`, `tmux send-keys`, etc.) |
 | **@forge** | Promotion en production : crée `core/<id>.py`, modifie `broker/live_runner.py`. | `@forge` + verdict 🟢 confirmé + confirmation utilisateur **par fichier** | Inherit (Opus) | Modification autorisée de `core/` et `broker/`, mais chaque écriture déclenche un prompt utilisateur |
 
@@ -26,7 +27,7 @@ Architecture hybride pour le développement et l'exploitation de stratégies de 
 Utilisateur : « ATHENA, développe une stratégie ICT order block sur NQ1 »
 ```
 
-Flow exécuté par l'orchestrateur (étapes chartist conditionnelles selon décision d'Athena) :
+Flow exécuté par l'orchestrateur (étapes chartist + quant conditionnelles selon décision d'Athena) :
 
 ```
 [Orchestrateur] → @athena                    (Tour 1 — émet PLAN ATHENA)
@@ -37,16 +38,23 @@ Flow exécuté par l'orchestrateur (étapes chartist conditionnelles selon déci
               ↓
 [Orchestrateur] → @researcher                (Tour 2 — formalisation + sources)
               ↓
-[Orchestrateur] → @athena                    (Tour 3 — transition + prompt new-strategy)
+[Orchestrateur] → @athena                    (Tour 3 — transition, décide [2.5] et [3.5])
               ↓
-[Orchestrateur] → @new-strategy              (Tour 4 — pipeline PHASES 1-8)
+[Optionnel — concept conditionnel ou neuf]
+[Orchestrateur] → @quant MODE: catalog       (Tour 3a — propose features candidates)
               ↓
-[Optionnel — recommandé si verdict 🟢 revendiqué]
-[Orchestrateur] → @chartist MODE: audit      (Tour 4a — warnings visuels)
+[Orchestrateur] → @new-strategy              (Tour 4 — PHASES 2-3 : scaffold + baseline)
               ↓
-[Orchestrateur] → @athena                    (Tour 5 — transition + prompt auditor)
+[Conditionnel — baseline 🟡 ou 🟢 borderline avec n_oos ≥ 100]
+[Orchestrateur] → @quant MODE: discover      (Tour 4a — sklearn + patch)
+[Orchestrateur] → @new-strategy              (Tour 4b — applique patch en vN+1, PHASES 4-8)
               ↓
-[Orchestrateur] → @auditor                   (Tour 6 — audit fidélité + intègre warnings chartist)
+[Orchestrateur] → @athena                    (Tour 5 — lit summary.json, décide [4.5])
+              ↓
+[CONDITIONNEL — skip si verdict 🟢 clair (bootstrap≥80% AND PF≥1.5) OU 🔴]
+[Orchestrateur] → @chartist MODE: audit      (Tour 5a — warnings visuels)
+              ↓
+[Orchestrateur] → @auditor                   (Tour 6 — lit summary.json + audit quant_patch.py)
               ↓
 [Orchestrateur] → @athena                    (Tour 7 — VERDICT FINAL)
               ↓
@@ -55,7 +63,11 @@ Flow exécuté par l'orchestrateur (étapes chartist conditionnelles selon déci
 
 **Décision d'invoquer le chartist** :
 - Mode `idea` (avant @researcher) : oui si concept ouvert / non formalisé / exploration multi-marché. Non si concept clair (ex: "ORB pullback NQ 09:30").
-- Mode `audit` (après @new-strategy) : oui dès qu'un verdict 🟢 est revendiqué. Non si verdict 🔴 (inutile).
+- Mode `audit` (après @new-strategy) : **SKIP si verdict 🟢 clair (bootstrap ≥ 80% AND PF OOS ≥ 1.5)** — gain ~80-100k tokens. Exécuter sur 🟢 borderline et 🟡. Skip sur 🔴.
+
+**Décision d'invoquer le quant** :
+- Mode `catalog` (avant @new-strategy) : oui si concept implique du filtrage conditionnel (régime, timing, microstructure) ou concept neuf sans héritage prod. Non si simple variant d'une strat prod (ex: opr-v6).
+- Mode `discover` (après baseline) : **recommandé si baseline = 🟡** (PF OOS 1.2-1.5) — un filtre data-driven peut basculer en 🟢. Skip si baseline 🔴 dur (problème structurel) ou si n_oos < 100 (sample insuffisant pour ML).
 
 ### 2. Développer une stratégie (workflow rapide — skill direct)
 
@@ -63,7 +75,7 @@ Flow exécuté par l'orchestrateur (étapes chartist conditionnelles selon déci
 Utilisateur : /new-strategy "ORB inverse sur YM1, fenêtre 9h30-10h30 NY"
 ```
 
-Le skill `/new-strategy` exécute le pipeline en autonomie. Pas de phase researcher/auditor explicite. À privilégier quand l'idée est déjà claire et formalisée.
+Le skill `/new-strategy` exécute le pipeline en autonomie (PHASES 1-8 du skill). Pas de phase researcher/auditor explicite. Les PHASES 2.5 et 3.5 (`@quant`) peuvent être invoquées par le skill s'il tourne en session principale (`agent: general-purpose`). À privilégier quand l'idée est déjà claire et formalisée.
 
 ### 3. Surveiller le live
 

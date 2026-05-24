@@ -610,7 +610,7 @@ def main():
         description="Génère N jours stratifiés par régime pour l'idéation chartist.",
     )
     parser.add_argument("--ticker", required=True,
-                        help="MES1 | NQ1 | YM1 | MGC1 | MCLE1 | ...")
+                        help="MES1 | NQ1 | YM1 | MGC1 | MCL1 | ...")
     parser.add_argument("--n", type=int, default=20,
                         help="Nombre de jours à générer (défaut 20)")
     parser.add_argument("--stratify", default="regime",

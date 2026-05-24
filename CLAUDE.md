@@ -41,22 +41,28 @@ Tu es **l'ORCHESTRATEUR** de l'équipe d'agents. Tu ne fais **pas** le travail d
 | « Audite cette stratégie / ce code / ce verdict » | `@auditor` |
 | « Explore visuellement le marché X / trouve-moi un edge » | `python -m core.explore_chart --ticker X --multi-tf` puis `@chartist MODE: idea` |
 | « Audite visuellement les signaux de <strategy_id> » | `@chartist MODE: audit` (warnings → `@auditor`) |
+| « Propose des features pour la stratégie X / quelles features pertinentes ? » | `@quant MODE: catalog` |
+| « Découvre des filtres data-driven sur les trades de <strategy_id> / fais le feature engineering » | `@quant MODE: discover` |
 | « État du live ? » / « Comment va le compte ? » | `@argus` |
 | « Promeut <strategy_id> en production » | `@forge` (après verdict 🟢 + confirmation) |
 | Question simple (un paramètre, un calcul rapide, lecture d'un log court) | Réponse directe sans subagent |
 
-### Pattern d'orchestration ATHENA → [chartist idea] → researcher → new-strategy → [chartist audit] → auditor
+### Pattern d'orchestration ATHENA → [chartist idea] → researcher → [quant catalog] → new-strategy(v1) → [quant discover] → new-strategy(vN+1) → [chartist audit] → auditor
 
-Quand l'utilisateur invoque `@athena`, le flow est en plusieurs tours (étapes chartist conditionnelles) :
+Quand l'utilisateur invoque `@athena`, le flow est en plusieurs tours (étapes chartist **et quant** conditionnelles) :
 
-1. **Tour 1** : invoque `@athena` avec la demande. Athena émet un `PLAN ATHENA` listant les étapes (en précisant si les étapes [0.5] et [4.5] chartist sont incluses).
-2. **Tour 2a** *(optionnel — étape [0.5])* : si Athena le demande, exécute `python -m core.explore_chart --ticker <X> --n 10 --multi-tf` puis invoque `@chartist MODE: idea` sur les charts générés. Sortie : hypothèses d'edge transmises à @researcher.
-3. **Tour 2** : exécute l'étape [1] du plan en invoquant `@researcher` avec le prompt fourni par Athena (incluant les hypothèses du chartist si étape 2a faite).
-4. **Tour 3** : ré-invoque `@athena` avec la sortie de researcher. Athena émet un bloc de transition et le prompt suivant.
-5. **Tour 4** : invoque `@new-strategy`, ré-invoque `@athena`.
-6. **Tour 4a** *(optionnel — étape [4.5], recommandé si verdict 🟢 revendiqué)* : invoque `@chartist MODE: audit` sur `output/charts/<STRATEGY_ID>/`. Rapport sauvegardé dans `output/audit_visuel_<id>.md`.
-7. **Tour 5-6** : invoque `@auditor` (qui lit aussi le rapport visuel), ré-invoque `@athena`.
-8. **Tour final** : Athena émet le **VERDICT FINAL** et suggère la suite (souvent : appeler FORGE).
+1. **Tour 1** : invoque `@athena` avec la demande. Athena émet un `PLAN ATHENA` listant les étapes (en précisant si [0.5], [2.5], [3.5], [4.5] sont incluses).
+2. **Tour 2a** *(optionnel — étape [0.5])* : si Athena le demande, exécute `python -m core.explore_chart --ticker <X> --n 10 --multi-tf` puis invoque `@chartist MODE: idea`. Sortie : hypothèses d'edge transmises à @researcher.
+3. **Tour 2** : invoque `@researcher` avec le prompt fourni par Athena.
+4. **Tour 3** : ré-invoque `@athena` (transition + décide [2.5]).
+5. **Tour 3a** *(optionnel — étape [2.5])* : si Athena le demande, invoque `@quant MODE: catalog` pour proposer 5-10 features candidates. Sortie : `output/<id>/quant_catalog.md`.
+6. **Tour 4** : invoque `@new-strategy` pour PHASES 2-3 (scaffold + baseline). Sortie : `output/<id>/full/trades_v1.csv` + summary.json draft.
+7. **Tour 4a** *(conditionnel — étape [3.5], recommandé si baseline 🟡)* : invoque `@quant MODE: discover` pour découvrir des filtres data-driven. Sortie : `output/<id>/quant_patch.py`.
+8. **Tour 4b** *(si patch quant produit avec verdict ≥ MEDIUM)* : ré-invoque `@new-strategy` pour appliquer le patch en vN+1 et poursuivre PHASES 4-8.
+9. **Tour 5** : ré-invoque `@athena` (transition, lit `output/<id>/summary.json`, décide [4.5]).
+10. **Tour 5a** *(CONDITIONNEL — étape [4.5], skip si verdict 🟢 clair)* : si `bootstrap_oos < 80%` OU `pf_oos < 1.5` (verdict non clair), invoque `@chartist MODE: audit`. Sinon **SKIP** (gain ~80-100k tokens).
+11. **Tour 6** : invoque `@auditor` (lit `summary.json` prioritairement, audite `quant_patch.py` si présent).
+12. **Tour final** : ré-invoque `@athena` qui émet le **VERDICT FINAL** et suggère la suite (souvent : appeler FORGE).
 
 **Important** : les subagents ne peuvent pas spawn d'autres subagents — c'est toi (l'orchestrateur) qui chaîne les invocations en suivant les consignes d'Athena.
 
@@ -66,11 +72,41 @@ Quand l'utilisateur invoque `@athena`, le flow est en plusieurs tours (étapes c
 |---|---|---|
 | Concept ouvert / non formalisé / multi-marché | `idea` | Recommandé en PHASE 0.5 |
 | Concept déjà clair (ex: "ORB pullback NQ 09:30-11:00") | `idea` | Skip — passer direct à `@researcher` |
-| Verdict 🟢 revendiqué par `@new-strategy` | `audit` | Recommandé en PHASE 6.5 avant `@auditor` |
-| Verdict 🟡 revendiqué | `audit` | Optionnel (utile si on veut comprendre pourquoi pas 🟢) |
+| Verdict 🟢 **clair** (bootstrap ≥ 80% AND PF OOS ≥ 1.5) | `audit` | **SKIP** — gain ~80-100k tokens, audit confirmatoire inutile |
+| Verdict 🟢 borderline (bootstrap 80-85% OU PF 1.5-1.6) | `audit` | Exécuter (audit utile) |
+| Verdict 🟡 revendiqué | `audit` | Exécuter (peut basculer 🟢 ou 🔴) |
 | Verdict 🔴 | `audit` | Skip — inutile de challenger un rejet |
 
 Le chartist **ne décide jamais du verdict** : en `idea` il propose des hypothèses à `@researcher`, en `audit` il flag des warnings à `@auditor`.
+
+### Quand invoquer `@quant`
+
+| Situation | Mode | Décision |
+|---|---|---|
+| Concept implique du filtrage conditionnel (régime, timing, microstructure) | `catalog` | Recommandé en PHASE 2.5 avant scaffold |
+| Concept neuf sans héritage prod (pas un variant d'OPR/Fib) | `catalog` | Recommandé en PHASE 2.5 |
+| Simple variant de strat prod (ex: opr-v6) | `catalog` | Skip — features héritées de la prod |
+| Baseline v1 = 🟡 (PF OOS 1.2-1.5, n_oos ≥ 100) | `discover` | **Recommandé** — peut basculer en 🟢 |
+| Baseline v1 = 🟢 borderline (PF 1.5-1.8) | `discover` | Optionnel (amélioration possible) |
+| Baseline v1 = 🔴 dur (PF < 1.0) | `discover` | Skip — problème structurel, pas un filtre |
+| Baseline avec n_oos < 100 trades | `discover` | Skip — ML pas significatif (refusera) |
+
+Le quant **propose** un patch ; `@new-strategy` **applique** le patch en vN+1. Pas d'écriture autonome de fichiers de stratégie.
+
+### Format des outputs de stratégies (nouveau, post-refonte)
+
+Les nouvelles stratégies développées via `@athena` ou `/new-strategy` produisent désormais :
+
+```
+output/<strategy_id>/
+  summary.json       ← lu par Athena et Auditor (verdict + métriques structurées)
+  rapport.md         ← résumé 1 page (~80 lignes max) — archivable humain
+  quant_report.md    ← (si PHASE 3.5 exécutée) rapport @quant
+  quant_patch.py     ← (si PHASE 3.5 exécutée) patch appliqué en vN+1
+  full/              ← détails complets (robustness.json, audit_visuel.md, charts/, trades CSV)
+```
+
+**Compatibilité ascendante** : les rapports historiques de stratégies abandonnées sont archivés dans `output/archive/<strategy>/` (cf. son `README.md`). Les rapports historiques OPR (`output/rapport_opr-v5.md`, etc.) restent à la racine de `output/` pour traçabilité des promotions.
 
 ### Protection automatique de `core/` et `broker/`
 
@@ -85,14 +121,14 @@ Les écritures dans `core/**` et `broker/**` déclenchent un prompt utilisateur 
 | Demande de promotion d'une stratégie | Vérifier verdict 🟢 confirmé par `@auditor`, puis invoquer `@forge`. **Confirmation explicite requise pour chaque fichier touché.** |
 | Modification suggérée d'un paramètre prod | Backtest préalable via `@new-strategy` ou `@athena`. Pas d'écriture directe dans `config.py` pour des paramètres prod actifs. |
 | Erreur API ProjectX répétée | Logger la trace, ne pas retenter automatiquement, attendre l'utilisateur. |
-| Données manquantes (CSV) | Vérifier `data/` et la dernière mise à jour TradingView. Pas de remplissage automatique de gaps. |
+| Données manquantes (CSV) | Vérifier `data/` et relancer `python scripts/import_backtest_data.py` depuis `DATA_BACKTEST/`. Pas de remplissage automatique de gaps. |
 | L'utilisateur veut une exploration parallèle / débat contradictoire | Proposer une **agent team** (3-5 teammates basés sur les subagents). Mode expérimental activé via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` dans settings. |
 
 ---
 
 ## Skill `/new-strategy` (invocation directe)
 
-Le skill `/new-strategy "<description>"` reste disponible pour invocation **directe** par l'utilisateur (sans passer par Athena). Il exécute le même pipeline (PHASES 0.5 → 8, dont 0.5 et 6.5 optionnelles via `@chartist`) que le subagent `@new-strategy`. Source de vérité unique : `.claude/skills/new-strategy/SKILL.md`.
+Le skill `/new-strategy "<description>"` reste disponible pour invocation **directe** par l'utilisateur (sans passer par Athena). Il exécute le même pipeline (PHASES 0.5 → 8, dont **0.5 et 6.5 (chartist)** et **2.5 et 3.5 (@quant)** sont optionnelles/conditionnelles) que le subagent `@new-strategy`. Source de vérité unique : `.claude/skills/new-strategy/SKILL.md`.
 
 - Préférer `@athena` quand on veut le **pipeline complet avec audit** (researcher + dev + auditor).
 - Préférer `/new-strategy "..."` quand l'utilisateur veut **directement développer** une idée déjà formalisée et fait confiance au pipeline autonome.
@@ -108,9 +144,15 @@ Le skill `/new-strategy "<description>"` reste disponible pour invocation **dire
 - Trailing drawdown max : $2 000
 - Profit target : $3 000
 
-**Portefeuille en production (live depuis 2026-05-05) :**
-- **OPR opr-v4** — Opening Range Breakout pullback 9h30 NY
-- **Fib fib-v3** — Retracement Fibonacci 38.2 % post-impulse
+**Portefeuille en production (live depuis 2026-05-05, dernière promotion 2026-05-19) :**
+- **OPR** — routage par ticker :
+  - NQ1, YM1 → `opr-v5.1` (schéma A entrée différée, filtre F2_running data-driven, intra-bar via M1Buffer)
+  - MES1 → `opr-v4` (pass-through, ML non significatif)
+- **Fib `fib-v4`** — Retracement Fibonacci data-driven (3 cellules 🟢) : MES1 + NQ1 + MGC1 (Gold).
+  Invalidation pivot break + wick excess intra-bar via M1Buffer. Plus aucun fallback fib-v3.
+
+> Stratégies abandonnées (cf. `docs/strategies_abandoned.md` et `output/archive/`) :
+> fib-v3, VPC, ARF, SMC v1, opr-h4, kijun-pb.
 
 ---
 
@@ -124,8 +166,9 @@ Le skill `/new-strategy "<description>"` reste disponible pour invocation **dire
 │  INFRA PARTAGÉE   core/metrics  backtester optimizer │
 │  Métriques standardisées, runner universel           │
 ├─────────────────────────────────────────────────────┤
-│  PRODUCTION       core/opr.py  core/strategy_fib.py │
-│  broker/live_runner.py  — NE PAS TOUCHER             │
+│  PRODUCTION       core/opr.py + core/opr_v5_1.py    │
+│                   core/strategy_fib_v4.py            │
+│                   broker/live_runner.py — NE PAS TOUCHER │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -362,38 +405,40 @@ tail -n 30 logs/trading_events.log
 | Telegram | `TELEGRAM_ENABLED`, niveaux `TELEGRAM_LEVEL_*` |
 
 ### Walk-forward IS/OOS (dates fixes pour cohérence)
-- **IS :** déc 2024 → 2025-09-30 (`IS_END = "2025-09-30"`)
-- **OOS :** 2025-10-01 → mars 2026 (`OOS_START = "2025-10-01"`)
+- **IS :** sept 2024 → 2025-09-30 (`IS_END = "2025-09-30"`)
+- **OOS :** 2025-10-01 → mai 2026 (`OOS_START = "2025-10-01"`)
 - Critère d'acceptation : `OOS PF ≥ 1.2 ET n ≥ 8 ET P&L OOS > 0`
 
 ---
 
-## Performances production (référence)
+## Performances production (référence — mise à jour 2026-05-19)
 
-### OPR opr-v4 (déc 2024 → mars 2026)
+### OPR (routage v4/v5.1 par ticker)
 
-| Asset | Trades | WR | PF | P&L | DD |
+OOS oct 2025 → mai 2026 — bootstrap stationnaire P(PF>1) = 100% portfolio.
+
+| Ticker | Version | Filtre F2_min_atr | PF OOS | P&L OOS | n_oos | DD max |
+|---|---|---|---|---|---|---|
+| MES1 | opr-v4 pass-through | (aucun) | 1.36 | +$2,303 | 121 | -$998 |
+| NQ1 | opr-v5.1 schéma A | ≥ 0.10 ATR | ~3.0+ | élevé | ~30 | ≤ -$500 |
+| YM1 | opr-v5.1 schéma A | ≥ 0.15 ATR | 1.87 | +$7,934 | 274 (full hist.) | -$716 |
+
+Cf. `output/rapport_opr-v5.1.md`, `output/robustness_opr-v5.1.md`.
+
+### Fib fib-v4 (promu 2026-05-19)
+
+OOS oct 2025 → mai 2026.
+
+| Ticker | Fib level | Filtre `wick_through_atr` | PF OOS | n_oos | Bootstrap |
 |---|---|---|---|---|---|
-| MES1 | 142 | 39% | 1.38 | +$2 132 | -$611 |
-| NQ1 | 476 | 46% | 1.67 | +$14 640 | -$867 |
-| YM1 | 199 | 60% | 1.89 | +$5 802 | -$502 |
-| **Portfolio** | **817** | — | — | **+$22 574** | **-$822** |
+| MES1 | 0.382 | < 0.05 ATR | **6.01** | 25 | 100% |
+| NQ1 | 0.382 | < 0.80 ATR | **6.47** | 21 | 100% |
+| MGC1 | 0.500 | < 0.40 ATR (+ skip macro) | **3.46** | 24 | 100% |
+| **Portfolio** | — | — | **4.97** | 70 | 100% |
 
-Bootstrap portefeuille : **100%** ✅
+P&L OOS portefeuille : **+$5,234** (vs fib-v3 +$3,287 sur même période = +$1,947).
 
-### Fib fib-v3 (déc 2024 → mars 2026)
-
-| Asset | Trades | WR | PF | P&L |
-|---|---|---|---|---|
-| MES1 | 247 | 46% | 1.67 | +$7 848 |
-| NQ1 | 20 | 90% | 8.58 | +$1 266 |
-| YM1 | 48 | 50% | 1.92 | +$1 692 |
-| **Portfolio** | **315** | — | — | **+$10 805** |
-
-Bootstrap portefeuille : **100%** ✅
-
-### OPR + Fib combiné
-- P&L : **+$33 379** | DD : **-$822** | Bootstrap : **100%**
+Cf. `output/rapport_fib-v4.md`, `output/robustness_fib-v4.md`.
 
 ---
 
@@ -414,10 +459,10 @@ Bootstrap portefeuille : **100%** ✅
 
 ## Pièges à éviter
 
-- Ne **jamais** modifier `core/opr.py` ou `core/strategy_fib.py` pour de la recherche → utiliser `strategies/opr.py` et `strategies/fib.py`
+- Ne **jamais** modifier `core/opr.py`, `core/opr_v5_1.py` ou `core/strategy_fib_v4.py` pour de la recherche → utiliser les wrappers `strategies/*.py`
 - Ne **jamais** accepter des params walk-forward avec OOS PF < 1.2
 - Données CSV : `{csv_dir}/{TICKER}_data_m15.csv` (majuscule)
-- `YM1_ENABLED = False` dans `core/opr.py` — ne pas activer sans preuve OOS
+- `YM1_ENABLED = True` (config.py) depuis 2026-05-18 — promotion OPR v5.1. Ne pas redescendre sans preuve OOS contraire.
 - Après changement de `config.py`, vérifier que `core/opr.py` reflète bien les valeurs (il importe les dicts par référence et les patch dynamiquement)
 - Le bootstrap par ticker seul peut être bas (ex: MES1 5.8%) — ce qui compte c'est le **bootstrap portefeuille** (tous actifs agrégés)
 - `data/` et `output/` sont gitignorés — ne pas versionner de données de marché
@@ -431,7 +476,7 @@ Bootstrap portefeuille : **100%** ✅
 
 - [ ] Schéma colonnes du DataFrame de trades respecté (`pnl` = net, canonique)
 - [ ] `<STRAT>_STRATEGY_VERSION` bumpé si changement structurel
-- [ ] Aucun fichier de `core/opr.py`, `core/strategy_fib.py`, `broker/` modifié sans confirmation explicite
+- [ ] Aucun fichier de `core/opr.py`, `core/opr_v5_1.py`, `core/strategy_fib_v4.py`, `core/fib_helpers.py`, `broker/` modifié sans confirmation explicite
 - [ ] Tous les paramètres dans `config.py`
 - [ ] Walk-forward IS=2025-09-30 / OOS=2025-10-01 respecté
 - [ ] Slippage et commissions intégrés dans `pnl`
