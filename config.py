@@ -105,6 +105,20 @@ REALISTIC_SLIPPAGE_SEED = 42
 #    N = N workers (ex: 4 pour ne pas saturer la machine pendant le live)
 OPTIMIZER_PARALLEL_N_JOBS = -1
 
+# ── Shadow Mode (PHASE 3.2 ROADMAP_SOLO) ──────────────────────────────────────
+# Le shadow runner tourne en parallèle du daemon live, dans un process tmux
+# séparé, avec ses propres fichiers d'état et de logs. Il utilise la même
+# logique que le SessionRunner mais avec dry_run=True forcé (jamais d'ordres
+# réels postés). Sert à comparer les décisions du live vs des variations
+# (ex: vol-targeting on) avant de les promouvoir.
+SHADOW_STATE_FILE = "state/shadow_state.json"
+SHADOW_LOG_FILE = "logs/shadow_events.log"
+SHADOW_PID_FILE = "state/shadow_daemon.pid"
+
+# Feature flag pour activer le vol-targeting via core/adaptive_sizing (PHASE 3.3).
+# OFF par défaut — sera activé uniquement après 14j shadow OK + validation user.
+FEATURE_VOL_TARGETING_ENABLED = False
+
 # ==============================================================================
 # CALENDRIER MACRO (jours sensibles : FOMC, CPI, NFP, JOLTS, PCE)
 # ==============================================================================
