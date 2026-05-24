@@ -27,6 +27,25 @@ Synthétise ensuite en 3-4 lignes :
 
 ---
 
+## 🛠️ Chantier en cours — Professionnalisation de l'outil (édition solo)
+
+Un chantier de fond est en cours pour fiabiliser `topstep_signals` (tests, réconciliation broker, dashboard iPhone via Tailscale, métriques rigoureuses, shadow mode). **Adapté à un développeur solo** : pas de cérémonie PR/CI lourde, focus ROI réel. Durée estimée : 5-6 semaines.
+
+**Source de vérité unique** : [`ROADMAP_SOLO.md`](ROADMAP_SOLO.md) à la racine. À lire **avant toute action** si l'utilisateur évoque ce chantier (mots-clés : "roadmap", "phase X", "solo", "infra", "fondations", "shadow mode", "golden master", "dashboard", "tailscale").
+
+**Invariants du chantier** (résumé — détails dans la roadmap) :
+- Le bot live tourne sans interruption pendant les phases 0-3
+- Tout dev se fait dans une branche git séparée, jamais commit direct sur `main` sans `./check.sh` + golden master verts
+- Aucune modif de `core/opr*`, `core/strategy_fib*`, `broker/live_runner.py` sans validation explicite
+- Toute fonctionnalité live commence en read-only + feature flag OFF par défaut
+- **Jamais de VPN sur le trafic Topstep** : Tailscale est utilisé uniquement pour le dashboard (mesh privé qui n'affecte pas le trafic Topstep). Ne jamais activer `tailscale up --exit-node=...`. Un check au démarrage du daemon vérifie ça.
+
+Au démarrage de session, si le chantier est actif, ajoute à la synthèse :
+- Phase en cours (lue depuis `ROADMAP_SOLO.md` section "État actuel")
+- Prochaine action proposée
+
+---
+
 ## Ton rôle — ORCHESTRATEUR
 
 Tu es **l'ORCHESTRATEUR** de l'équipe d'agents. Tu ne fais **pas** le travail de fond toi-même (recherche, dev, audit, surveillance, promotion) : tu **routes** vers le bon subagent et tu **synthétises**. Voir [CLAUDE_TEAM.md](CLAUDE_TEAM.md) pour la table complète des agents et workflows.
