@@ -19,7 +19,9 @@ import time
 from pathlib import Path
 
 import pandas as pd
+from joblib import Parallel, delayed
 
+from config import OPTIMIZER_PARALLEL_N_JOBS
 from core import metrics as m
 from core import robustness as rb
 
@@ -29,6 +31,40 @@ IS_END = "2025-09-30"
 OOS_START = "2025-10-01"
 IS_LABEL = "déc 2024 – sept 2025"
 OOS_LABEL = "oct 2025 – mars 2026"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Worker — évalue une combo (ticker × params) → score IS/OOS
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _evaluate_combo(combo, keys, dfs, strategy, score_fn, is_end, oos_start):
+    """Évalue une combinaison de paramètres sur tous les tickers d'un sous-set.
+
+    Fonction pure — ne touche à aucun état partagé. Conçue pour être
+    appelée en parallèle via joblib (workers indépendants).
+
+    Returns:
+        dict {"params", "is", "oos", "score"} ou None si aucun ticker n'a
+        produit de trades.
+    """
+    params = dict(zip(keys, combo))
+    rows = []
+    for ticker, (df_15m, tf) in dfs.items():
+        df_all = strategy.run_backtest(df_15m, ticker, tf=tf, params=params, topstep_guard=False)
+        if len(df_all) == 0 or "date" not in df_all.columns:
+            continue
+        df_is = df_all[df_all["date"] <= is_end]
+        df_oos = df_all[df_all["date"] >= oos_start]
+        rows.append({"ticker": ticker, "is": df_is, "oos": df_oos})
+    if not rows:
+        return None
+    is_combined = pd.concat([r["is"] for r in rows], ignore_index=True)
+    oos_combined = pd.concat([r["oos"] for r in rows], ignore_index=True)
+    is_s = m.compute_stats(is_combined)
+    oos_s = m.compute_stats(oos_combined)
+    score = score_fn(is_s, oos_s)
+    return {"params": params, "is": is_s, "oos": oos_s, "score": score}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -46,6 +82,7 @@ def optimize(
     n_bootstrap: int = 1000,
     robustness_report: bool = True,
     output_dir: str | None = "output",
+    n_jobs: int | None = None,
 ) -> dict:
     """
     Walk-forward IS/OOS sur toutes les combinaisons de PARAM_GRID.
@@ -59,10 +96,15 @@ def optimize(
         score_fn    : fonction de score IS pour classer les combos
                       défaut : oos_pf * oos_pnl (si oos valide) else 0
         n_bootstrap : permutations bootstrap Topstep
+        n_jobs      : nombre de workers joblib pour la grille de combos.
+                      None → utilise config.OPTIMIZER_PARALLEL_N_JOBS (-1 par
+                      défaut = tous les CPU). 1 = séquentiel (debug).
 
     Returns:
         {ticker: {"params": dict, "is": stats, "oos": stats, "oos_topstep": dict}}
     """
+    if n_jobs is None:
+        n_jobs = OPTIMIZER_PARALLEL_N_JOBS
     strategy_id = getattr(strategy, "STRATEGY_ID", "unknown")
     param_grid = getattr(strategy, "PARAM_GRID", {})
 
@@ -98,43 +140,31 @@ def optimize(
                 continue
             dfs = {ticker: data[ticker]}
 
-        print(f"\n  ▸ Optimisation {ticker} ({total} combos)...")
-        results = []
+        # Bench avant/après documenté dans le log (cible PHASE 2.5 : 4× au minimum
+        # sur grilles ≥ 16 combos × 12 CPU).
+        mode = "séquentiel" if n_jobs == 1 else f"parallèle (n_jobs={n_jobs})"
+        print(f"\n  ▸ Optimisation {ticker} ({total} combos, {mode})...")
         t0 = time.time()
 
-        for idx, combo in enumerate(combos, 1):
-            params = dict(zip(keys, combo))
-            rows = []
+        # Parallélisation joblib : chaque combo est évaluée dans un worker
+        # indépendant. Reproductibilité garantie : strategy.run_backtest est
+        # déterministe (seed fixé dans chaque module strategies/*.py), et
+        # joblib préserve l'ordre des résultats.
+        raw_results = Parallel(n_jobs=n_jobs, backend="loky", verbose=0)(
+            delayed(_evaluate_combo)(combo, keys, dfs, strategy, score_fn, is_end, oos_start)
+            for combo in combos
+        )
+        results = [r for r in raw_results if r is not None]
+        elapsed = time.time() - t0
 
-            for t, (df_15m, tf) in dfs.items():
-                df_all = strategy.run_backtest(df_15m, t, tf=tf, params=params, topstep_guard=False)
-                if len(df_all) == 0 or "date" not in df_all.columns:
-                    continue
-                df_is = df_all[df_all["date"] <= is_end]
-                df_oos = df_all[df_all["date"] >= oos_start]
-                rows.append({"ticker": t, "is": df_is, "oos": df_oos})
-
-            if not rows:
-                continue
-
-            is_combined = pd.concat([r["is"] for r in rows], ignore_index=True)
-            oos_combined = pd.concat([r["oos"] for r in rows], ignore_index=True)
-            is_s = m.compute_stats(is_combined)
-            oos_s = m.compute_stats(oos_combined)
-
-            score = score_fn(is_s, oos_s)
-            results.append({"params": params, "is": is_s, "oos": oos_s, "score": score})
-
-            if idx % max(1, total // 10) == 0 or idx == total:
-                elapsed = time.time() - t0
-                eta = elapsed / idx * (total - idx)
-                best_so_far = max(results, key=lambda r: r["score"])
-                p_str = "  ".join(f"{k}={v}" for k, v in best_so_far["params"].items())
-                print(
-                    f"    [{idx:>4}/{total}]  "
-                    f"meilleur IS P&L=${best_so_far['is']['pnl']:>+8,.0f}  "
-                    f"({p_str})  ETA {eta:.0f}s"
-                )
+        if results:
+            best_so_far = max(results, key=lambda r: r["score"])
+            p_str = "  ".join(f"{k}={v}" for k, v in best_so_far["params"].items())
+            print(
+                f"    [{len(results):>4}/{total}]  élapsé {elapsed:.1f}s  "
+                f"({total / max(elapsed, 0.001):.0f} combos/s)  "
+                f"meilleur IS P&L=${best_so_far['is']['pnl']:>+8,.0f}  ({p_str})"
+            )
 
         if not results:
             print(f"  [{ticker}] Aucun résultat.")

@@ -98,6 +98,13 @@ REALISTIC_SLIPPAGE_ATR_SCALE = 0.5
 # Seed pour reproductibilité des tirages stochastiques (modifier pour Monte-Carlo).
 REALISTIC_SLIPPAGE_SEED = 42
 
+# ── Parallélisation walk-forward (PHASE 2.5 ROADMAP_SOLO) ─────────────────────
+# Nombre de workers joblib pour core/optimizer.optimize.
+#   -1 = tous les CPU disponibles (recommandé en local)
+#    1 = séquentiel (utile pour debug / reproductibilité stricte trace par trace)
+#    N = N workers (ex: 4 pour ne pas saturer la machine pendant le live)
+OPTIMIZER_PARALLEL_N_JOBS = -1
+
 # ==============================================================================
 # CALENDRIER MACRO (jours sensibles : FOMC, CPI, NFP, JOLTS, PCE)
 # ==============================================================================
