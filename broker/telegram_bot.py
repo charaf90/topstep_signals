@@ -118,11 +118,110 @@ def fmt_close(tag: str, info: Dict, pnl: float,
     )
 
 
+def _parse_risk_reason(reason: str) -> str:
+    """
+    Convertit une raison brute (consistency_50_cap_*, slack_*, etc.) en
+    message humain. Renvoie le texte HTML formaté pour Telegram.
+
+    Patterns reconnus :
+      - consistency_50_cap_rdp_post_tp_<X>_above_<CAP>
+      - slack_<X>_below_<THR>_(daily=<D>,trail=<T>,reserved=<R>)
+      - daily_fills_cap_<N>/<MAX>
+      - max_active_positions_<N>/<MAX>
+      - consec_loss_pause_<N>
+      - user_daily_loss_realized_<P>_below_<L>
+      - user_daily_slack_<X>_below_<R>
+      - topstep_slack_<X>  (issu de risk_topstep.py, backtest)
+    """
+    import re
+
+    # Règle de cohérence 50 % Topstep — le plus important post-refonte
+    m = re.match(r"consistency_50_cap_rdp_post_tp_(-?\d+)_above_(\d+)", reason)
+    if m:
+        rdp_post = int(m.group(1))
+        cap = int(m.group(2))
+        return (
+            f"<b>Règle de cohérence 50 % Topstep</b>\n"
+            f"Le TP plein de ce trade porterait le gain du jour à "
+            f"<b>+${rdp_post}</b>, au-delà du cap <b>${cap}</b>.\n"
+            f"<i>Cap protège la règle Topstep : best_day ≤ 50 % "
+            f"du profit cible ($1500 sur 50K).</i>"
+        )
+
+    # Slack Topstep (daily + trailing) sous le seuil de sécurité
+    m = re.match(
+        r"slack_(-?\d+)_below_(\d+)_\(daily=(-?\d+),trail=(-?\d+),reserved=(-?\d+)\)",
+        reason,
+    )
+    if m:
+        slack = int(m.group(1))
+        thr   = int(m.group(2))
+        daily = int(m.group(3))
+        trail = int(m.group(4))
+        rsv   = int(m.group(5))
+        return (
+            f"<b>Slack Topstep insuffisant</b>\n"
+            f"Slack effectif : <b>${slack}</b> (seuil ${thr})\n"
+            f"  daily=${daily} | trail=${trail} | réservé=${rsv}"
+        )
+
+    # Cap de fills journaliers atteint
+    m = re.match(r"daily_fills_cap_(\d+)/(\d+)", reason)
+    if m:
+        n, mx = m.group(1), m.group(2)
+        return (
+            f"<b>Cap fills journaliers atteint</b>\n"
+            f"{n}/{mx} fills réalisés aujourd'hui."
+        )
+
+    # Cap positions actives simultanées
+    m = re.match(r"max_active_positions_(\d+)/(\d+)", reason)
+    if m:
+        n, mx = m.group(1), m.group(2)
+        return (
+            f"<b>Trop de positions simultanées</b>\n"
+            f"{n}/{mx} positions actives — attendre une clôture."
+        )
+
+    # Pause streak perdant
+    m = re.match(r"consec_loss_pause_(\d+)", reason)
+    if m:
+        n = m.group(1)
+        return (
+            f"<b>Pause streak perdant</b>\n"
+            f"{n} jour(s) perdants consécutifs — circuit breaker actif."
+        )
+
+    # Plafond perte journalière utilisateur réalisée
+    m = re.match(r"user_daily_loss_realized_(-?[\d\.]+)_below_(-?\d+)", reason)
+    if m:
+        pnl = float(m.group(1))
+        lim = float(m.group(2))
+        return (
+            f"<b>Perte journalière utilisateur atteinte</b>\n"
+            f"Réalisé : <b>${pnl:+.0f}</b> sous le plancher ${lim:.0f}."
+        )
+
+    # Slack USER daily insuffisant (pire cas tout pending → SL)
+    m = re.match(r"user_daily_slack_(-?\d+)_below_(\d+)", reason)
+    if m:
+        slack, rsk = int(m.group(1)), int(m.group(2))
+        return (
+            f"<b>Marge utilisateur insuffisante</b>\n"
+            f"Slack ${slack} &lt; risque trade ${rsk}."
+        )
+
+    # Fallback : raison brute échappée (lisible mais cryptique)
+    return f"<i>{_esc(reason)}</i>"
+
+
 def fmt_risk_blocked(ticker: str, tag: str, reason: str) -> str:
+    # Le premier segment du tag est la stratégie (OPR / FIB / etc.)
+    strat = tag.split("_")[0] if tag else "?"
     return (
         f"⛔ <b>Ordre bloqué</b>\n"
-        f"{_esc(ticker)} — {_esc(tag.split('_')[0])}\n"
-        f"<i>{_esc(reason)}</i>"
+        f"{_esc(ticker)} — {_esc(strat)}\n"
+        f"{_parse_risk_reason(reason)}"
     )
 
 
@@ -152,6 +251,30 @@ def fmt_consec_loss_pause(days: int) -> str:
     )
 
 
+def fmt_day_damping_active(rdp: float, soft_cap: float, hard_cap: float,
+                            day_progress: float) -> str:
+    """Première fois du jour que le damping day_progress passe < 1.0."""
+    pct = day_progress * 100
+    return (
+        f"🟡 <b>Damping journalier actif</b>\n"
+        f"Gain jour : <b>+{rdp:.0f} $</b> (au-delà du soft cap {soft_cap:.0f} $)\n"
+        f"Sizing réduit à <b>{pct:.0f}%</b> du nominal.\n"
+        f"<i>Hard cap : {hard_cap:.0f} $ — au-delà, plus de nouveaux trades.</i>"
+    )
+
+
+def fmt_consistency_warning(rdp: float, cap_max: float) -> str:
+    """Alerte préventive : 80% du cap consistency atteint."""
+    pct = rdp / cap_max * 100
+    remaining = cap_max - rdp
+    return (
+        f"⚠️ <b>Cap cohérence 50% à {pct:.0f}%</b>\n"
+        f"Gain jour : <b>+{rdp:.0f} $</b> / {cap_max:.0f} $\n"
+        f"Marge restante : <b>+{remaining:.0f} $</b>\n"
+        f"<i>Prochain trade dont le TP dépasse cette marge sera refusé.</i>"
+    )
+
+
 def fmt_system_error(context: str, error: str) -> str:
     return (
         f"🔴 <b>Erreur système</b>\n"
@@ -169,11 +292,32 @@ def fmt_session_start(date_str: str, tickers: List[str],
     streak  = rm_status.get("consec_loss_days", 0)
     sign  = "+" if cum >= 0 else ""
     ticker_str = " | ".join(tickers)
+
+    # Récap caps actifs (challenge adaptatif + cohérence 50%)
+    caps_line = ""
+    bypass_active = rm_status.get("challenge_bypass_user_daily", False)
+    in_combine = rm_status.get("in_combine", False)
+    if bypass_active or in_combine:
+        # Imports tardifs pour éviter cycle au load du module
+        from config import (
+            CHALLENGE_DAY_PROFIT_SOFT_CAP_USD,
+            CHALLENGE_DAY_PROFIT_HARD_CAP_USD,
+            CHALLENGE_LOCKIN_START_USD,
+            CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+        )
+        caps_line = (
+            f"\n<i>Caps actifs — soft ${CHALLENGE_DAY_PROFIT_SOFT_CAP_USD:.0f} | "
+            f"hard ${CHALLENGE_DAY_PROFIT_HARD_CAP_USD:.0f} | "
+            f"lockin ${CHALLENGE_LOCKIN_START_USD:.0f} | "
+            f"consistency ${CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD:.0f}</i>"
+        )
+
     return (
         f"🔔 <b>Démarrage session</b> — {_esc(date_str)}\n"
         f"Actifs : {_esc(ticker_str)}\n"
         f"Cum challenge : {sign}{cum:.2f} $ | Restant : {target:.2f} $\n"
         f"Slack daily : {slack_d:.0f} $ | Trail : {slack_t:.0f} $"
+        + caps_line
         + (f"\n⚠️ Streak perdant : {streak} jour(s)" if streak > 0 else "")
     )
 
@@ -267,6 +411,28 @@ def fmt_risk(rm_status: Dict, now_ny: str,
         if last_reset:
             challenge_block += f"  Dernier reset: {_esc(last_reset[:10])}\n"
 
+    # Bloc garde-fou cohérence 50% — affiché si en Combine
+    consistency_block = ""
+    cap_max = rm_status.get("consistency_cap_max")
+    cap_remaining = rm_status.get("consistency_cap_remaining")
+    in_combine = rm_status.get("in_combine", False)
+    if in_combine and cap_max is not None and cap_remaining is not None:
+        pct_used = max(0.0, (cap_max - cap_remaining) / cap_max * 100)
+        # Icône selon utilisation : 🟢 < 50%, 🟡 50-80%, 🔴 ≥ 80%
+        if pct_used >= 80:
+            icon = "🔴"
+        elif pct_used >= 50:
+            icon = "🟡"
+        else:
+            icon = "🟢"
+        consistency_block = (
+            f"{'─'*24}\n"
+            f"<b>Garde-fou cohérence 50%</b>\n"
+            f"  {icon} Gain jour : {day_pnl:+.0f} $ / cap {cap_max:.0f} $\n"
+            f"  Marge restante : <b>{cap_remaining:+.0f} $</b> ({pct_used:.0f}% utilisé)\n"
+            f"  <i>Anticipe : best_day ≤ 50% × $3000 = $1500</i>\n"
+        )
+
     return (
         f"🛡 <b>Risk monitor</b>\n"
         f"<i>{_esc(now_ny)}</i>\n"
@@ -284,6 +450,7 @@ def fmt_risk(rm_status: Dict, now_ny: str,
         f"  Perte jour restante : {user_remaining:.0f} $ / {user_daily_loss_max:.0f} $\n"
         + (f"⚠️ Streak perdant : {streak} jour(s)\n" if streak > 0 else "")
         + challenge_block
+        + consistency_block
         + pause_line
     )
 
@@ -564,6 +731,17 @@ class TelegramBot:
     def notify_consec_loss_pause(self, days: int):
         if self.enabled and self.level_risk:
             self.send(fmt_consec_loss_pause(days))
+
+    def notify_day_damping_active(self, rdp: float, soft_cap: float,
+                                   hard_cap: float, day_progress: float):
+        """Damping day_progress passe < 1.0 (1ère fois du jour)."""
+        if self.enabled and self.level_risk:
+            self.send(fmt_day_damping_active(rdp, soft_cap, hard_cap, day_progress))
+
+    def notify_consistency_warning(self, rdp: float, cap_max: float):
+        """Cap cohérence 50% approché à 80% (1ère fois du jour)."""
+        if self.enabled and self.level_risk:
+            self.send(fmt_consistency_warning(rdp, cap_max))
 
     def send_warning(self, msg: str):
         """Envoi d'une alerte WARN générique (override risk, bypass, etc.)."""

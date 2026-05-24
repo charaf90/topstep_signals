@@ -8,7 +8,9 @@ Flux par tick :
   1. Chargement de l'état persistant (state/live_state.json)
   2. Roll de jour si nouvelle session (reset daily counters via PortfolioRiskManager)
   3. Fetch des barres 15m depuis l'API ProjectX
-  4. Détection des signaux OPR (run_opr_day) et Fib (get_fib_live_signal)
+  4. Détection des signaux OPR (run_opr_day), Fib v3 (get_fib_live_signal)
+     et Fib v4 (get_fib_v4_live_signal — MES1/NQ1/MGC1 depuis 2026-05-19,
+     gère états PENDING/CANCEL/CANCEL_FILL/ACTIVE)
   5. Filtre de corrélation (signal_selector.filter_correlated_signals)
   6. Pour chaque signal neuf → can_open → place_limit_order → register_open
   7. Sync broker : détection des fills/clôtures → register_fill / register_close
@@ -31,9 +33,9 @@ from zoneinfo import ZoneInfo
 from config import (
     INSTRUMENTS, RISK_PER_TRADE_USD,
     OPR_ENABLED, OPR_TIMEZONE, OPR_SESSION_END,
-    FIB_ENABLED, FIB_MAX_HOLD_BARS,
-    VPC_ENABLED, VPC_TICKERS, VPC_MAX_HOLD_BARS,
-    PROJECTX_SYMBOLS, PROJECTX_BARS_WARMUP, PROJECTX_LIVE_MODE,
+    FIB_MAX_HOLD_BARS,
+    FIB_V4_ENABLED, FIB_V4_TICKERS,
+    PROJECTX_SYMBOLS, PROJECTX_BARS_WARMUP,
     LIVE_STATE_FILE,
     YM1_ENABLED,
     USER_DAILY_LOSS_MAX, USER_MAX_TRADES_PER_DAY,
@@ -50,14 +52,14 @@ from config import (
     PROJECTX_MARKET_REALTIME_FORCE_REAUTH_S,
     PROJECTX_MARKET_REALTIME_BUFFER_MINUTES,
     OPR_V5_1_USE_M1_BUFFER,
+    OPR_V5_1_LIVE_TICKERS, OPR_V4_LIVE_TICKERS,
     CHALLENGE_ADAPTIVE_SIZING_ENABLED,
     CHALLENGE_NOTIFY_OVERRIDE_THRESHOLD_USD,
     CHALLENGE_BYPASS_USER_DAILY_LIMIT,
 )
 from core.opr import run_opr_day
 from core.opr_v5_1 import get_opr_v5_1_live_signals
-from core.strategy_fib import get_fib_live_signal
-from core.vpc import get_vpc_live_signal
+from core.strategy_fib_v4 import get_fib_v4_live_signal
 from core.risk_portfolio import PortfolioRiskManager, _Order
 from core.signal_selector import filter_correlated_signals
 from core.event_logger import EventLogger
@@ -183,12 +185,6 @@ def _opr_session_over(now_utc: datetime) -> bool:
     return (now_ny.hour, now_ny.minute) >= (h, m)
 
 
-def _vpc_session_over(now_utc: datetime) -> bool:
-    """Vrai si l'heure NY courante est ≥ 16h00 NY (fin session cash VPC)."""
-    now_ny = now_utc.replace(tzinfo=timezone.utc).astimezone(_NY_TZ)
-    return (now_ny.hour, now_ny.minute) >= (16, 0)
-
-
 def _is_trading_session(now_utc: datetime) -> bool:
     """
     Vrai si les futures CME US sont potentiellement ouverts.
@@ -222,7 +218,7 @@ class SessionRunner:
       state_file : chemin du fichier JSON d'état (créé si absent)
       dry_run    : si True, simule sans passer d'ordres réels
       tickers    : liste de tickers actifs (None = tous activés en config)
-      strategy   : "opr_fib" | "opr" | "fib"
+      strategy   : "opr_fib" (seul mode restant après cleanup 2026-05-19)
     """
 
     def __init__(
@@ -233,7 +229,7 @@ class SessionRunner:
         dry_run:    bool = True,
         tickers:    Optional[List[str]] = None,
         strategy:   str = "opr_fib",
-        live_mode:  bool = PROJECTX_LIVE_MODE,
+        live_mode:  bool = False,   # défaut safe ; live.py:_build_runner override depuis account.simulated
         telegram:   Optional[TelegramBot] = None,
     ):
         self.client     = client
@@ -284,6 +280,12 @@ class SessionRunner:
 
         # Challenge — anti-spam de la notif "bypass actif" (1×/jour max)
         self._last_bypass_notify_day: Optional[date] = None
+        # Anti-spam damping day_progress < 1.0 (1×/jour max)
+        self._last_damping_notify_day: Optional[date] = None
+        # Anti-spam warning cap consistency à 80% (1×/jour max)
+        self._last_consistency_warn_day: Optional[date] = None
+        # Anti-spam log "OPR <ticker> en veille" (1×/session par ticker)
+        self._opr_skipped_notified: set = set()
 
     # ─────────────────────────────────────────────────────────────────────
     # Tickers actifs
@@ -294,10 +296,11 @@ class SessionRunner:
         tickers = ["NQ1", "MES1"]
         if YM1_ENABLED:
             tickers.append("YM1")
-        # On dédup'/préserve l'ordre : tickers union VPC_TICKERS
-        for t in (VPC_TICKERS or []):
-            if t not in tickers:
-                tickers.append(t)
+        # Tickers couverts par fib-v4 (MGC1 ajouté 2026-05-19, MES1/NQ1 déjà inclus).
+        if FIB_V4_ENABLED:
+            for t in FIB_V4_TICKERS:
+                if t not in tickers:
+                    tickers.append(t)
         return tickers
 
     # ─────────────────────────────────────────────────────────────────────
@@ -497,47 +500,79 @@ class SessionRunner:
         tag = f"OPR_{ticker}_{date_str}_{last_sig['direction']}_{last_idx}"
         return {**last_sig, "tag": tag}
 
-    def _get_fib_signal(self, df: pd.DataFrame, ticker: str) -> Optional[Dict]:
+    def _get_fib_v4_signal(self, df: pd.DataFrame, ticker: str) -> Optional[Dict]:
         """
-        Appelle get_fib_live_signal et retourne le signal si état PENDING.
-        (État ACTIVE = position déjà filée, gérée par le broker.)
+        Appelle get_fib_v4_live_signal et retourne le signal ou une action
+        d'invalidation intra-bar.
+
+        Retourne :
+          • None si rien d'actif (ou ticker hors FIB_V4_TICKERS, ou ACTIVE
+            géré côté broker via brackets, ou erreur).
+          • dict signal "à placer" si state == "PENDING" (avec tag).
+          • dict {"_action": "cancel", "tag": ...} si state == "CANCEL"
+            → annulation de l'ordre limite pendant phase pending (pivot break
+            intra-bar M1).
+          • dict {"_action": "cancel_fill", "tag": ...} si state == "CANCEL_FILL"
+            → wick excessive intra-bar M1 : annuler limit OU fermer position
+            si déjà fillée.
+
+        Le ticker est aussi re-filtré par FIB_V4_TICKERS côté core, donc
+        c'est défense-en-profondeur.
         """
-        if not FIB_ENABLED:
+        if not FIB_V4_ENABLED:
+            return None
+        if ticker not in FIB_V4_TICKERS:
             return None
 
-        live_state = get_fib_live_signal(df, ticker)
+        # M1 buffer requis pour les évaluations intra-bar (CANCEL/CANCEL_FILL).
+        # Si indisponible, fib-v4 retombe en mode M15-close uniquement (dégradé).
+        contract_id = self._contract_id(ticker)
+        m1_buffer = (
+            self.m1_buffer
+            if (self.m1_buffer is not None and contract_id)
+            else None
+        )
+
+        try:
+            live_state = get_fib_v4_live_signal(
+                df, ticker,
+                m1_buffer=m1_buffer,
+                contract_id=contract_id if m1_buffer is not None else None,
+            )
+        except Exception as exc:
+            _log.error("get_fib_v4_live_signal %s échoué : %s", ticker, exc)
+            return None
+
         if live_state is None:
             return None
-        if live_state["state"] != "PENDING":
-            return None   # ACTIVE : broker gère les brackets
 
-        sig = live_state["signal"]
+        state   = live_state["state"]
+        sig     = live_state["signal"]
         imp_key = live_state["impulse_key"]
-        today = _current_day_ny(datetime.utcnow()).strftime("%Y%m%d")
-        tag = f"FIB_{ticker}_{today}_{imp_key}"
-        return {**sig, "tag": tag}
+        today   = _current_day_ny(datetime.utcnow()).strftime("%Y%m%d")
+        tag     = f"FIBV4_{ticker}_{today}_{imp_key}"
 
-    def _get_vpc_signal(self, df: pd.DataFrame, ticker: str) -> Optional[Dict]:
-        """
-        Appelle get_vpc_live_signal et retourne le signal si état PENDING.
-        Le ticker est filtré par VPC_TICKERS côté core/vpc.py.
-        """
-        if not VPC_ENABLED:
-            return None
-        if ticker not in VPC_TICKERS:
-            return None
+        if state == "PENDING":
+            return {**sig, "tag": tag}
 
-        live_state = get_vpc_live_signal(df, ticker)
-        if live_state is None:
-            return None
-        if live_state["state"] != "PENDING":
-            return None
+        if state == "CANCEL":
+            return {
+                "_action": "cancel",
+                "tag":     tag,
+                "ticker":  ticker,
+                "reason":  live_state.get("reason", "fib-v4 invalidation"),
+            }
 
-        sig       = live_state["signal"]
-        setup_key = live_state["setup_key"]
-        # setup_key déjà préfixé YYYYMMDD → tag : VPC_NQ1_20260511_OPEN_OUTSIDE_long
-        tag = f"VPC_{ticker}_{setup_key}"
-        return {**sig, "tag": tag}
+        if state == "CANCEL_FILL":
+            return {
+                "_action": "cancel_fill",
+                "tag":     tag,
+                "ticker":  ticker,
+                "reason":  live_state.get("reason", "fib-v4 wick excess"),
+            }
+
+        # ACTIVE : broker gère via brackets — rien à faire ici
+        return None
 
     # ─────────────────────────────────────────────────────────────────────
     # Placement d'ordre
@@ -642,6 +677,35 @@ class SessionRunner:
                         and self._last_bypass_notify_day != today):
                     _evlog.challenge_bypass(ticker, risk_effective)
                     self._last_bypass_notify_day = today
+
+                # Alerte 1× / jour : damping day_progress kick-in (< 1.0)
+                day_prog = sizing_factors.get("day_progress", 1.0)
+                if (day_prog < 1.0
+                        and self._last_damping_notify_day != today):
+                    from config import (
+                        CHALLENGE_DAY_PROFIT_SOFT_CAP_USD,
+                        CHALLENGE_DAY_PROFIT_HARD_CAP_USD,
+                    )
+                    rdp_now = sizing_factors.get("realized_day_pnl", 0.0)
+                    self.tg.notify_day_damping_active(
+                        rdp_now,
+                        CHALLENGE_DAY_PROFIT_SOFT_CAP_USD,
+                        CHALLENGE_DAY_PROFIT_HARD_CAP_USD,
+                        day_prog,
+                    )
+                    self._last_damping_notify_day = today
+
+                # Alerte 1× / jour : 80% du cap cohérence 50% atteint
+                from config import CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD
+                rdp_now = sizing_factors.get("realized_day_pnl", 0.0)
+                if (rdp_now >= 0.80 * CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD
+                        and rdp_now < CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD
+                        and self._last_consistency_warn_day != today):
+                    self.tg.notify_consistency_warning(
+                        rdp_now,
+                        CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+                    )
+                    self._last_consistency_warn_day = today
             except Exception as exc:
                 _log.error("[%s] sizing adaptatif échoué : %s — fallback static", ticker, exc)
                 _evlog.error("adaptive_sizing", exc)
@@ -658,7 +722,21 @@ class SessionRunner:
             )
 
         # ── Vérification risk manager ─────────────────────────────────────
-        ok, reason = self.rm.can_open(risk_usd=risk, when=datetime.utcnow())
+        # Calcul du gain potentiel au TP — sert au check de cohérence 50%
+        # Topstep (Combine) côté risk manager.
+        try:
+            _tp_dist = float(signal["tp_dist"])
+            _dpp     = float(INSTRUMENTS[ticker]["dollar_per_point"])
+            _n_ct    = int(signal.get("n_ct", 1))
+            tp_gain_usd = abs(_tp_dist * _dpp * _n_ct)
+        except (KeyError, TypeError, ValueError):
+            tp_gain_usd = None  # skip du check 50% si données manquantes
+
+        ok, reason = self.rm.can_open(
+            risk_usd=risk,
+            when=datetime.utcnow(),
+            tp_gain_usd=tp_gain_usd,
+        )
         if not ok:
             _log.info("[%s] %s BLOQUÉ par risk manager : %s", ticker, tag, reason)
             _evlog.risk_blocked(ticker, tag, reason)
@@ -822,16 +900,14 @@ class SessionRunner:
                 if cid in pos_by_cid:
                     strat   = info.get("strategy")
                     ft_iso  = info.get("fill_time")
-                    if ft_iso and strat in ("FIB", "VPC"):
+                    if ft_iso and strat == "FIB":
                         fill_dt = datetime.fromisoformat(
                             ft_iso.replace("Z", "+00:00")
                         ).replace(tzinfo=None)
                         elapsed_bars = int(
                             (now_utc - fill_dt).total_seconds() / 900
                         )
-                        max_hold = (FIB_MAX_HOLD_BARS if strat == "FIB"
-                                    else VPC_MAX_HOLD_BARS)
-                        if elapsed_bars >= max_hold:
+                        if elapsed_bars >= FIB_MAX_HOLD_BARS:
                             self._close_position_market(tag, info, now_utc)
                     continue
 
@@ -926,6 +1002,63 @@ class SessionRunner:
             self.tg.notify_risk_breach(reason)
         else:
             self._maybe_warn_daily_limit(status_snap)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Helpers fib-v4 — invalidation intra-bar (CANCEL / CANCEL_FILL)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _handle_fib_v4_cancel(self, action: Dict):
+        """
+        fib-v4 invalidation pendant la phase PENDING (pivot break intra-bar M1) :
+        annule l'ordre limite côté broker et passe le tag local en CANCELLED.
+
+        No-op si :
+          • le tag n'existe pas dans state["placed_tags"] (signal pas placé)
+          • le tag est déjà CANCELLED/ACTIVE/CLOSED (état terminal local)
+        """
+        tag = action["tag"]
+        placed = self.state.get("placed_tags", {})
+        info = placed.get(tag)
+        if info is None or info.get("status") != _ST_PENDING:
+            return
+
+        order_id = info.get("order_id", -1)
+        if not self.dry_run and order_id and order_id > 0:
+            try:
+                self.client.cancel_order(self.account_id, order_id)
+            except Exception as exc:
+                _log.warning("[%s] cancel_order API échec : %s", tag, exc)
+
+        self._handle_cancel_transition(
+            tag, info,
+            reason=action.get("reason", "fib-v4 invalidation intra-bar"),
+        )
+
+    def _handle_fib_v4_cancel_fill(self, action: Dict, now_utc: datetime):
+        """
+        fib-v4 wick excessive intra-bar (washout détecté en M1) :
+          • Si l'ordre est encore PENDING → délégue à _handle_fib_v4_cancel
+          • Si l'ordre est ACTIVE (déjà fillé) → close market immédiat
+
+        Le P&L sera réconcilié par le sync broker au prochain tick (REST ou WS).
+        """
+        tag = action["tag"]
+        placed = self.state.get("placed_tags", {})
+        info = placed.get(tag)
+        if info is None:
+            return
+
+        status = info.get("status")
+        if status == _ST_PENDING:
+            self._handle_fib_v4_cancel(action)
+        elif status == _ST_ACTIVE:
+            _log.info("[%s] fib-v4 cancel_fill → close market (%s)",
+                      tag, action.get("reason", "wick excess"))
+            self._close_position_market(tag, info, now_utc)
+            _evlog.order_cancelled(
+                tag,
+                action.get("reason", "fib-v4 wick excess intra-bar"),
+            )
 
     # ─────────────────────────────────────────────────────────────────────
     # Realtime — drain + dispatch events SignalR
@@ -1386,19 +1519,10 @@ class SessionRunner:
             today_str   = today_str,
         )
 
-        # ── 5a. Fin de session VPC (16h00 NY — avant OPR) ─────────────────
-        if VPC_ENABLED and _vpc_session_over(now_utc) and not _opr_session_over(now_utc):
-            _log.info("Session VPC terminée (16h00 NY) — clôture VPC en cours")
-            self._close_all_pending_and_active(strategy_filter="VPC",
-                                               now_utc=now_utc)
-
-        # ── 5b. Fin de session OPR ? ──────────────────────────────────────
+        # ── 5. Fin de session OPR ? ───────────────────────────────────────
         if _opr_session_over(now_utc):
             _log.info("Session OPR terminée (16h30 NY) — clôture en cours")
             self._close_all_pending_and_active(strategy_filter="OPR",
-                                               now_utc=now_utc)
-            # Sécurité : si VPC n'a pas été nettoyé en 5a (race condition)
-            self._close_all_pending_and_active(strategy_filter="VPC",
                                                now_utc=now_utc)
             if self.state.get("session_report_sent") != today_str:
                 snap        = self.rm.status()
@@ -1497,20 +1621,39 @@ class SessionRunner:
                     f"fetch_bars {ticker}", "Aucune barre reçue")
                 continue
 
-            if self.strategy in ("opr_fib", "opr_fib_vpc", "opr") and OPR_ENABLED:
-                sig = self._get_opr_signal(df, ticker, day_ny)
-                if sig and not self._already_placed(sig["tag"]):
-                    new_signals.append(sig)
+            # OPR (v5.1 NQ1/YM1 + v4 legacy via OPR_V4_LIVE_TICKERS).
+            # Un ticker absent des deux listes est skippé (ex: MES1 mis en
+            # veille le 2026-05-21 — PF 1.16 drag confirmé sur 20 mois).
+            if OPR_ENABLED:
+                if (ticker not in OPR_V5_1_LIVE_TICKERS
+                        and ticker not in OPR_V4_LIVE_TICKERS):
+                    if ticker not in self._opr_skipped_notified:
+                        _evlog._write(
+                            "INFO",
+                            f"[{ticker}] OPR en veille",
+                            raison="hors OPR_V5_1_LIVE_TICKERS et OPR_V4_LIVE_TICKERS",
+                        )
+                        self._opr_skipped_notified.add(ticker)
+                else:
+                    sig = self._get_opr_signal(df, ticker, day_ny)
+                    if sig and not self._already_placed(sig["tag"]):
+                        new_signals.append(sig)
 
-            if self.strategy in ("opr_fib", "opr_fib_vpc", "fib") and FIB_ENABLED:
-                sig = self._get_fib_signal(df, ticker)
-                if sig and not self._already_placed(sig["tag"]):
-                    new_signals.append(sig)
-
-            if self.strategy in ("opr_fib_vpc", "vpc") and VPC_ENABLED:
-                sig = self._get_vpc_signal(df, ticker)
-                if sig and not self._already_placed(sig["tag"]):
-                    new_signals.append(sig)
+            # fib-v4 — MES1, NQ1, MGC1 uniquement (cf. FIB_V4_TICKERS).
+            # Plus aucun fallback fib-v3 : la stratégie historique a été
+            # supprimée lors du nettoyage 2026-05-19 (cf. docs/strategies_abandoned.md).
+            if FIB_V4_ENABLED and ticker in FIB_V4_TICKERS:
+                sig = self._get_fib_v4_signal(df, ticker)
+                if sig is not None:
+                    action = sig.get("_action")
+                    if action == "cancel":
+                        self._handle_fib_v4_cancel(sig)
+                    elif action == "cancel_fill":
+                        self._handle_fib_v4_cancel_fill(
+                            sig, now_utc=datetime.utcnow()
+                        )
+                    elif not self._already_placed(sig["tag"]):
+                        new_signals.append(sig)
 
         # ── 8. Filtre de corrélation ──────────────────────────────────────
         if len(new_signals) > 1:
