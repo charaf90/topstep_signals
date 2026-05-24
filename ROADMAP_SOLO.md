@@ -21,11 +21,12 @@ Transformer `topstep_signals` (déjà solide, ~14k lignes, 2 stratégies en prod
 ## 📍 ÉTAT ACTUEL — À METTRE À JOUR À CHAQUE SESSION
 
 ```
-Phase active     : PHASE 1 — Filet de sécurité — code terminé
-Étape en cours   : 1.8 (observation 1 semaine reconcile_daily + dashboard)
-Dernière session : 2026-05-24 (1.4 Dashboard Tailscale mergé sur main)
-Prochaine action : configurer cron quotidien reconcile_daily + observer 7j
-                   PUIS démarrer PHASE 2 (Backtest pro)
+Phase active     : PHASE 2 — Backtest pro — TERMINÉE
+Étape en cours   : 1.8 observation 7j (en parallèle) + PHASE 3 prête à démarrer
+Dernière session : 2026-05-25 (PHASE 2 mergée sur main — commit 85dcc76)
+Prochaine action : (a) configurer cron reconcile_daily + observer 7j
+                   (b) attaquer PHASE 3 — Améliorations live (shadow mode,
+                       vol-targeting) en parallèle de l'observation
 ```
 
 **Quand tu termines une étape** :
@@ -295,7 +296,7 @@ Puis répondre :
 
 ---
 
-### PHASE 2 — Backtest professionnel (1.5 semaine) — RISQUE ZÉRO (offline)
+### PHASE 2 — Backtest professionnel (1.5 semaine) — RISQUE ZÉRO (offline) — ✅ terminée le 2026-05-25
 
 **Objectif** : améliorations statistiques et perf du moteur de backtest. Offline, le live n'est pas concerné.
 
@@ -303,27 +304,27 @@ Puis répondre :
 
 **Étapes** :
 
-- [ ] **2.1 Branche `infra/backtest-pro`**
+- [x] **2.1 Branche `infra/backtest-pro`**
 
-- [ ] **2.2 Audit de `core/robustness.py` existant** (639 lignes — voir ce qui est déjà en place avant d'ajouter)
+- [x] **2.2 Audit de `core/robustness.py` existant** (639 lignes — voir ce qui est déjà en place avant d'ajouter)
 
-- [ ] **2.3 Métriques rigoureuses à ajouter si absentes**
+- [x] **2.3 Métriques rigoureuses à ajouter si absentes**
   - **Deflated Sharpe Ratio** (Bailey-López de Prado, 2014) — corrige le data snooping
   - **Probabilistic Sharpe Ratio**
   - Intégrer dans le verdict de `core/metrics.py` — seuil informationnel (pas bloquant initialement)
 
-- [ ] **2.4 Modèle d'exécution réaliste** dans `core/backtester.py`
+- [x] **2.4 Modèle d'exécution réaliste** dans `core/backtester.py`
   - Slippage stochastique corrélé à l'ATR du moment du fill
   - Distribution paramétrable par ticker, calibrée sur les fills live disponibles dans `logs/trading_events.log`
   - Feature flag `BACKTEST_REALISTIC_SLIPPAGE` dans `config.py` (off par défaut)
   - **Garde-fou** : avec flag off → golden master identique. Avec flag on → backtest "réaliste", non comparable au golden.
 
-- [ ] **2.5 Parallélisation walk-forward** dans `core/optimizer.py`
+- [x] **2.5 Parallélisation walk-forward** dans `core/optimizer.py`
   - `joblib.Parallel` sur les cellules du grid
   - Reproductibilité préservée (seed fixé par cellule)
   - Bench avant/après documenté
 
-- [ ] **2.6 Merge sur `main`**
+- [x] **2.6 Merge sur `main`**
   - **OBLIGATOIRE** : golden master passe au cent près sur OPR + Fib (avec flag realistic_slippage off)
   - Régénérer `rapport_opr-v5.1.md` et `rapport_fib-v4.md` → identiques aux archivés
 
@@ -468,7 +469,7 @@ Notifier par Telegram + créer note rapide dans `docs/incidents/YYYY-MM-DD.md` (
 ```
 PHASE 0 — Fondations         (3-4 jours) : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-24
 PHASE 1 — Filet sécurité     (1 semaine) : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
-PHASE 2 — Backtest pro       (1.5 sem.)  : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
+PHASE 2 — Backtest pro       (1.5 sem.)  : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-25
 PHASE 3 — Améliorations live (2 sem.)    : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
 PHASE 4 — Release            (1 jour)    : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
 
@@ -499,4 +500,4 @@ Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
 
 ---
 
-*Dernière mise à jour : 2026-05-24 (PHASE 1 code complet mergé ; 1.8 observation 7j à lancer).*
+*Dernière mise à jour : 2026-05-25 (PHASE 2 mergée — commit 85dcc76 ; PHASE 3 à démarrer).*
