@@ -21,11 +21,11 @@ Transformer `topstep_signals` (déjà solide, ~14k lignes, 2 stratégies en prod
 ## 📍 ÉTAT ACTUEL — À METTRE À JOUR À CHAQUE SESSION
 
 ```
-Phase active     : PHASE 1 — Filet de sécurité (read-only) — partielle
-Étape en cours   : 1.4 (Dashboard Tailscale) — différée, demande install user
-Dernière session : 2026-05-24 (1.1-1.3, 1.5, 1.6 mergées sur main)
-Prochaine action : session dédiée pour 1.4 (install Tailscale + auth + iPhone)
-                   OU lancer 1.8 (observation 1 semaine reconcile_daily) en parallèle
+Phase active     : PHASE 1 — Filet de sécurité — code terminé
+Étape en cours   : 1.8 (observation 1 semaine reconcile_daily + dashboard)
+Dernière session : 2026-05-24 (1.4 Dashboard Tailscale mergé sur main)
+Prochaine action : configurer cron quotidien reconcile_daily + observer 7j
+                   PUIS démarrer PHASE 2 (Backtest pro)
 ```
 
 **Quand tu termines une étape** :
@@ -181,7 +181,7 @@ Puis répondre :
 
   Format : pour chaque scénario, "Symptômes → Action exacte (commandes copier-collables) → Vérification → Récupération".
 
-- [ ] **1.4 Dashboard Streamlit + accès iPhone via Tailscale**  *(différée — demande intervention user)*
+- [x] **1.4 Dashboard Streamlit + accès iPhone via Tailscale**
 
   **Sous-étape 1.4.a — Installer Tailscale** (10 min)
   ```bash
@@ -274,7 +274,7 @@ Puis répondre :
   - Modifier le générateur de `summary.json` (probablement dans `core/optimizer.py` ou `core/metrics.py`)
   - Format : `"datasets": {"NQ1": "sha256:abc...", "MES1": "sha256:def..."}`
 
-- [~] **1.7 Merge sur `main`** *(partiel — 1.4 différée)*
+- [x] **1.7 Merge sur `main`** *(toutes étapes mergées)*
   - `./check.sh` + golden master verts
   - `git checkout main && git merge infra/safety-net`
 
@@ -499,4 +499,4 @@ Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
 
 ---
 
-*Dernière mise à jour : 2026-05-24 (PHASE 1 partielle mergée — commit 88c1af9 ; 1.4 et 1.8 restantes).*
+*Dernière mise à jour : 2026-05-24 (PHASE 1 code complet mergé ; 1.8 observation 7j à lancer).*
