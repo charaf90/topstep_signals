@@ -48,7 +48,7 @@ from config import (
     TOPSTEP_SAFETY_MULT, RISK_PER_TRADE_USD, CONSEC_LOSS_PAUSE_DAYS,
     USER_DAILY_LOSS_MAX, USER_MAX_TRADES_PER_DAY, USER_MAX_OPEN_POSITIONS,
     CHALLENGE_ADAPTIVE_SIZING_ENABLED, CHALLENGE_BYPASS_USER_DAILY_LIMIT,
-    CHALLENGE_RESET_DAY,
+    CHALLENGE_RESET_DAY, CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
 )
 
 
@@ -120,9 +120,19 @@ class PortfolioRiskManager:
     # ────────────────────────────────────────────────────────────────────
 
     def _total_reserved_risk(self) -> float:
-        """Risque cumulé pire-cas : tous pending + tous active → SL."""
-        return (sum(o.risk_usd for o in self.pending_orders.values())
-                + sum(o.risk_usd for o in self.active_positions.values()))
+        """
+        Risque cumulé des positions FILLED uniquement (active_positions).
+        Les ordres pending limit ne consomment plus le slack — décision 2026-05-21
+        après backtest extensif :
+          • Pending ≠ exposition réelle (limit orders fillent à 30-50% taux moyen)
+          • Double protection redondante avec Topstep DLL $950 hard en place
+          • Bloquait les 3èmes signaux en attente (cf. session 2026-05-20)
+          • Aucune cascade SL multi-trade détectée en backtest (analyse streaks
+            cf. output/sl_streaks/report.md — edge persiste après N SL)
+        Pour réactiver l'ancien comportement (worst-case pending+active) : ajouter
+            + sum(o.risk_usd for o in self.pending_orders.values())
+        """
+        return sum(o.risk_usd for o in self.active_positions.values())
 
     def _maybe_roll_day(self, when: Optional[datetime] = None):
         """
@@ -185,9 +195,18 @@ class PortfolioRiskManager:
     # ────────────────────────────────────────────────────────────────────
 
     def can_open(self, risk_usd: float = RISK_PER_TRADE_USD,
-                 when: Optional[datetime] = None) -> Tuple[bool, str]:
+                 when: Optional[datetime] = None,
+                 tp_gain_usd: Optional[float] = None) -> Tuple[bool, str]:
         """
         Retourne (autorise, raison) avant d'armer un nouvel ordre limite.
+
+        Args:
+            risk_usd    : risque dollar du trade candidat (SL atteint).
+            when        : timestamp de référence (défaut : maintenant).
+            tp_gain_usd : gain dollar maximal si le TP est atteint, en valeur
+                          absolue. Sert au check de cohérence 50% (Combine).
+                          Optionnel : si None ou 0, le check est skippé
+                          (rétrocompatibilité avec backtest / tests unitaires).
 
         Ordre des checks :
           1. Cap positions ACTIVES simultanément (USER_MAX_OPEN_POSITIONS)
@@ -195,6 +214,8 @@ class PortfolioRiskManager:
           3. Cap perte journalière réalisée (USER_DAILY_LOSS_MAX)
           4. Streak perdant (CONSEC_LOSS_PAUSE_DAYS)
           5. Slack Topstep daily + trailing DD (pire-cas tous pending + actif)
+          6. Slack USER daily (optionnel, bypass challenge)
+          7. Cohérence 50% Topstep — Combine uniquement (cf. tp_gain_usd)
         """
         self._maybe_roll_day(when)
 
@@ -264,6 +285,22 @@ class PortfolioRiskManager:
             if slack_user < risk_usd:
                 return False, (
                     f"user_daily_slack_{slack_user:.0f}_below_{risk_usd:.0f}"
+                )
+
+        # 7. Garde-fou règle de cohérence 50% Topstep — Combine uniquement.
+        #    Tant que cum_pnl < profit_target, on est en phase d'évaluation
+        #    et la règle 50% (best_day ≤ 50% du profit cumulé) peut nous coller
+        #    une auto-augmentation du target. On bloque tout trade dont le
+        #    TP plein pousserait le realized_day_pnl au-delà du seuil de garde.
+        if (CHALLENGE_ADAPTIVE_SIZING_ENABLED
+                and tp_gain_usd is not None
+                and tp_gain_usd > 0
+                and self.cum_pnl < self.profit_target):
+            rdp_post_tp = self.realized_day_pnl + float(tp_gain_usd)
+            if rdp_post_tp > CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD:
+                return False, (
+                    f"consistency_50_cap_rdp_post_tp_{rdp_post_tp:.0f}_"
+                    f"above_{CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD:.0f}"
                 )
 
         return True, "ok"
@@ -355,6 +392,12 @@ class PortfolioRiskManager:
         """Snapshot lisible pour monitoring / logging."""
         reserved = self._total_reserved_risk()
         trail_floor = self.peak_pnl - self.trailing_dd_limit
+        # Marge restante avant blocage règle 50% (en Combine uniquement)
+        in_combine = self.cum_pnl < self.profit_target
+        consistency_cap_remaining = (
+            CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD - self.realized_day_pnl
+            if in_combine and CHALLENGE_ADAPTIVE_SIZING_ENABLED else None
+        )
         return {
             "cum_pnl": self.cum_pnl,
             "peak_pnl": self.peak_pnl,
@@ -388,4 +431,8 @@ class PortfolioRiskManager:
                 CHALLENGE_ADAPTIVE_SIZING_ENABLED
                 and CHALLENGE_BYPASS_USER_DAILY_LIMIT
             ),
+            # Garde-fou cohérence 50% Topstep — None si hors Combine
+            "consistency_cap_max": CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+            "consistency_cap_remaining": consistency_cap_remaining,
+            "in_combine": in_combine,
         }

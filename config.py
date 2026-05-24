@@ -31,7 +31,7 @@ INSTRUMENTS = {
         "tick_size": 0.10,
         "name": "Micro Gold",
     },
-    "MCLE1": {
+    "MCL1": {
         # Micro WTI Crude : tickSize 0.01, tickValue $1.00 → 100 ticks/point × $1 = $100/point
         "dollar_per_point": 100.0,
         "tick_size": 0.01,
@@ -43,7 +43,17 @@ INSTRUMENTS = {
 # PARAMÈTRES GLOBAUX
 # ==============================================================================
 
-RISK_PER_TRADE_USD   = 100
+# Risque dollar par trade — passé de $100 à $200 le 2026-05-21 après
+# validation backtest extensive (output/period_stats/report.md,
+# output/losses_distribution/report.md, output/sl_streaks/report.md) :
+#   • 21 mois historiques à $200/trade fixe : 100% mois positifs,
+#     95.2% mois ≥ +$3000 (challenge passé), 0 mois ≤ -$2000
+#   • Worst day = -$1,033 (1 jour sur 360 = 0.3%, 8 jan 2025) —
+#     reste sous DLL broker $950 fixée côté Topstep
+#   • Décision : être fidèle au pipeline backtest plutôt que d'amplifier
+#     le risque via recovery-mode adaptive (formule mal calibrée,
+#     asymétrie négatif/positif identifiée — cf. décision séparée).
+RISK_PER_TRADE_USD   = 200
 MAX_TRADES_PER_DAY   = 2       # par actif (OPR)
 SL_BUFFER_TICKS      = 2
 
@@ -60,7 +70,7 @@ SLIPPAGE_TICKS_PER_TICKER = {
     "MES1":  1, "NQ1": 2, "YM1": 1,
     # Tests recherche — calibration prudente (par défaut 1 tick) :
     "MGC1":  1,   # Gold micro : spread typique 1 tick
-    "MCLE1": 2,   # Crude micro : ticks fins (0.01) + volatilité → 2 ticks
+    "MCL1":  2,   # Crude micro : ticks fins (0.01) + volatilité → 2 ticks
 }
 
 # Commission round-trip par contrat (entrée + sortie) — Topstep TopstepX micro
@@ -114,8 +124,12 @@ MIN_BARS_US_SESSION  = 8
 # ==============================================================================
 # LIMITES UTILISATEUR (live — plus strictes que Topstep)
 # ==============================================================================
-USER_DAILY_LOSS_MAX     = 200  # $ perte journalière réalisée max — protection réelle
-USER_MAX_TRADES_PER_DAY = 0   # désactivé : avec $100/trade le daily loss bloque après 2 SL
+# Aligné à $950 le 2026-05-21 — match exact ta limite Topstep DLL côté broker
+# (auto-flatten + lockout par Topstep à -$950). Le daemon bloque les nouveaux
+# signaux au même seuil pour éviter le bruit "ordre rejeté broker" en logs.
+# Précédente valeur $200 était trop serrée avec risk $200/trade (stoppait après 1 SL).
+USER_DAILY_LOSS_MAX     = 950  # $ perte journalière réalisée max — aligné Topstep DLL
+USER_MAX_TRADES_PER_DAY = 0   # désactivé — Topstep DLL $950 gère le cap réel
 USER_MAX_OPEN_POSITIONS = 0   # pas de limite (positions simultanées)
 
 # ==============================================================================
@@ -144,7 +158,13 @@ DAILY_LOCKIN_THRESHOLD = 0      # lock-in après gain cumulé (0 = désactivé)
 # IMPORTANT : USER_DAILY_LOSS_MAX est bypassé quand ce mode est ON. Seules les
 # limites Topstep dures restent actives. Toute prise de risque > seuil de
 # notification déclenche un Telegram WARN.
-CHALLENGE_ADAPTIVE_SIZING_ENABLED       = True   # activation directe en prod
+#
+# DÉSACTIVÉ le 2026-05-21 après backtest validation extensive : formule
+# adaptive identifiée comme mal calibrée (asymétrie négatif/positif —
+# amplifie le risque en recovery sans bénéfice attendu). Retour au sizing
+# fixe RISK_PER_TRADE_USD = $200 pour rester fidèle au pipeline historique.
+# Code adaptive conservé intact (réactivable en flipant ce flag à True).
+CHALLENGE_ADAPTIVE_SIZING_ENABLED       = False  # désactivé — sizing fixe $200
 CHALLENGE_RESET_DAY                     = 2      # jour du mois (marge sécurité vs vrai 4)
 CHALLENGE_TIME_PRESSURE_GAMMA           = 0.7    # adoucit l'effet temps restant
 CHALLENGE_DD_GUARD_BUFFER               = 2.3    # ne jamais risquer plus que slack/buffer (calibré MC)
@@ -152,8 +172,16 @@ CHALLENGE_RISK_MIN_USD                  = 30     # plancher absolu par trade
 CHALLENGE_RISK_MAX_USD                  = 350    # plafond absolu (calibré MC : P(bust)≤15%)
 CHALLENGE_BYPASS_USER_DAILY_LIMIT       = True   # ignore USER_DAILY_LOSS_MAX en mode challenge
 CHALLENGE_NOTIFY_OVERRIDE_THRESHOLD_USD = 100    # alerte Telegram si risk_applied > ce seuil
-CHALLENGE_EXPECTED_TRADES_PER_DAY_FALLBACK = 3   # si historique < 30j observé
-CHALLENGE_LOCKIN_START_USD              = 2200   # cum_pnl à partir duquel le lockin s'active
+CHALLENGE_EXPECTED_TRADES_PER_DAY_FALLBACK = 5   # observé en live (8 fills/j max, ~5 moy)
+CHALLENGE_LOCKIN_START_USD              = 1500   # lockin précoce — anticipe règle 50%
+
+# Garde-fou règle de cohérence Topstep (50% : best_day ≤ profit_target × 0.5 = $1500).
+# Soft cap : à partir de ce seuil de gain journalier, le risque est amorti
+# linéairement. Hard cap : aucun nouveau trade dont le TP plein ferait
+# dépasser ce seuil de réalisé journalier (cf. core/risk_portfolio.py).
+CHALLENGE_DAY_PROFIT_SOFT_CAP_USD       = 800    # damping progressif au-delà
+CHALLENGE_DAY_PROFIT_HARD_CAP_USD       = 1400   # plus de nouveaux trades au-delà
+CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD  = 1400   # marge 100$ vs $1500 (slippage)
 
 # Edge OOS par stratégie : e = WR × R − (1 − WR), calculé depuis le walk-forward.
 #   OPR opr-v4 (WR≈0.42, R≈2.2) → 0.34
@@ -399,7 +427,16 @@ OPR_V5_1_F3_MAX     = {"MES1": None, "NQ1": None, "YM1": None}   # ← optimum v
 #     de fill, non distinguable avant le fill)
 # Phase A (M1 polling) pourrait améliorer cette fidélité — à évaluer après
 # le burn-in.
-OPR_V5_1_LIVE_TICKERS = ["NQ1", "YM1"]   # MES1 reste sur v4
+OPR_V5_1_LIVE_TICKERS = ["NQ1", "YM1"]   # MES1 reste sur v4 (config legacy)
+
+# Tickers tradés via OPR v4 fallback (legacy). Vidé le 2026-05-21 :
+# OPR/MES1 (v4) en veille — PF 1.16 vs portfolio 2.67, drag confirmé sur 20 mois.
+#   • Apporte +$1,946 PnL à risk $100 (~+$97/mois marginal) pour DD individuel
+#     -$1,217 (= -$3,652 à risk $300)
+#   • Représente 20% des trades (213/1029) pour 3.6% du PnL
+#   • Retrait → PF +19%, WR +5.1pp, DD -12% sur le portefeuille
+# Pour réactiver MES1 : remettre ["MES1"]. Code v4 conservé intact.
+OPR_V4_LIVE_TICKERS = []
 
 # ==============================================================================
 # STRATÉGIE FIBONACCI 50% RETRACEMENT (`fib-v1`)
@@ -414,7 +451,10 @@ OPR_V5_1_LIVE_TICKERS = ["NQ1", "YM1"]   # MES1 reste sur v4
 #
 # Voir core/strategy_fib.py.
 
-FIB_ENABLED = True
+# NOTE 2026-05-19 : fib-v3 a été supprimée du code prod, mais les constantes
+# ci-dessous restent partagées par fib-v4 (helpers core/fib_helpers.py +
+# core/strategy_fib_v4.py) — c'est pourquoi la section "STRATÉGIE FIB" est
+# renommée en "CONSTANTES FIB partagées". Cf docs/strategies_abandoned.md.
 
 # Indicateurs (cohérents avec draft validé)
 FIB_ATR_PERIOD = 14
@@ -447,46 +487,91 @@ FIB_MAX_HOLD_BARS = 32              # fermeture forcée après ~8h
 #   61.8 seul        : 574 trades, P&L=+$956,   DD=-$4 496, Sharpe=0.37, BS=0.0 %  (rejeté)
 #   38.2 + 50        : 971 trades, P&L=+$13 380, DD=-$2 218, BS=41.6 %  (DD trop lourd)
 #   Triplet 38.2+50+61.8 : 1 545 trades, P&L=+$14 336, BS=4.6 %   (inacceptable Topstep)
-FIB_LEVEL_PER_TICKER = {"MES1": 0.382, "NQ1": 0.382, "YM1": 0.382}
+FIB_LEVEL_PER_TICKER = {
+    "MES1": 0.382, "NQ1": 0.382, "YM1": 0.382,
+    # fib-v4 — extension recherche multi-actifs / multi-niveaux. Valeurs par
+    # défaut posées à 0.382 (référence) ; les niveaux 0.5 / 0.618 sont testés
+    # par scripts/baseline_fib_v4.py via override `fib_level` du wrapper.
+    "MGC1": 0.382, "MCL1": 0.382,
+}
 
 # SL/TP/IMP per-ticker — calibrés walk-forward via draft_fibo_50/optimize_fib_levels.py
 # Performance OOS validée pour le niveau 38.2 % (sans filtres trigger) :
 #   MES1  IS Sharpe=2.99  OOS Sharpe=1.66  OOS PF=1.27  OOS P&L=+$1 156  (n=77)
 #   NQ1   IS Sharpe=5.52  OOS Sharpe=4.52  OOS PF=1.79  OOS P&L=+$765   (n=35)
 #   YM1   IS Sharpe=1.04  OOS Sharpe=1.44  OOS PF=1.22  OOS P&L=+$640   (n=57)
-FIB_SL_ATR_MULT_PER_TICKER     = {"MES1": 0.75, "NQ1": 1.50, "YM1": 1.00}
-FIB_TP_ATR_MULT_PER_TICKER     = {"MES1": 1.50, "NQ1": 1.50, "YM1": 2.00}   # MES1 : 2.0→1.5 (fib-v3)
-FIB_MIN_IMPULSE_ATR_PER_TICKER = {"MES1": 1.00, "NQ1": 1.00, "YM1": 2.00}   # MES1 : 2.0→1.0 (fib-v3)
+# MGC1/MCL1 : valeurs préliminaires fib-v4 (à raffiner phase 4 walk-forward).
+FIB_SL_ATR_MULT_PER_TICKER     = {"MES1": 0.75, "NQ1": 1.50, "YM1": 1.00,
+                                   "MGC1": 1.00, "MCL1": 1.50}
+FIB_TP_ATR_MULT_PER_TICKER     = {"MES1": 1.50, "NQ1": 1.50, "YM1": 2.00,   # MES1 : 2.0→1.5 (fib-v3)
+                                   "MGC1": 1.50, "MCL1": 2.00}
+FIB_MIN_IMPULSE_ATR_PER_TICKER = {"MES1": 1.00, "NQ1": 1.00, "YM1": 2.00,   # MES1 : 2.0→1.0 (fib-v3)
+                                   "MGC1": 1.00, "MCL1": 1.50}
 
 # Fenêtre de session horaire par ticker (heures UTC).
 # Clés de SESSION_WINDOWS dans core/strategy_fib.py.
 # MES1 : "no_nuit" (0h–21h UTC) validé 🟢 fib-v3 — OOS PF=1.82, BS=100%
 # NQ1/YM1 : "us_session" inchangé
+# MGC1/MCL1 : "us_session" par défaut fib-v4 (peut être révisé phase 4).
 FIB_SESSION_PER_TICKER = {
     "MES1": "no_nuit",     # 0h–21h UTC
     "NQ1":  "us_session",  # 13h–21h UTC
     "YM1":  "us_session",  # 13h–21h UTC
+    "MGC1": "us_session",  # 13h–21h UTC (fib-v4 préliminaire)
+    "MCL1": "us_session",  # 13h–21h UTC (fib-v4 préliminaire)
 }
 
-# Filtres trigger walk-forward (calibrés pour fib-v2, niveau 38.2 %)
-# via draft_fibo_50/analyze_filters_v2.py.
-# Format : {"feature": <nom>, "direction": "gt"|"lt", "threshold": <float>}
-# None = pas de filtre actif.
+# ──────────────────────────────────────────────────────────────────────────────
+# STRATÉGIE FIB v4 — extension recherche multi-actifs / multi-niveaux
+# avec 2 conditions d'invalidation data-driven (Phase 4 walk-forward) :
+#   1. Pivot break : annule le pending si le prix casse le pivot d'impulse
+#      au-delà du buffer ATR pendant la phase pending.
+#   2. Wick excess : annule le fill si la barre de fill perce le niveau
+#      Fibonacci de plus de `wick_max` ATR (= washout — edge négatif).
 #
-# Sélection : compromis Sharpe / robustesse (OOS n).
-#   MES1 : bars_since_confirm < 10 (OOS Sharpe 4.51 vs baseline 1.66, n=44 robuste)
-#   NQ1  : adx_at_arm > 44.035     (OOS Sharpe 18.67 vs baseline 4.52, n=10 limite)
-#   YM1  : bars_since_confirm < 2  (OOS Sharpe 7.11 vs baseline 1.44, n=12 limite)
-#
-# Caveat : NQ1 et YM1 ont des samples OOS faibles (n=10/12) → IC large.
-# À re-valider sur 2026-Q2/Q3 dès données disponibles.
-FIB_TRIGGER_FILTERS_PER_TICKER = {
-    "MES1": {"feature": "bars_since_confirm", "direction": "lt", "threshold": 10.0},
-    "NQ1":  {"feature": "adx_at_arm",         "direction": "gt", "threshold": 44.035},
-    "YM1":  {"feature": "bars_since_confirm", "direction": "lt", "threshold": 2.0},
+# Configuration calibrée walk-forward IS/OOS sur historique sept 2024 →
+# mai 2026 (cf. output/rapport_fib-v4_optimize.md).
+# ──────────────────────────────────────────────────────────────────────────────
+FIB_V4_STRATEGY_VERSION = "fib-v4"
+FIB_V4_ENABLED = True   # PROMU EN PRODUCTION 2026-05-19 — MES1+NQ1+MGC1
+
+# Univers de production retenu après Phase 4 (verdict 🟢) :
+#   MES1, NQ1 (M15 fib=0.382) ; MGC1 (M15 fib=0.5).
+# YM1 et MCL1 EXCLUS : YM1 a n_oos < 20 → 🟡 VEILLE ; MCL1 = REJET structurel
+# (Fib inadapté au crude, cf. note historique stratégie ARF).
+FIB_V4_TICKERS = ["MES1", "NQ1", "MGC1"]
+
+# Niveau Fibonacci retenu par ticker — issu de Phase 4 (PF OOS le plus haut).
+FIB_V4_LEVEL_PER_TICKER = {
+    "MES1": 0.382,  # PF OOS = 6.01 (Phase 4, wick<0.05)
+    "NQ1":  0.382,  # PF OOS = 6.47 (Phase 4, wick<0.80)
+    "MGC1": 0.500,  # PF OOS = 2.53 (Phase 4, wick<0.40)
 }
 
-FIB_STRATEGY_VERSION = "fib-v3"
+# Buffer pivot break en ATR : annule pending si LONG close < swing_low − buffer
+# (symétrique SHORT). 0.0 = strict (toute cassure invalide).
+FIB_V4_PIVOT_BREAK_BUFFER_ATR_PER_TICKER = {
+    "MES1": 0.0, "NQ1": 0.0, "MGC1": 0.0,
+}
+
+# Seuil maximum wick_through_atr : annule le fill si la mèche du fill perce
+# au-delà du niveau Fib de plus de `wick_max` × ATR (signal de washout).
+# Découvert par walk-forward Phase 4 (selection IS, validation OOS).
+FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER = {
+    "MES1": 0.05,   # MES1 très strict — fills propres uniquement
+    "NQ1":  0.80,   # NQ1 plus tolérant — vol naturellement plus large
+    "MGC1": 0.40,
+}
+
+# Skip macro days par ticker — découvert Phase 6 stress sur MGC1 :
+# `is_macro_day=True` → PF=0.49 (n=4 ; statistiquement faible mais signal
+# directionnel négatif). Filtre prophylactique appliqué AVANT promotion live.
+# True = on évite les jours macro pour ce ticker.
+FIB_V4_SKIP_MACRO_PER_TICKER = {
+    "MES1": False,   # 1.7% des fills sur macro days, signal neutre
+    "NQ1":  False,   # 0 trade en macro days OOS, pas de signal
+    "MGC1": True,    # ⚠️ PF macro=0.49 (n=4) — filtre prudentiel actif
+}
 
 # ==============================================================================
 # STRATÉGIE ARES — Asian Range European Session Breakout
@@ -531,12 +616,13 @@ ARES_EURO_START_HOUR   = 2    # début fenêtre d'entrée européenne (NY)
 # Mapping tickers internes → symboles ProjectX (recherche de contrats).
 # Utilisé par broker/projectx_client.py et broker/live_runner.py.
 PROJECTX_BASE_URL  = "https://api.topstepx.com"
-PROJECTX_SYMBOLS   = {"MES1": "MES", "NQ1": "MNQ", "YM1": "MYM"}
+PROJECTX_SYMBOLS   = {"MES1": "MES", "NQ1": "MNQ", "YM1": "MYM", "MGC1": "MGC"}
 
-# live=False : compte de simulation (challenge Topstep).
-# live=True  : compte financé (après validation du challenge).
-# Tous les appels API (search_contract, get_bars, place_order) utilisent cette valeur.
-PROJECTX_LIVE_MODE = False
+# Note : le flag `live` envoyé à l'API ProjectX (search_contract, get_bars,
+# place_order) est déterminé automatiquement à partir du type de compte
+# renvoyé par l'API (`account.simulated`) — voir live.py:_build_runner.
+# Quand Topstep promeut Combine → Funded, `simulated=False` côté API et le
+# daemon passe automatiquement en mode live au prochain restart.
 
 # ==============================================================================
 # TELEGRAM
@@ -650,205 +736,6 @@ ANALYSIS_CHARTS_ENABLED = True        # générer ces graphiques par défaut en 
 ANALYSIS_CHART_CONTEXT_BEFORE = 200   # bougies 15m avant cutoff (cf. spec utilisateur)
 
 # ==============================================================================
-# STRATÉGIE VOLUME PROFILE CONFLUENCE (`vpc-v1`)
-# ==============================================================================
-# Concept :
-#   Approximation du Volume Profile journalier (POC, VAH, VAL, HVN, LVN) à
-#   partir des barres M15 de la session cash NY veille (9h30-16h NY). Trois
-#   setups hiérarchiques sont testés à chaque barre de la session courante :
-#
-#     1) OPEN_OUTSIDE  — l'open du jour est hors du Value Area veille (gap).
-#                        Entrée market dans le sens du gap, SL au bord du
-#                        Value Area opposé + buffer, TP = 2 × SL.
-#     2) BREAKOUT_RETEST — cassure de VAH/VAL sur volume confirmé,
-#                          retest du niveau pour entrée limit.
-#     3) HVN_REBOUND   — touche d'un HVN avec bougie de rejet, entrée à
-#                        l'extrême du HVN, SL au-delà du HVN, TP vers POC.
-#
-# Filtres communs (PHASE 1) :
-#   - EMA20 > EMA50 pour long (inverse pour short) — sauf setup 1 (gap pur)
-#   - Volume > VOL_MULT_THRESHOLD × moyenne(20) sur la bougie de déclenchement
-#   - Fenêtre NY = US_HOUR_START_NY → US_HOUR_END_NY (cash session)
-#   - YM1 désactivé jusqu'à preuve OOS (cohérence avec OPR)
-#
-# Voir strategies/vpc.py — c'est un module de RECHERCHE pur (pas live).
-
-VPC_ENABLED = True
-
-# Tickers actifs (YM1 désactivé jusqu'à preuve OOS — cohérence portfolio)
-VPC_TICKERS = ["MES1"]  # NQ1 retiré : 1 contrat NQ1 (SL 2.0×ATR) risque ~$300+ > USER_DAILY_LOSS_MAX $200
-
-# Fenêtre US cash NY (heures NY, DST-aware via zoneinfo)
-VPC_HOUR_START_NY = 9    # début 9h30 NY (la condition est >= 9, et minute=30 testé séparément)
-VPC_HOUR_END_NY   = 16   # fin 16h00 NY (forçage close à 16h00)
-VPC_OPEN_HOUR_NY  = 9    # heure de la bougie "open NY" pour test gap
-VPC_OPEN_MIN_NY   = 30   # minute exacte de l'open NY (9:30)
-
-# Construction du Value Area / Volume Profile (sur veille)
-# Le profil veille est construit sur la session cash 9h30-16h00 NY veille.
-# Buckets de prix de taille BUCKET_TICKS × tick_size par actif.
-VPC_PROFILE_BUCKET_TICKS  = 4         # 4 ticks par bucket (MES: 1pt, NQ: 1pt, YM: 4pts)
-VPC_VALUE_AREA_PCT        = 0.60      # walk-forward v4 : VA 60 % (optimal MES + NQ)
-VPC_HVN_VOL_MULT          = 1.5       # bucket "HVN" si volume ≥ 1.5 × moyenne
-VPC_LVN_VOL_MULT          = 0.5       # bucket "LVN" si volume ≤ 0.5 × moyenne
-
-# Filtre volume sur bougie de déclenchement
-# Note: vol_mult_threshold optimal diffère par ticker (MES=1.0, NQ=2.0)
-# La valeur ci-dessous est utilisée comme défaut si params=None passé à run_backtest.
-# L'optimizer walk-forward applique le bon vol_mult par ticker au moment de l'eval.
-VPC_VOL_AVG_WINDOW        = 20        # moyenne mobile 20 barres
-VPC_VOL_MULT_THRESHOLD    = 1.5       # volume bougie > 1.5 × moyenne (défaut)
-
-# Filtre tendance
-VPC_EMA_FAST_PERIOD       = 20
-VPC_EMA_SLOW_PERIOD       = 50
-
-# ATR pour SL/TP (multiplicateurs)
-VPC_ATR_PERIOD            = 14
-
-# Multiplicateurs SL/TP par actif (calibrés walk-forward)
-# Valeurs walk-forward v4 (IS déc 2024 → sept 2025, OOS oct 2025 → mars 2026)
-# MES1 : sl=2.5  tp=4.0  vol_thr=1.0  va_pct=0.6  → IS PF 1.74 / OOS PF 1.89
-# NQ1  : sl=2.0  tp=4.0  vol_thr=2.0  va_pct=0.6  → IS PF 2.55 / OOS PF 1.50
-VPC_SL_ATR_MULT_PER_TICKER = {"MES1": 2.5, "NQ1": 2.0, "YM1": 2.0}
-VPC_TP_ATR_MULT_PER_TICKER = {"MES1": 4.0, "NQ1": 4.0, "YM1": 4.0}
-
-# Buffer ticks au-delà du niveau de SL (protection front-run / stop hunt)
-VPC_SL_BUFFER_TICKS       = 2
-
-# Gestion d'ordre / position
-VPC_ORDER_TIMEOUT_BARS    = 2         # vie de l'ordre limite (30 min) avant annulation
-VPC_MAX_HOLD_BARS         = 24        # close forcé après ~6h ou fin session NY (le plus tôt)
-VPC_MAX_TRADES_PER_DAY    = 2         # cohérence portfolio (= MAX_TRADES_PER_DAY)
-
-# Setups activés (peuvent être désactivés individuellement pour ablations)
-# vpc-v1 (initial)   : 3 setups → P&L portfolio -$12 003, PF 0.76, BS 2.7 %
-# vpc-v2             : HVN_REBOUND seul + filtres → 4 trades, trop rare
-# vpc-v3 (fade gap)  : OPEN_OUTSIDE inversé (gap fade vers VA) + HVN_REBOUND
-VPC_ENABLE_OPEN_OUTSIDE    = True
-VPC_ENABLE_BREAKOUT_RETEST = False
-VPC_ENABLE_HVN_REBOUND     = True
-
-# vpc-v3 : OPEN_OUTSIDE en mode FADE (inversé)
-# Hypothèse : un gap qui ouvre hors VA veille a tendance à se refermer vers VA
-# Si vrai → WR doit passer de ~40% à ~60% sur ce setup
-VPC_OPEN_OUTSIDE_FADE      = True
-# Filtre additionnel : le gap doit être ≥ 0.5 × ATR pour être tradable
-# (sinon = pas de vraie ouverture hors profil)
-VPC_OPEN_OUTSIDE_MIN_GAP_ATR = 0.3
-
-# vpc-v4 : exclusion jours macro + filtre ADX modéré (gap fade ne marche pas
-# en trending pur)
-VPC_EXCLUDE_MACRO_DAYS     = True
-VPC_OPEN_OUTSIDE_ADX_MAX   = 35.0      # gap fade évite trending fort (gap continue souvent)
-
-# Filtres supplémentaires pour HVN_REBOUND (vpc-v2/v3)
-VPC_HVN_ADX_MIN            = 18.0      # ADX > 18 (relâché un peu)
-VPC_HVN_HOUR_START_NY      = 10        # restriction matin (10h NY)
-VPC_HVN_HOUR_END_NY        = 15        # restriction fin (15h NY → avant clôture)
-VPC_HVN_MIN_RR             = 1.2       # rejette setups où le TP/SL < 1.2
-
-# Tag de version (à bumper à chaque changement structurel)
-VPC_STRATEGY_VERSION       = "vpc-v4"
-
-# ==============================================================================
-# STRATÉGIE ARF (Asia Range Failure) — arf-v1
-# ==============================================================================
-# Concept : pendant la session asiatique (19h-02h NY), un range se forme.
-# Pendant Londres (02h-05h NY), on attend une fausse cassure : cassure du
-# Asia_High puis retour sous Asia_High → ordre limit SHORT au niveau Asia_High
-# (symétrique long sur Asia_Low). SL au-delà du range + buffer ATR. TP à un
-# multiple R:R configurable.
-#
-# Edge : les stops mécaniques retail/momentum sont placés juste au-delà des
-# extrêmes asiatiques. La session asiatique étant peu liquide, les cassures
-# manquent souvent de suivi → retour dans le range = position contrarian
-# rentable.
-#
-# Falsification : PF OOS < 1.0 sur 60 trades consécutifs en live.
-# ──────────────────────────────────────────────────────────────────────────────
-
-ARF_ENABLED                  = False  # désactivé jusqu'à validation OOS
-
-# Tickers — V1 limitée aux indices US (CSV TradingView, déc24-mars26).
-# Gold (MGC) et Oil (MCLE) écartés faute d'historique suffisant (< 60 jours).
-ARF_TICKERS                  = ["MES1", "NQ1", "YM1"]
-# Note : MGC1 et MCLE1 ont été testés en mai 2026 — résultat ❌ structurel.
-# Sur le Gold, 1 seul signal en 49 jours ; sur Crude, 4 signaux en 28 jours,
-# PF=0.55. Sur ces actifs, les cassures du range asiatique sont des
-# CONTINUATIONS, pas des faux breakouts (pas de "retour dans le range").
-# Cf. rapport_arf-v4.md § 10 pour le détail.
-
-# Fenêtre de session asiatique (heure NY, DST-aware) — Tokyo+Sydney+early HK.
-# 19h NY veille → 02h NY courant = ~7 h de range.
-ARF_ASIA_HOUR_START_NY       = 19   # heure de début (veille NY)
-ARF_ASIA_HOUR_END_NY         = 2    # heure de fin exclusive (courant NY)
-
-# Fenêtre de trading Londres (heure NY, DST-aware).
-# 02h NY → 05h NY = session londonienne typique avant overlap NY.
-ARF_LONDON_HOUR_START_NY     = 2
-ARF_LONDON_HOUR_END_NY       = 5
-
-# Buffer pour valider la fausse cassure (= retour) et le placement du SL.
-# Exprimés en multiples d'ATR(14) → adaptatif à la volatilité.
-ARF_SL_BUFFER_ATR_PER_TICKER     = {"MES1": 1.20, "NQ1": 1.20, "YM1": 1.20}
-ARF_ENTRY_BUFFER_ATR_PER_TICKER  = {"MES1": 0.10, "NQ1": 0.10, "YM1": 0.10}
-
-# TP en multiple R:R (TP = entry ± rr * sl_dist)
-ARF_TP_RR_PER_TICKER         = {"MES1": 2.0, "NQ1": 2.0, "YM1": 2.0}
-
-# v3 : mode d'entrée
-#   "limit_level"   : ordre limit au niveau Asia_High/Low (v1/v2)
-#   "market_return" : entrée market au close de la barre de retour confirmée
-ARF_ENTRY_MODE               = "market_return"
-
-# v3 : TP en fraction du range vers l'opposé (mode market_return)
-#   target_pct=0.5 → TP = 50% retracement vers l'autre côté du range
-#   target_pct=1.0 → TP = côté opposé du range
-ARF_TP_RANGE_PCT             = 0.5
-
-# v4 : ATR percentile filter (skip si ATR trop faible ou trop fort)
-ARF_ATR_PCT_MIN              = 0.10   # skip si ATR < P10 (range trop calme)
-ARF_ATR_PCT_MAX              = 0.90   # skip si ATR > P90 (vol extrême)
-
-# Filtres de range pour qualité de setup.
-# - min_range_atr : range asiatique trop étroit = bruit, false breakouts triviaux
-# - max_range_atr : range asiatique trop large = news overnight, R:R défavorable
-ARF_MIN_RANGE_ATR_PER_TICKER = {"MES1": 1.0, "NQ1": 1.0, "YM1": 1.0}
-ARF_MAX_RANGE_ATR_PER_TICKER = {"MES1": 4.0, "NQ1": 4.0, "YM1": 4.0}
-
-# ATR period (sur barres 15m)
-ARF_ATR_PERIOD               = 14
-
-# Vie de l'ordre limit (en barres M15) — après ce délai, ordre annulé
-ARF_ORDER_TIMEOUT_BARS       = 6   # = 1h30 d'attente max pour fill
-
-# Durée max de hold (en barres M15) — fermeture forcée après ce délai
-ARF_MAX_HOLD_BARS            = 16  # = 4h max → couvre fin Londres + early NY
-
-# Max 1 trade par jour par actif (1 setup directionnel par session asiatique)
-ARF_MAX_TRADES_PER_DAY       = 1
-
-# Buffer plancher en ticks (au cas où ATR est très faible)
-ARF_SL_BUFFER_TICKS_FLOOR    = 2
-
-# Exclusion jours macro US (FOMC/CPI/NFP perturbent Londres)
-ARF_EXCLUDE_MACRO_DAYS       = True
-
-# ── v2 : filtres anti-trending + anti-whipsaw + confirmation forte ──
-# ADX max sur la barre courante (au-dessus = trending fort → skip)
-ARF_ADX_MAX                  = 25.0
-
-# Skip si DOUBLE cassure détectée dans la session (whipsaw → range mort)
-ARF_SKIP_DOUBLE_BREAKOUT     = True
-
-# Force du retour : la barre prev doit clôturer à AU MOINS ce multiple d'ATR
-# DANS le range (pour valider que le rejet de la cassure est franc)
-ARF_RETURN_CONFIRM_ATR       = 0.10
-
-# Tag de version
-ARF_STRATEGY_VERSION         = "arf-v4"
-
 # ==============================================================================
 # STRATÉGIE OPR_GOLD (évolution OPR v4)
 # ==============================================================================

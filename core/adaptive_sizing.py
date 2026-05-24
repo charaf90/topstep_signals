@@ -17,6 +17,8 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, Tuple
 
 from config import (
+    CHALLENGE_DAY_PROFIT_HARD_CAP_USD,
+    CHALLENGE_DAY_PROFIT_SOFT_CAP_USD,
     CHALLENGE_DD_GUARD_BUFFER,
     CHALLENGE_EXPECTED_TRADES_PER_DAY_FALLBACK,
     CHALLENGE_LOCKIN_START_USD,
@@ -110,6 +112,20 @@ def compute_factors(
         span = max(1.0, TOPSTEP_PROFIT_TARGET - CHALLENGE_LOCKIN_START_USD)
         lockin = max(0.25, (TOPSTEP_PROFIT_TARGET - cum_pnl) / span)
 
+    # Day-progress damping : amortit le risque quand la journée a déjà bien
+    # gagné — anticipe la règle de cohérence 50% (best_day ≤ $1500). Entre
+    # SOFT_CAP et HARD_CAP, interpolation linéaire 1.0 → 0.25. Au-delà du
+    # HARD_CAP, la borne 0.25 reste (le hard-stop "no new trade" est géré
+    # dans core/risk_portfolio.py via tp_gain_usd).
+    if rdp <= CHALLENGE_DAY_PROFIT_SOFT_CAP_USD:
+        day_progress = 1.0
+    elif rdp >= CHALLENGE_DAY_PROFIT_HARD_CAP_USD:
+        day_progress = 0.25
+    else:
+        span_dp = max(1.0, CHALLENGE_DAY_PROFIT_HARD_CAP_USD - CHALLENGE_DAY_PROFIT_SOFT_CAP_USD)
+        progress = (rdp - CHALLENGE_DAY_PROFIT_SOFT_CAP_USD) / span_dp
+        day_progress = max(0.25, 1.0 - 0.75 * progress)
+
     return {
         "cum_pnl": cum_pnl,
         "peak_pnl": peak_pnl,
@@ -125,6 +141,7 @@ def compute_factors(
         "n_per_day": n_per_day,
         "target_risk": target_risk,
         "lockin": lockin,
+        "day_progress": day_progress,
         "strategy": strategy,
     }
 
@@ -148,7 +165,11 @@ def adaptive_risk_usd(
     """
     f = compute_factors(rm_status, signal, today)
 
-    raw = min(f["target_risk"] * f["boost"], f["dd_cap"], f["daily_cap"]) * f["lockin"]
+    raw = (
+        min(f["target_risk"] * f["boost"], f["dd_cap"], f["daily_cap"])
+        * f["lockin"]
+        * f["day_progress"]
+    )
     risk = float(max(CHALLENGE_RISK_MIN_USD, min(CHALLENGE_RISK_MAX_USD, raw)))
 
     f["raw_risk"] = float(raw)

@@ -33,6 +33,8 @@ TICKER_PRIORITY: Dict[str, Dict[str, int]] = {
     "composite": {"NQ1": 1, "MES1": 2, "YM1": 3},
     "opr":       {"NQ1": 1, "YM1": 2, "MES1": 3},
     "fib":       {"NQ1": 1, "YM1": 2, "MES1": 3},
+    # fib-v4 OOS Phase 4 : NQ1 PF=6.47 > MES1 PF=6.01 > MGC1 PF=2.53
+    "fib-v4":    {"NQ1": 1, "MES1": 2, "MGC1": 3},
     # vpc-v4 OOS : NQ1 PF≈1.85 > MES1 PF≈1.40 (YM1 hors-périmètre)
     "vpc":       {"NQ1": 1, "MES1": 2},
     "VPC":       {"NQ1": 1, "MES1": 2},   # tolérance casse sur la clé strategy
@@ -43,6 +45,7 @@ TICKER_OOS_SCORE: Dict[str, Dict[str, float]] = {
     "composite": {"NQ1": 1.87, "MES1": 1.39, "YM1": 0.0},
     "opr":       {"NQ1": 6979.5, "YM1": 6835.0, "MES1": 1510.0},
     "fib":       {"NQ1": 18.67, "YM1": 7.11, "MES1": 4.51},
+    "fib-v4":    {"NQ1": 6.47, "MES1": 6.01, "MGC1": 2.53},
     "vpc":       {"NQ1": 1.85, "MES1": 1.40},
 }
 
