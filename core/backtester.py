@@ -23,29 +23,26 @@ Charts portfolio (réutilisables par toutes les stratégies) :
 
 import random
 from pathlib import Path
-from typing import Optional, Dict
 
-import numpy as np
 import pandas as pd
 
-from config import INSTRUMENTS
 from core import metrics as m
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Runner principal
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def run_for_ticker(
     strategy,
     df_15m: pd.DataFrame,
     ticker: str,
-    tf: Optional[dict] = None,
-    params: Optional[dict] = None,
+    tf: dict | None = None,
+    params: dict | None = None,
     topstep_guard: bool = True,
     plot: bool = False,
     n_sample_charts: int = 10,
-    output_dir: Optional[Path] = None,
+    output_dir: Path | None = None,
     verbose: bool = True,
 ) -> dict:
     """
@@ -73,14 +70,13 @@ def run_for_ticker(
         print(f"\n{'='*60}")
         print(f"  BACKTEST — {ticker}  [{strategy_id}]")
         print(f"{'='*60}")
-        print(f"  {len(df_15m):,} bougies "
-              f"[{df_15m.index.min()} → {df_15m.index.max()}]")
+        print(f"  {len(df_15m):,} bougies " f"[{df_15m.index.min()} → {df_15m.index.max()}]")
 
     df_trades = strategy.run_backtest(
         df_15m, ticker, tf=tf, params=params, topstep_guard=topstep_guard
     )
 
-    stats   = m.compute_stats(df_trades)
+    stats = m.compute_stats(df_trades)
     topstep = m.compute_topstep(df_trades, n_bootstrap=1000)
 
     if verbose:
@@ -97,17 +93,20 @@ def run_for_ticker(
 
     if plot and len(df_trades) > 0:
         _generate_sample_charts(
-            strategy, df_15m, ticker, df_trades,
+            strategy,
+            df_15m,
+            ticker,
+            df_trades,
             output_dir=output_dir,
             n=n_sample_charts,
             verbose=verbose,
         )
 
     return {
-        "df_trades":   df_trades,
-        "stats":       stats,
-        "topstep":     topstep,
-        "ticker":      ticker,
+        "df_trades": df_trades,
+        "stats": stats,
+        "topstep": topstep,
+        "ticker": ticker,
         "strategy_id": strategy_id,
     }
 
@@ -116,12 +115,13 @@ def run_for_ticker(
 # Charts sur N jours aléatoires
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _generate_sample_charts(
     strategy,
     df_15m: pd.DataFrame,
     ticker: str,
     df_trades: pd.DataFrame,
-    output_dir: Optional[Path],
+    output_dir: Path | None,
     n: int = 10,
     verbose: bool = True,
 ):
@@ -129,8 +129,11 @@ def _generate_sample_charts(
     if not hasattr(strategy, "plot_day"):
         return
 
-    filled = df_trades[df_trades["result"] != "NOT_FILLED"] \
-             if "result" in df_trades.columns else df_trades
+    filled = (
+        df_trades[df_trades["result"] != "NOT_FILLED"]
+        if "result" in df_trades.columns
+        else df_trades
+    )
     if len(filled) == 0:
         return
 
@@ -142,12 +145,11 @@ def _generate_sample_charts(
     chart_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
-        print(f"\n  ▸ Génération de {len(sample_dates)} chart(s) "
-              f"[{ticker}] → {chart_dir}")
+        print(f"\n  ▸ Génération de {len(sample_dates)} chart(s) " f"[{ticker}] → {chart_dir}")
 
     for date_str in sample_dates:
         day_trades = df_trades[df_trades["date"] == date_str].to_dict("records")
-        out_path   = str(chart_dir / f"{date_str}.png")
+        out_path = str(chart_dir / f"{date_str}.png")
         try:
             strategy.plot_day(df_15m, ticker, date_str, day_trades, out_path)
         except Exception as e:
@@ -162,6 +164,7 @@ def _generate_sample_charts(
 # Charts portfolio (mutualisés — utilisables par toutes les stratégies)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _filled(trades_df: pd.DataFrame) -> pd.DataFrame:
     if trades_df is None or len(trades_df) == 0:
         return pd.DataFrame()
@@ -173,8 +176,8 @@ def _filled(trades_df: pd.DataFrame) -> pd.DataFrame:
 def plot_equity_curve(
     trades_df: pd.DataFrame,
     output_path: str,
-    is_end_date: Optional[str] = "2025-09-30",
-    title: Optional[str] = None,
+    is_end_date: str | None = "2025-09-30",
+    title: str | None = None,
 ):
     """Equity cumulée portefeuille avec marquage IS/OOS, par ticker."""
     import matplotlib.pyplot as plt
@@ -186,22 +189,41 @@ def plot_equity_curve(
     df["cum_pnl"] = df["pnl"].cumsum()
 
     fig, ax = plt.subplots(figsize=(13, 6))
-    ax.plot(pd.to_datetime(df["date"]), df["cum_pnl"],
-            color="#26a69a", lw=1.6, label="Equity portfolio")
-    ax.fill_between(pd.to_datetime(df["date"]), 0, df["cum_pnl"],
-                    where=df["cum_pnl"] > 0, alpha=0.15, color="#26a69a")
-    ax.fill_between(pd.to_datetime(df["date"]), 0, df["cum_pnl"],
-                    where=df["cum_pnl"] <= 0, alpha=0.15, color="#ef5350")
+    ax.plot(
+        pd.to_datetime(df["date"]), df["cum_pnl"], color="#26a69a", lw=1.6, label="Equity portfolio"
+    )
+    ax.fill_between(
+        pd.to_datetime(df["date"]),
+        0,
+        df["cum_pnl"],
+        where=df["cum_pnl"] > 0,
+        alpha=0.15,
+        color="#26a69a",
+    )
+    ax.fill_between(
+        pd.to_datetime(df["date"]),
+        0,
+        df["cum_pnl"],
+        where=df["cum_pnl"] <= 0,
+        alpha=0.15,
+        color="#ef5350",
+    )
 
     if "ticker" in df.columns:
         for tk, grp in df.groupby("ticker"):
             grp = grp.sort_values("date")
-            ax.plot(pd.to_datetime(grp["date"]), grp["pnl"].cumsum(),
-                    lw=0.9, alpha=0.55, label=f"{tk}")
+            ax.plot(
+                pd.to_datetime(grp["date"]), grp["pnl"].cumsum(), lw=0.9, alpha=0.55, label=f"{tk}"
+            )
 
     if is_end_date:
-        ax.axvline(pd.to_datetime(is_end_date), color="#ffb74d", ls="--", lw=1,
-                   label=f"IS/OOS @ {is_end_date}")
+        ax.axvline(
+            pd.to_datetime(is_end_date),
+            color="#ffb74d",
+            ls="--",
+            lw=1,
+            label=f"IS/OOS @ {is_end_date}",
+        )
 
     ax.axhline(0, color="#787b86", lw=0.6)
     ax.set_title(title or "Equity curve cumulée", fontsize=12, fontweight="bold")
@@ -233,14 +255,15 @@ def plot_drawdown_underwater(trades_df: pd.DataFrame, output_path: str):
     dd = cum - peak
 
     fig, ax = plt.subplots(figsize=(13, 4.5))
-    ax.fill_between(pd.to_datetime(df["date"]), dd, 0,
-                    color="#ef5350", alpha=0.45, label="Drawdown")
+    ax.fill_between(
+        pd.to_datetime(df["date"]), dd, 0, color="#ef5350", alpha=0.45, label="Drawdown"
+    )
     ax.plot(pd.to_datetime(df["date"]), dd, color="#ef5350", lw=0.8)
-    ax.axhline(-2000, color="#ffb74d", ls="--", lw=1,
-               label="Trailing DD Topstep (-$2 000)")
+    ax.axhline(-2000, color="#ffb74d", ls="--", lw=1, label="Trailing DD Topstep (-$2 000)")
     ax.axhline(0, color="#787b86", lw=0.6)
-    ax.set_title(f"Drawdown underwater — DD max ${float(dd.min()):,.0f}",
-                 fontsize=12, fontweight="bold")
+    ax.set_title(
+        f"Drawdown underwater — DD max ${float(dd.min()):,.0f}", fontsize=12, fontweight="bold"
+    )
     ax.set_ylabel("DD ($)")
     ax.legend(loc="lower left", fontsize=8)
     ax.grid(alpha=0.25)
@@ -264,13 +287,11 @@ def plot_monthly_heatmap(trades_df: pd.DataFrame, output_path: str):
     if df.empty or "ticker" not in df.columns:
         return
     df["month"] = pd.to_datetime(df["date"]).dt.to_period("M").astype(str)
-    pivot = (df.groupby(["month", "ticker"])["pnl"].sum()
-             .unstack(fill_value=0.0).sort_index())
+    pivot = df.groupby(["month", "ticker"])["pnl"].sum().unstack(fill_value=0.0).sort_index()
 
     fig, ax = plt.subplots(figsize=(12, max(3.5, 0.5 * len(pivot))))
     vmax = max(abs(pivot.values.min()), abs(pivot.values.max()), 1.0)
-    im = ax.imshow(pivot.values, aspect="auto", cmap="RdYlGn",
-                   vmin=-vmax, vmax=vmax)
+    im = ax.imshow(pivot.values, aspect="auto", cmap="RdYlGn", vmin=-vmax, vmax=vmax)
     ax.set_xticks(range(len(pivot.columns)))
     ax.set_xticklabels(pivot.columns)
     ax.set_yticks(range(len(pivot.index)))
@@ -279,9 +300,15 @@ def plot_monthly_heatmap(trades_df: pd.DataFrame, output_path: str):
     for i in range(pivot.shape[0]):
         for j in range(pivot.shape[1]):
             v = pivot.values[i, j]
-            ax.text(j, i, f"{v:+.0f}", ha="center", va="center",
-                    color="black" if abs(v) < vmax * 0.4 else "white",
-                    fontsize=8)
+            ax.text(
+                j,
+                i,
+                f"{v:+.0f}",
+                ha="center",
+                va="center",
+                color="black" if abs(v) < vmax * 0.4 else "white",
+                fontsize=8,
+            )
 
     ax.set_title("P&L mensuel par actif ($)", fontsize=12, fontweight="bold")
     fig.colorbar(im, ax=ax, label="P&L net ($)")
@@ -294,12 +321,13 @@ def plot_monthly_heatmap(trades_df: pd.DataFrame, output_path: str):
     plt.close(fig)
 
 
-def plot_hourly_distribution(trades_df: pd.DataFrame, output_path: str,
-                              hour_col: str = "fill_time",
-                              tz_ny: bool = True):
+def plot_hourly_distribution(
+    trades_df: pd.DataFrame, output_path: str, hour_col: str = "fill_time", tz_ny: bool = True
+):
     """Distribution horaire des fills (en heure NY si tz_ny)."""
-    import matplotlib.pyplot as plt
     from zoneinfo import ZoneInfo
+
+    import matplotlib.pyplot as plt
 
     df = _filled(trades_df)
     if df.empty or hour_col not in df.columns:
@@ -322,8 +350,7 @@ def plot_hourly_distribution(trades_df: pd.DataFrame, output_path: str,
     ax.set_xlabel("Heure NY")
     ax.set_ylabel("Nombre de fills")
     ax.set_xticks(range(0, 24))
-    ax.set_title(f"Distribution horaire des fills — n={len(hours)}",
-                 fontsize=12, fontweight="bold")
+    ax.set_title(f"Distribution horaire des fills — n={len(hours)}", fontsize=12, fontweight="bold")
     ax.grid(alpha=0.25)
     fig.patch.set_facecolor("#13131f")
     ax.set_facecolor("#1a1a2e")
@@ -340,7 +367,7 @@ def plot_hourly_distribution(trades_df: pd.DataFrame, output_path: str,
 
 def plot_correlation_rolling(
     trades_df: pd.DataFrame,
-    ref_strategies_dfs: Dict[str, pd.DataFrame],
+    ref_strategies_dfs: dict[str, pd.DataFrame],
     output_path: str,
     window: int = 60,
 ):
@@ -367,8 +394,7 @@ def plot_correlation_rolling(
         if ref_daily.empty:
             continue
         ref_daily.index = pd.to_datetime(ref_daily.index)
-        joined = pd.concat([base.rename("a"), ref_daily.rename("b")], axis=1) \
-                   .fillna(0.0)
+        joined = pd.concat([base.rename("a"), ref_daily.rename("b")], axis=1).fillna(0.0)
         if len(joined) < window:
             continue
         roll = joined["a"].rolling(window).corr(joined["b"])
@@ -378,8 +404,7 @@ def plot_correlation_rolling(
     ax.axhline(0.5, color="#ffb74d", ls="--", lw=0.8, label="Seuil 0.5")
     ax.set_ylim(-1.05, 1.05)
     ax.set_ylabel("Corrélation Pearson")
-    ax.set_title(f"Corrélation rolling {window}j daily P&L",
-                 fontsize=12, fontweight="bold")
+    ax.set_title(f"Corrélation rolling {window}j daily P&L", fontsize=12, fontweight="bold")
     ax.legend(loc="lower left", fontsize=8)
     ax.grid(alpha=0.25)
     fig.patch.set_facecolor("#13131f")
@@ -398,9 +423,9 @@ def generate_portfolio_charts(
     trades_df: pd.DataFrame,
     strategy_id: str,
     output_dir: Path,
-    ref_strategies_dfs: Optional[Dict[str, pd.DataFrame]] = None,
-    is_end_date: Optional[str] = "2025-09-30",
-) -> Dict[str, str]:
+    ref_strategies_dfs: dict[str, pd.DataFrame] | None = None,
+    is_end_date: str | None = "2025-09-30",
+) -> dict[str, str]:
     """
     Génère les 4-5 charts portefeuille standard pour une stratégie.
 
@@ -411,8 +436,9 @@ def generate_portfolio_charts(
     paths = {}
 
     eq = output_dir / f"equity_curve_{strategy_id}.png"
-    plot_equity_curve(trades_df, str(eq), is_end_date=is_end_date,
-                      title=f"Equity curve — {strategy_id}")
+    plot_equity_curve(
+        trades_df, str(eq), is_end_date=is_end_date, title=f"Equity curve — {strategy_id}"
+    )
     paths["equity"] = str(eq)
 
     dd = output_dir / f"drawdown_underwater_{strategy_id}.png"

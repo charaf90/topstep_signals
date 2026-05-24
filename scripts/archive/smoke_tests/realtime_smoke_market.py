@@ -17,6 +17,7 @@ Usage :
     python -m scripts.realtime_smoke_market --duration 60 --symbol MNQ,MYM
     python -m scripts.realtime_smoke_market --contract-id CON.F.US.MNQ.M26
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,15 +26,14 @@ import os
 import sys
 import threading
 import time
-from collections import Counter, defaultdict
-from typing import Dict, List, Optional
+from collections import Counter
 
 from broker.projectx_client import ProjectXClient
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Credentials (identique au smoke User Hub)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _load_credentials() -> tuple:
     user = os.environ.get("PROJECTX_USERNAME")
@@ -63,6 +63,7 @@ def _load_credentials() -> tuple:
 # Smoke runner — raw SignalR sans passer par ProjectXRealtimeClient
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class MarketSmokeRunner:
     """
     Connexion SignalR brute au Market Hub avec collecte des payloads.
@@ -71,8 +72,14 @@ class MarketSmokeRunner:
     handler par event qui imprime le payload brut et le compte.
     """
 
-    def __init__(self, hub_url: str, token_provider, contract_ids: List[str],
-                 verbose: bool = True, max_print_per_kind: int = 20):
+    def __init__(
+        self,
+        hub_url: str,
+        token_provider,
+        contract_ids: list[str],
+        verbose: bool = True,
+        max_print_per_kind: int = 20,
+    ):
         self._hub_url = hub_url
         self._token_provider = token_provider
         self._contract_ids = contract_ids
@@ -86,7 +93,7 @@ class MarketSmokeRunner:
         # Compteurs
         self._counts: Counter = Counter()
         self._print_counts: Counter = Counter()
-        self._first_payload_per_kind: Dict[str, dict] = {}
+        self._first_payload_per_kind: dict[str, dict] = {}
         self._last_event_ts = time.monotonic()
         self._t0 = time.monotonic()
 
@@ -109,12 +116,14 @@ class MarketSmokeRunner:
                     "skip_negotiation": False,
                 },
             )
-            .with_automatic_reconnect({
-                "type": "raw",
-                "keep_alive_interval": 10,
-                "reconnect_interval": 5,
-                "max_attempts": 5,
-            })
+            .with_automatic_reconnect(
+                {
+                    "type": "raw",
+                    "keep_alive_interval": 10,
+                    "reconnect_interval": 5,
+                    "max_attempts": 5,
+                }
+            )
             .build()
         )
 
@@ -157,7 +166,9 @@ class MarketSmokeRunner:
     def _on_open(self, *_) -> None:
         try:
             self._connected.set()
-            print(f"  ✓ Connecté au Market Hub. Subscribe pour {len(self._contract_ids)} contract(s)...")
+            print(
+                f"  ✓ Connecté au Market Hub. Subscribe pour {len(self._contract_ids)} contract(s)..."
+            )
             with self._lock:
                 if self._connection is None:
                     return
@@ -170,11 +181,12 @@ class MarketSmokeRunner:
         except Exception as exc:
             print(f"  ERREUR _on_open : {exc}")
             import traceback
+
             traceback.print_exc()
 
     def _on_close(self, *_) -> None:
         self._connected.clear()
-        print(f"  ⚠ Déconnecté du Market Hub")
+        print("  ⚠ Déconnecté du Market Hub")
 
     def _on_error(self, err) -> None:
         print(f"  ✗ Erreur WS : {err}")
@@ -195,24 +207,26 @@ class MarketSmokeRunner:
                         "raw": args,
                     }
                     print(f"\n  ★ PREMIER {kind} reçu :")
-                    print(f"    type(args)={type(args).__name__}  "
-                          f"len={len(args) if hasattr(args, '__len__') else '?'}")
+                    print(
+                        f"    type(args)={type(args).__name__}  "
+                        f"len={len(args) if hasattr(args, '__len__') else '?'}"
+                    )
                     print(f"    raw={json.dumps(args, default=str, indent=2)[:2000]}")
                     print()
 
                 # Print throttlé : N premiers, puis sample 1/100
                 count = self._counts[kind]
-                should_print = (
-                    self._verbose
-                    and (count <= self._max_print or count % 100 == 0)
-                )
+                should_print = self._verbose and (count <= self._max_print or count % 100 == 0)
                 if should_print:
                     ts = time.strftime("%H:%M:%S")
-                    print(f"[{ts}] {kind:<14} #{count:<6} "
-                          f"raw={json.dumps(args, default=str)[:400]}")
+                    print(
+                        f"[{ts}] {kind:<14} #{count:<6} "
+                        f"raw={json.dumps(args, default=str)[:400]}"
+                    )
             except Exception as exc:
                 print(f"  ✗ Handler {kind} exception : {exc}")
                 import traceback
+
                 traceback.print_exc()
 
         return handler
@@ -222,24 +236,41 @@ class MarketSmokeRunner:
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Smoke test realtime ProjectX Market Hub (Phase C)"
     )
-    parser.add_argument("--duration", type=int, default=300,
-                        help="Durée d'écoute en secondes (défaut 300)")
-    parser.add_argument("--hub-url", type=str,
-                        default="https://rtc.topstepx.com/hubs/market",
-                        help="URL du Market Hub TopstepX")
-    parser.add_argument("--symbol", type=str, default="MNQ",
-                        help="Symbol(s) à souscrire, séparés par virgule (ex: MNQ,MYM)")
-    parser.add_argument("--contract-id", type=str, default=None,
-                        help="Contract ID explicite (bypass search). "
-                             "Ex: CON.F.US.MNQ.M26")
-    parser.add_argument("--max-print-per-kind", type=int, default=20,
-                        help="Nombre max d'events à imprimer par kind avant sampling")
-    parser.add_argument("--quiet", action="store_true",
-                        help="N'imprime que les premiers payloads + heartbeats")
+    parser.add_argument(
+        "--duration", type=int, default=300, help="Durée d'écoute en secondes (défaut 300)"
+    )
+    parser.add_argument(
+        "--hub-url",
+        type=str,
+        default="https://rtc.topstepx.com/hubs/market",
+        help="URL du Market Hub TopstepX",
+    )
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        default="MNQ",
+        help="Symbol(s) à souscrire, séparés par virgule (ex: MNQ,MYM)",
+    )
+    parser.add_argument(
+        "--contract-id",
+        type=str,
+        default=None,
+        help="Contract ID explicite (bypass search). " "Ex: CON.F.US.MNQ.M26",
+    )
+    parser.add_argument(
+        "--max-print-per-kind",
+        type=int,
+        default=20,
+        help="Nombre max d'events à imprimer par kind avant sampling",
+    )
+    parser.add_argument(
+        "--quiet", action="store_true", help="N'imprime que les premiers payloads + heartbeats"
+    )
     args = parser.parse_args()
 
     # ── 1. Login REST + résolution contract_ids ──────────────────────────
@@ -250,7 +281,7 @@ def main():
         sys.exit("ERREUR : login refusé")
     print(f"  ✓ JWT obtenu (premières 20 chars : {client.token[:20]}...)")
 
-    contract_ids: List[str] = []
+    contract_ids: list[str] = []
     if args.contract_id:
         contract_ids = [args.contract_id]
         print(f"  → contract_id explicite : {args.contract_id}")
@@ -301,21 +332,23 @@ def main():
                 last_heartbeat = now
                 h = runner.health()
                 elapsed = h["uptime_s"]
-                print(f"\n  [health t={elapsed:.0f}s] connected={h['connected']} "
-                      f"last_event_age={h['last_event_age_s']:.0f}s")
+                print(
+                    f"\n  [health t={elapsed:.0f}s] connected={h['connected']} "
+                    f"last_event_age={h['last_event_age_s']:.0f}s"
+                )
                 if h["counts"]:
                     for kind, n in sorted(h["counts"].items()):
                         rate = n / max(elapsed, 1.0)
                         print(f"           {kind:<14} count={n:<6} rate={rate:.1f}/s")
                 else:
-                    print(f"           ⚠ AUCUN EVENT reçu pour l'instant")
+                    print("           ⚠ AUCUN EVENT reçu pour l'instant")
                 print()
     except KeyboardInterrupt:
         print("\n  ⏸ Interrompu par l'utilisateur")
 
     # ── 4. Synthèse finale ──────────────────────────────────────────────
     print(f"\n{'─' * 78}")
-    print(f"\n→ Synthèse finale :")
+    print("\n→ Synthèse finale :")
     h = runner.health()
     elapsed = h["uptime_s"]
     print(f"  Durée totale     : {elapsed:.0f}s")
@@ -326,14 +359,14 @@ def main():
         rate = n / max(elapsed, 1.0)
         print(f"    {kind:<14} : {n} ({rate:.1f}/s)")
 
-    print(f"\n→ Premier payload de chaque kind (pour parser):")
+    print("\n→ Premier payload de chaque kind (pour parser):")
     for kind, info in runner._first_payload_per_kind.items():
         print(f"\n  ── {kind} ──")
         print(f"  args_type : {info['args_type']}")
         print(f"  args_len  : {info['args_len']}")
         print(f"  raw       : {json.dumps(info['raw'], default=str, indent=4)}")
 
-    print(f"\n→ Arrêt du runner...")
+    print("\n→ Arrêt du runner...")
     runner.stop()
     print("  ✓ Stop OK")
 

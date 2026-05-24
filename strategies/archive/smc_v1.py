@@ -39,8 +39,7 @@ Causalité (anti-leak) :
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
@@ -48,26 +47,32 @@ import numpy as np
 import pandas as pd
 
 from config import (
+    COMMISSION_RT_PER_CONTRACT,
     INSTRUMENTS,
+    MACRO_EVENT_DATES,
     RISK_PER_TRADE_USD,
     SLIPPAGE_TICKS_PER_TICKER,
-    COMMISSION_RT_PER_CONTRACT,
-    MACRO_EVENT_DATES,
+    SMC_ADX_PERIOD,
+    SMC_ATR_PERIOD,
+    SMC_EQH_EQL_THRESHOLD,
+    SMC_EXCLUDE_MACRO_DAYS,
+    SMC_FVG_MIN_GAP_TICKS,
+    SMC_MAX_CONTRACTS_PER_TRADE,
+    SMC_MAX_TRADES_PER_DAY,
+    SMC_PIVOT_LENGTH_EQHL,
+    SMC_PIVOT_LENGTH_INTERNAL,
+    SMC_PIVOT_LENGTH_SWING,
+    SMC_SESSION_END_NY,
+    SMC_SESSION_START_NY,
+    SMC_SL_BUFFER_TICKS,
     # SMC params
     SMC_STRATEGY_VERSION,
-    SMC_TICKERS,
-    SMC_PIVOT_LENGTH_INTERNAL, SMC_PIVOT_LENGTH_SWING, SMC_PIVOT_LENGTH_EQHL,
-    SMC_FVG_MIN_GAP_TICKS,
-    SMC_EQH_EQL_THRESHOLD,
     SMC_SWING_FILTER_LENGTH,
+    SMC_TICKERS,
+    SMC_TP_FALLBACK_BARS,
+    SMC_TP_FALLBACK_RR,
     SMC_ZONE_MAX_AGE_BARS,
-    SMC_SL_BUFFER_TICKS,
-    SMC_TP_FALLBACK_RR, SMC_TP_FALLBACK_BARS,
-    SMC_MAX_CONTRACTS_PER_TRADE, SMC_MAX_TRADES_PER_DAY,
-    SMC_SESSION_START_NY, SMC_SESSION_END_NY,
     SMC_ZONE_PRIORITY,
-    SMC_ATR_PERIOD, SMC_ADX_PERIOD,
-    SMC_EXCLUDE_MACRO_DAYS,
 )
 from core.risk_topstep import trade_allowed
 
@@ -75,9 +80,9 @@ from core.risk_topstep import trade_allowed
 np.random.seed(42)
 
 # ── Identité de la stratégie ─────────────────────────────────────────────────
-STRATEGY_ID   = SMC_STRATEGY_VERSION          # "smc-v1"
-TICKERS       = SMC_TICKERS                   # ["MES1", "NQ1", "YM1"]
-CSV_SUFFIX    = "_smc"
+STRATEGY_ID = SMC_STRATEGY_VERSION  # "smc-v1"
+TICKERS = SMC_TICKERS  # ["MES1", "NQ1", "YM1"]
+CSV_SUFFIX = "_smc"
 CSV_TIMEFRAME = "m15"
 
 _NY = ZoneInfo("America/New_York")
@@ -85,10 +90,10 @@ _NY = ZoneInfo("America/New_York")
 # ── Grille d'optimisation (4 dimensions, ≤ 81 combos) ───────────────────────
 # Bonferroni-friendly : 81 tests → p_seuil = 0.05/81 ≈ 0.0006
 PARAM_GRID = {
-    "swing_filter_length":  [5, 10, 20],
-    "zone_max_age_bars":    [48, 96, 192],
-    "eqh_eql_threshold":    [0.05, 0.10, 0.15],
-    "tp_fallback_rr":       [1.0, 1.5, 2.0],
+    "swing_filter_length": [5, 10, 20],
+    "zone_max_age_bars": [48, 96, 192],
+    "eqh_eql_threshold": [0.05, 0.10, 0.15],
+    "tp_fallback_rr": [1.0, 1.5, 2.0],
 }
 
 
@@ -96,11 +101,12 @@ PARAM_GRID = {
 # Helpers indicateurs (no look-ahead par construction — utilisent .shift(1))
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """ATR Wilder, sans look-ahead. Disponible à la clôture de chaque barre."""
     hl = df["high"] - df["low"]
     hc = (df["high"] - df["close"].shift(1)).abs()
-    lc = (df["low"]  - df["close"].shift(1)).abs()
+    lc = (df["low"] - df["close"].shift(1)).abs()
     tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
     return tr.ewm(alpha=1 / period, adjust=False).mean()
 
@@ -108,17 +114,20 @@ def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 def _compute_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """ADX(14) Wilder, sans look-ahead."""
     high, low, close = df["high"], df["low"], df["close"]
-    up   = high.diff()
+    up = high.diff()
     down = -low.diff()
-    plus_dm  = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=df.index)
+    plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=df.index)
     minus_dm = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=df.index)
-    tr = pd.concat([
-        high - low,
-        (high - close.shift(1)).abs(),
-        (low  - close.shift(1)).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     atr = tr.ewm(alpha=1 / period, adjust=False).mean()
-    plus_di  = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean()  / atr
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
     minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     return dx.ewm(alpha=1 / period, adjust=False).mean()
@@ -128,11 +137,12 @@ def _compute_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
 # Pivots (LuxAlgo style) — confirmation différée
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _find_pivots(
     series: np.ndarray,
     length: int,
     kind: str = "high",
-) -> List[int]:
+) -> list[int]:
     """
     Retourne les index des pivots confirmés (un pivot à l'index `i` requiert
     `length` barres droites supérieures/inférieures de chaque côté).
@@ -144,7 +154,7 @@ def _find_pivots(
     après vérification que `current_bar >= pivot_idx + length`.
     """
     n = len(series)
-    pivots: List[int] = []
+    pivots: list[int] = []
     if n < 2 * length + 1:
         return pivots
 
@@ -167,6 +177,7 @@ def _find_pivots(
 # Structure de zone
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 @dataclass
 class ZoneCandidate:
     """
@@ -185,13 +196,14 @@ class ZoneCandidate:
     Cette convention élimine le look-ahead intra-barre : un ordre ne peut être
     fillé qu'à partir de la barre suivante celle de la confirmation.
     """
-    zone_type: str           # "OB_internal" | "OB_swing" | "FVG" | "EQH" | "EQL"
-    direction: str           # "long" | "short"
-    top: float               # bord haut de la zone
-    bottom: float            # bord bas de la zone
-    created_at_bar: int      # index de formation (clôture barre)
-    available_from: int      # première barre où ordre limit fillable
-    invalidated_at: Optional[int] = None  # index d'invalidation (close au-delà)
+
+    zone_type: str  # "OB_internal" | "OB_swing" | "FVG" | "EQH" | "EQL"
+    direction: str  # "long" | "short"
+    top: float  # bord haut de la zone
+    bottom: float  # bord bas de la zone
+    created_at_bar: int  # index de formation (clôture barre)
+    available_from: int  # première barre où ordre limit fillable
+    invalidated_at: int | None = None  # index d'invalidation (close au-delà)
 
 
 def _detect_zones_causal(
@@ -204,7 +216,7 @@ def _detect_zones_causal(
     fvg_min_gap_ticks: int,
     tick_size: float,
     atr_series: pd.Series,
-) -> List[ZoneCandidate]:
+) -> list[ZoneCandidate]:
     """
     Détecte toutes les zones SMC disponibles à `current_bar` (incluse).
 
@@ -213,7 +225,7 @@ def _detect_zones_causal(
 
     Returns: liste de ZoneCandidate triée par `available_from` croissant.
     """
-    zones: List[ZoneCandidate] = []
+    zones: list[ZoneCandidate] = []
     # df_past : tout ce qui est disponible jusqu'à current_bar inclus.
     # Pour les pivots, on n'utilise que les indices ≤ current_bar - length.
     df_past = df.iloc[: current_bar + 1]
@@ -222,13 +234,13 @@ def _detect_zones_causal(
         return zones
 
     highs = df_past["high"].values
-    lows  = df_past["low"].values
+    lows = df_past["low"].values
     opens = df_past["open"].values
     closes = df_past["close"].values
 
     # ── OB_internal (pivots length=5) ────────────────────────────────────────
     p_internal_highs = _find_pivots(highs, pivot_length_internal, "high")
-    p_internal_lows  = _find_pivots(lows,  pivot_length_internal, "low")
+    p_internal_lows = _find_pivots(lows, pivot_length_internal, "low")
 
     # OB bearish (top après pivot high) : zone = dernière bougie haussière avant pivot
     for p_idx in p_internal_highs:
@@ -238,16 +250,18 @@ def _detect_zones_causal(
             if k < 0:
                 break
             if closes[k] > opens[k]:  # bullish candle → OB bearish reversal
-                zone_top    = max(opens[k], closes[k])
+                zone_top = max(opens[k], closes[k])
                 zone_bottom = min(opens[k], closes[k])
-                zones.append(ZoneCandidate(
-                    zone_type="OB_internal",
-                    direction="short",
-                    top=float(zone_top),
-                    bottom=float(zone_bottom),
-                    created_at_bar=k,
-                    available_from=p_idx + pivot_length_internal + 1,
-                ))
+                zones.append(
+                    ZoneCandidate(
+                        zone_type="OB_internal",
+                        direction="short",
+                        top=float(zone_top),
+                        bottom=float(zone_bottom),
+                        created_at_bar=k,
+                        available_from=p_idx + pivot_length_internal + 1,
+                    )
+                )
                 break
 
     # OB bullish (bottom après pivot low)
@@ -256,37 +270,41 @@ def _detect_zones_causal(
             if k < 0:
                 break
             if closes[k] < opens[k]:  # bearish candle → OB bullish reversal
-                zone_top    = max(opens[k], closes[k])
+                zone_top = max(opens[k], closes[k])
                 zone_bottom = min(opens[k], closes[k])
-                zones.append(ZoneCandidate(
-                    zone_type="OB_internal",
-                    direction="long",
-                    top=float(zone_top),
-                    bottom=float(zone_bottom),
-                    created_at_bar=k,
-                    available_from=p_idx + pivot_length_internal + 1,
-                ))
+                zones.append(
+                    ZoneCandidate(
+                        zone_type="OB_internal",
+                        direction="long",
+                        top=float(zone_top),
+                        bottom=float(zone_bottom),
+                        created_at_bar=k,
+                        available_from=p_idx + pivot_length_internal + 1,
+                    )
+                )
                 break
 
     # ── OB_swing (pivots length=50) ──────────────────────────────────────────
     p_swing_highs = _find_pivots(highs, pivot_length_swing, "high")
-    p_swing_lows  = _find_pivots(lows,  pivot_length_swing, "low")
+    p_swing_lows = _find_pivots(lows, pivot_length_swing, "low")
 
     for p_idx in p_swing_highs:
         for k in range(p_idx - 1, max(p_idx - pivot_length_swing - 1, -1), -1):
             if k < 0:
                 break
             if closes[k] > opens[k]:
-                zone_top    = max(opens[k], closes[k])
+                zone_top = max(opens[k], closes[k])
                 zone_bottom = min(opens[k], closes[k])
-                zones.append(ZoneCandidate(
-                    zone_type="OB_swing",
-                    direction="short",
-                    top=float(zone_top),
-                    bottom=float(zone_bottom),
-                    created_at_bar=k,
-                    available_from=p_idx + pivot_length_swing + 1,
-                ))
+                zones.append(
+                    ZoneCandidate(
+                        zone_type="OB_swing",
+                        direction="short",
+                        top=float(zone_top),
+                        bottom=float(zone_bottom),
+                        created_at_bar=k,
+                        available_from=p_idx + pivot_length_swing + 1,
+                    )
+                )
                 break
 
     for p_idx in p_swing_lows:
@@ -294,16 +312,18 @@ def _detect_zones_causal(
             if k < 0:
                 break
             if closes[k] < opens[k]:
-                zone_top    = max(opens[k], closes[k])
+                zone_top = max(opens[k], closes[k])
                 zone_bottom = min(opens[k], closes[k])
-                zones.append(ZoneCandidate(
-                    zone_type="OB_swing",
-                    direction="long",
-                    top=float(zone_top),
-                    bottom=float(zone_bottom),
-                    created_at_bar=k,
-                    available_from=p_idx + pivot_length_swing + 1,
-                ))
+                zones.append(
+                    ZoneCandidate(
+                        zone_type="OB_swing",
+                        direction="long",
+                        top=float(zone_top),
+                        bottom=float(zone_bottom),
+                        created_at_bar=k,
+                        available_from=p_idx + pivot_length_swing + 1,
+                    )
+                )
                 break
 
     # ── FVG (Fair Value Gap, 3 bougies) ──────────────────────────────────────
@@ -314,80 +334,96 @@ def _detect_zones_causal(
     for i in range(2, n):
         # bullish FVG
         if lows[i] - highs[i - 2] >= min_gap:
-            zones.append(ZoneCandidate(
-                zone_type="FVG",
-                direction="long",
-                top=float(lows[i]),
-                bottom=float(highs[i - 2]),
-                created_at_bar=i,
-                available_from=i + 1,   # ordre limit placé à clôture i, fillable à i+1
-            ))
+            zones.append(
+                ZoneCandidate(
+                    zone_type="FVG",
+                    direction="long",
+                    top=float(lows[i]),
+                    bottom=float(highs[i - 2]),
+                    created_at_bar=i,
+                    available_from=i + 1,  # ordre limit placé à clôture i, fillable à i+1
+                )
+            )
         # bearish FVG
         if lows[i - 2] - highs[i] >= min_gap:
-            zones.append(ZoneCandidate(
-                zone_type="FVG",
-                direction="short",
-                top=float(lows[i - 2]),
-                bottom=float(highs[i]),
-                created_at_bar=i,
-                available_from=i + 1,
-            ))
+            zones.append(
+                ZoneCandidate(
+                    zone_type="FVG",
+                    direction="short",
+                    top=float(lows[i - 2]),
+                    bottom=float(highs[i]),
+                    created_at_bar=i,
+                    available_from=i + 1,
+                )
+            )
 
     # ── EQH / EQL (length=3) ─────────────────────────────────────────────────
     # On cherche 2 pivots high consécutifs (resp. low) quasi égaux.
     p_eqhl_highs = _find_pivots(highs, pivot_length_eqhl, "high")
-    p_eqhl_lows  = _find_pivots(lows,  pivot_length_eqhl, "low")
+    p_eqhl_lows = _find_pivots(lows, pivot_length_eqhl, "low")
 
     # EQH bearish : 2 derniers pivots high consécutifs |h2 - h1| ≤ thr × ATR
     for idx in range(1, len(p_eqhl_highs)):
         i1, i2 = p_eqhl_highs[idx - 1], p_eqhl_highs[idx]
         h1, h2 = highs[i1], highs[i2]
-        atr_ref = atr_series.iloc[i2] if i2 < len(atr_series) and pd.notna(atr_series.iloc[i2]) else np.nan
+        atr_ref = (
+            atr_series.iloc[i2]
+            if i2 < len(atr_series) and pd.notna(atr_series.iloc[i2])
+            else np.nan
+        )
         if not np.isfinite(atr_ref) or atr_ref <= 0:
             continue
         if abs(h2 - h1) <= eqh_eql_threshold * atr_ref:
-            zone_top    = max(h1, h2)
+            zone_top = max(h1, h2)
             zone_bottom = min(h1, h2)
             # petit buffer en bas pour épaisseur de zone (sinon zone trop fine)
             buffer = 0.05 * atr_ref
-            zones.append(ZoneCandidate(
-                zone_type="EQH",
-                direction="short",
-                top=float(zone_top + buffer),
-                bottom=float(zone_bottom),
-                created_at_bar=i2,
-                available_from=i2 + pivot_length_eqhl + 1,
-            ))
+            zones.append(
+                ZoneCandidate(
+                    zone_type="EQH",
+                    direction="short",
+                    top=float(zone_top + buffer),
+                    bottom=float(zone_bottom),
+                    created_at_bar=i2,
+                    available_from=i2 + pivot_length_eqhl + 1,
+                )
+            )
 
     # EQL bullish
     for idx in range(1, len(p_eqhl_lows)):
         i1, i2 = p_eqhl_lows[idx - 1], p_eqhl_lows[idx]
         l1, l2 = lows[i1], lows[i2]
-        atr_ref = atr_series.iloc[i2] if i2 < len(atr_series) and pd.notna(atr_series.iloc[i2]) else np.nan
+        atr_ref = (
+            atr_series.iloc[i2]
+            if i2 < len(atr_series) and pd.notna(atr_series.iloc[i2])
+            else np.nan
+        )
         if not np.isfinite(atr_ref) or atr_ref <= 0:
             continue
         if abs(l2 - l1) <= eqh_eql_threshold * atr_ref:
-            zone_top    = max(l1, l2)
+            zone_top = max(l1, l2)
             zone_bottom = min(l1, l2)
             buffer = 0.05 * atr_ref
-            zones.append(ZoneCandidate(
-                zone_type="EQL",
-                direction="long",
-                top=float(zone_top),
-                bottom=float(zone_bottom - buffer),
-                created_at_bar=i2,
-                available_from=i2 + pivot_length_eqhl + 1,
-            ))
+            zones.append(
+                ZoneCandidate(
+                    zone_type="EQL",
+                    direction="long",
+                    top=float(zone_top),
+                    bottom=float(zone_bottom - buffer),
+                    created_at_bar=i2,
+                    available_from=i2 + pivot_length_eqhl + 1,
+                )
+            )
 
     return zones
 
 
 def _filter_active_zones(
-    zones: List[ZoneCandidate],
+    zones: list[ZoneCandidate],
     df: pd.DataFrame,
     current_bar: int,
     zone_max_age_bars: int,
-) -> List[ZoneCandidate]:
+) -> list[ZoneCandidate]:
     """
     Retourne les zones encore actives à `current_bar` :
       - available_from ≤ current_bar (latence respectée)
@@ -399,7 +435,7 @@ def _filter_active_zones(
     La barre `current_bar` n'est pas encore clôturée à l'instant du fill
     intra-barre.
     """
-    active: List[ZoneCandidate] = []
+    active: list[ZoneCandidate] = []
     closes = df["close"].values
 
     for z in zones:
@@ -435,11 +471,12 @@ def _filter_active_zones(
 # Premium / Discount filter
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _last_confirmed_swing_range(
     df: pd.DataFrame,
     current_bar: int,
     pivot_length: int,
-) -> Optional[Tuple[float, float]]:
+) -> tuple[float, float] | None:
     """
     Retourne (swing_low, swing_high) du dernier swing range CONFIRMÉ
     (les deux pivots ont leur confirmation < current_bar : pivot_idx + length ≤ current_bar).
@@ -450,14 +487,14 @@ def _last_confirmed_swing_range(
     if len(df_past) < 2 * pivot_length + 2:
         return None
     highs = df_past["high"].values
-    lows  = df_past["low"].values
+    lows = df_past["low"].values
     # Pivots confirmés : on récupère ceux dont l'index ≤ current_bar - pivot_length
     max_allowed_idx = current_bar - pivot_length
     if max_allowed_idx < pivot_length:
         return None
 
     p_highs = [p for p in _find_pivots(highs[: max_allowed_idx + 1], pivot_length, "high")]
-    p_lows  = [p for p in _find_pivots(lows[:  max_allowed_idx + 1], pivot_length, "low")]
+    p_lows = [p for p in _find_pivots(lows[: max_allowed_idx + 1], pivot_length, "low")]
     if not p_highs or not p_lows:
         return None
 
@@ -465,7 +502,7 @@ def _last_confirmed_swing_range(
     last_h_idx = p_highs[-1]
     last_l_idx = p_lows[-1]
     swing_high = float(highs[last_h_idx])
-    swing_low  = float(lows[last_l_idx])
+    swing_low = float(lows[last_l_idx])
     if swing_high <= swing_low:
         return None
     return swing_low, swing_high
@@ -486,13 +523,14 @@ def _last_confirmed_swing_range(
 # strictement au-dessus de l'entry. Pour un SHORT, le dernier swing low en
 # dessous. Si non trouvé → fallback R/R fixe.
 
+
 def _last_confirmed_swing_target_before_fill(
     df: pd.DataFrame,
     fill_bar: int,
     direction: str,
     entry: float,
     swing_filter_length: int,
-) -> Optional[float]:
+) -> float | None:
     """
     Retourne le dernier swing HH (long) / LL (short) CONFIRMÉ strictement
     avant `fill_bar`, et dont le niveau est dans la direction du trade
@@ -504,7 +542,7 @@ def _last_confirmed_swing_target_before_fill(
         return None
 
     highs = df["high"].values
-    lows  = df["low"].values
+    lows = df["low"].values
 
     # On scanne uniquement les indices ≤ fill_bar - swing_filter_length
     max_allowed = fill_bar - swing_filter_length
@@ -532,11 +570,12 @@ def _last_confirmed_swing_target_before_fill(
 # Backtest principal
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def run_backtest(
     df_15m: pd.DataFrame,
     ticker: str,
     tf=None,
-    params: Optional[dict] = None,
+    params: dict | None = None,
     topstep_guard: bool = True,
 ) -> pd.DataFrame:
     """
@@ -552,29 +591,29 @@ def run_backtest(
     """
     p = params or {}
     swing_filter_length = int(p.get("swing_filter_length", SMC_SWING_FILTER_LENGTH))
-    zone_max_age_bars   = int(p.get("zone_max_age_bars",   SMC_ZONE_MAX_AGE_BARS))
-    eqh_eql_threshold   = float(p.get("eqh_eql_threshold", SMC_EQH_EQL_THRESHOLD))
-    tp_fallback_rr      = float(p.get("tp_fallback_rr",    SMC_TP_FALLBACK_RR))
-    tp_fallback_bars    = int(p.get("tp_fallback_bars",    SMC_TP_FALLBACK_BARS))
+    zone_max_age_bars = int(p.get("zone_max_age_bars", SMC_ZONE_MAX_AGE_BARS))
+    eqh_eql_threshold = float(p.get("eqh_eql_threshold", SMC_EQH_EQL_THRESHOLD))
+    tp_fallback_rr = float(p.get("tp_fallback_rr", SMC_TP_FALLBACK_RR))
+    tp_fallback_bars = int(p.get("tp_fallback_bars", SMC_TP_FALLBACK_BARS))
 
-    instr      = INSTRUMENTS[ticker]
-    tick_size  = instr["tick_size"]
-    pt_value   = instr["dollar_per_point"]
+    instr = INSTRUMENTS[ticker]
+    tick_size = instr["tick_size"]
+    pt_value = instr["dollar_per_point"]
     slip_ticks = SLIPPAGE_TICKS_PER_TICKER.get(ticker, 1)
-    slip_px    = slip_ticks * tick_size
-    sl_buffer  = SMC_SL_BUFFER_TICKS * tick_size
+    slip_px = slip_ticks * tick_size
+    sl_buffer = SMC_SL_BUFFER_TICKS * tick_size
 
     # Préparation indicateurs (sans look-ahead)
     df = df_15m.copy()
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC")
-    df["atr"]     = _compute_atr(df, SMC_ATR_PERIOD)
-    df["adx"]     = _compute_adx(df, SMC_ADX_PERIOD)
+    df["atr"] = _compute_atr(df, SMC_ATR_PERIOD)
+    df["adx"] = _compute_adx(df, SMC_ADX_PERIOD)
     df["atr_pct"] = df["atr"] / df["close"] * 100.0
     df["atr_pct_rank"] = df["atr"].rolling(window=20 * 24, min_periods=50).rank(pct=True)
 
-    trades: List[Dict] = []
-    daily_count: Dict[str, int] = {}
+    trades: list[dict] = []
+    daily_count: dict[str, int] = {}
 
     # Pré-détection des zones sur toute la série pour éviter recomputation
     # par barre — calcul O(N) avec accumulation, mais on filtre causalement
@@ -600,17 +639,17 @@ def run_backtest(
     warmup = max(SMC_PIVOT_LENGTH_SWING + 10, SMC_ATR_PERIOD + 10, 50)
 
     for i in range(warmup, len(df)):
-        bar  = df.iloc[i]
+        bar = df.iloc[i]
         prev = df.iloc[i - 1]
 
         # Filtre temporel NY (DST-aware)
         ts_ny = df.index[i].tz_convert(_NY)
         h_start, m_start = SMC_SESSION_START_NY
-        h_end,   m_end   = SMC_SESSION_END_NY
+        h_end, m_end = SMC_SESSION_END_NY
         # Comparaison par minutes pour gérer 9h30 correctement
-        ts_min  = ts_ny.hour * 60 + ts_ny.minute
+        ts_min = ts_ny.hour * 60 + ts_ny.minute
         start_min = h_start * 60 + m_start
-        end_min   = h_end   * 60 + m_end
+        end_min = h_end * 60 + m_end
         if not (start_min <= ts_min < end_min):
             continue
         if ts_ny.weekday() >= 5:
@@ -657,10 +696,10 @@ def run_backtest(
         # quand low_bar <= top. Slippage worst-case si gap d'ouverture.
         # Pour SHORT : zone bearish, on entre LIMIT au bottom quand high_bar >= bottom.
         # On respecte la priorité multi-zone.
-        candidates: List[Dict] = []
+        candidates: list[dict] = []
         bar_open = bar["open"]
         bar_high = bar["high"]
-        bar_low  = bar["low"]
+        bar_low = bar["low"]
 
         for z in active_zones:
             # Pas de fill rétroactif : la zone doit être "atteinte" à la barre i,
@@ -726,8 +765,8 @@ def run_backtest(
         priority_map = {t: idx for idx, t in enumerate(SMC_ZONE_PRIORITY)}
         candidates.sort(key=lambda c: priority_map.get(c["zone"].zone_type, 99))
         chosen = candidates[0]
-        z      = chosen["zone"]
-        entry  = chosen["fill_px"]
+        z = chosen["zone"]
+        entry = chosen["fill_px"]
         direction = z.direction
 
         # ── SL / TP ───────────────────────────────────────────────────────
@@ -793,21 +832,19 @@ def run_backtest(
         # ── Simulation exit (fill confirmé à la barre i) ─────────────────
         # Vérifier si SL/TP touché DANS la barre i (rare, mais possible)
         fill_time = df.index[i]
-        result    = None
-        exit_px   = None
+        result = None
+        exit_px = None
         exit_time = None
 
         # SL/TP même barre = SL prioritaire
         if direction == "long":
-            sl_hit_now = (bar_low <= sl)
-            tp_hit_now = (bar_high >= tp)
+            sl_hit_now = bar_low <= sl
+            tp_hit_now = bar_high >= tp
         else:
-            sl_hit_now = (bar_high >= sl)
-            tp_hit_now = (bar_low  <= tp)
+            sl_hit_now = bar_high >= sl
+            tp_hit_now = bar_low <= tp
 
-        if sl_hit_now and tp_hit_now:
-            result, exit_px, exit_time = "SL", sl, df.index[i]
-        elif sl_hit_now:
+        if sl_hit_now and tp_hit_now or sl_hit_now:
             result, exit_px, exit_time = "SL", sl, df.index[i]
         elif tp_hit_now:
             result, exit_px, exit_time = "TP", tp, df.index[i]
@@ -818,11 +855,11 @@ def run_backtest(
             for k in range(i + 1, min(i + 1 + max_hold, len(df))):
                 fb = df.iloc[k]
                 if direction == "long":
-                    sl_hit = fb["low"]  <= sl
+                    sl_hit = fb["low"] <= sl
                     tp_hit = fb["high"] >= tp
                 else:
                     sl_hit = fb["high"] >= sl
-                    tp_hit = fb["low"]  <= tp
+                    tp_hit = fb["low"] <= tp
                 if sl_hit and tp_hit:
                     result, exit_px, exit_time = "SL", sl, df.index[k]
                     found = True
@@ -838,17 +875,17 @@ def run_backtest(
             if not found:
                 # Time-out → close à la dernière barre du hold
                 last_k = min(i + max_hold, len(df) - 1)
-                result    = "TE"
-                exit_px   = float(df.iloc[last_k]["close"])
+                result = "TE"
+                exit_px = float(df.iloc[last_k]["close"])
                 exit_time = df.index[last_k]
 
         # ── P&L ───────────────────────────────────────────────────────────
-        raw_pnl   = (exit_px - entry) * (1 if direction == "long" else -1)
+        raw_pnl = (exit_px - entry) * (1 if direction == "long" else -1)
         pnl_gross = raw_pnl * n_ct * pt_value
         # Slippage déjà appliqué à l'entrée. On applique le slippage à la sortie.
-        slip_cost = slip_px * n_ct * pt_value   # uniquement sortie ici (entrée déjà dans entry)
+        slip_cost = slip_px * n_ct * pt_value  # uniquement sortie ici (entrée déjà dans entry)
         comm_cost = COMMISSION_RT_PER_CONTRACT * n_ct
-        pnl       = pnl_gross - slip_cost - comm_cost
+        pnl = pnl_gross - slip_cost - comm_cost
 
         # ── Tagging contextuel (causalité OK : tout à i ou avant) ────────
         zone_age = i - z.created_at_bar
@@ -856,7 +893,9 @@ def run_backtest(
         adx_prev = df["adx"].iloc[i - 1] if pd.notna(df["adx"].iloc[i - 1]) else np.nan
         atr_pct_prev = df["atr_pct"].iloc[i - 1] if pd.notna(df["atr_pct"].iloc[i - 1]) else np.nan
 
-        zone_width_atr = (z.top - z.bottom) / atr_prev if np.isfinite(atr_prev) and atr_prev > 0 else np.nan
+        zone_width_atr = (
+            (z.top - z.bottom) / atr_prev if np.isfinite(atr_prev) and atr_prev > 0 else np.nan
+        )
         distance_to_swing_mid_pct = ((entry - mid) / mid * 100.0) if mid > 0 else np.nan
 
         # prior BOS : break of last confirmed swing high/low (length=swing_filter_length)
@@ -877,38 +916,48 @@ def run_backtest(
         else:
             regime = "neutral"
 
-        trades.append({
-            # ── Schéma standard (obligatoire) ──
-            "date":         date_str,
-            "dir":          direction,
-            "entry":        round(float(entry), 4),
-            "sl":           round(float(sl), 4),
-            "tp":           round(float(tp), 4),
-            "sl_dist":      round(float(sl_dist), 4),
-            "tp_dist":      round(float(tp_dist), 4),
-            "rr":           round(float(rr), 2),
-            "n_ct":         int(n_ct),
-            "result":       result,
-            "pnl":          round(float(pnl), 2),
-            "fill_time":    fill_time,
-            "exit_time":    exit_time,
-            "exit":         round(float(exit_px), 4),
-            "regime":       regime,
-            # ── Must-have @quant catalog (figées à fill) ──
-            "zone_type":    z.zone_type,
-            "zone_age_bars": int(zone_age),
-            "zone_width_atr": round(float(zone_width_atr), 4) if np.isfinite(zone_width_atr) else None,
-            # ── Tagging contextuel (causal à fill, utile pour @quant discover) ──
-            "distance_to_swing_mid_pct": round(float(distance_to_swing_mid_pct), 4) if np.isfinite(distance_to_swing_mid_pct) else None,
-            "prior_BOS_within_50_bars": bool(prior_BOS),
-            "hour_NY":      int(ts_ny.hour),
-            "adx_at_entry": round(float(adx_prev), 2) if np.isfinite(adx_prev) else None,
-            "atr_pct_at_entry": round(float(atr_pct_prev), 4) if np.isfinite(atr_pct_prev) else None,
-            "tp_type":      tp_type,
-            "is_macro_day": bool(is_macro),
-            # ── Colonne optionnelle ──
-            "pnl_gross":    round(float(pnl_gross), 2),
-        })
+        trades.append(
+            {
+                # ── Schéma standard (obligatoire) ──
+                "date": date_str,
+                "dir": direction,
+                "entry": round(float(entry), 4),
+                "sl": round(float(sl), 4),
+                "tp": round(float(tp), 4),
+                "sl_dist": round(float(sl_dist), 4),
+                "tp_dist": round(float(tp_dist), 4),
+                "rr": round(float(rr), 2),
+                "n_ct": int(n_ct),
+                "result": result,
+                "pnl": round(float(pnl), 2),
+                "fill_time": fill_time,
+                "exit_time": exit_time,
+                "exit": round(float(exit_px), 4),
+                "regime": regime,
+                # ── Must-have @quant catalog (figées à fill) ──
+                "zone_type": z.zone_type,
+                "zone_age_bars": int(zone_age),
+                "zone_width_atr": (
+                    round(float(zone_width_atr), 4) if np.isfinite(zone_width_atr) else None
+                ),
+                # ── Tagging contextuel (causal à fill, utile pour @quant discover) ──
+                "distance_to_swing_mid_pct": (
+                    round(float(distance_to_swing_mid_pct), 4)
+                    if np.isfinite(distance_to_swing_mid_pct)
+                    else None
+                ),
+                "prior_BOS_within_50_bars": bool(prior_BOS),
+                "hour_NY": int(ts_ny.hour),
+                "adx_at_entry": round(float(adx_prev), 2) if np.isfinite(adx_prev) else None,
+                "atr_pct_at_entry": (
+                    round(float(atr_pct_prev), 4) if np.isfinite(atr_pct_prev) else None
+                ),
+                "tp_type": tp_type,
+                "is_macro_day": bool(is_macro),
+                # ── Colonne optionnelle ──
+                "pnl_gross": round(float(pnl_gross), 2),
+            }
+        )
 
         # Compteurs
         daily_count[date_str] = daily_count.get(date_str, 0) + 1
@@ -920,11 +969,31 @@ def run_backtest(
             peak_pnl = cum_pnl
 
     cols = [
-        "date","dir","entry","sl","tp","sl_dist","tp_dist","rr","n_ct",
-        "result","pnl","fill_time","exit_time","exit","regime",
-        "zone_type","zone_age_bars","zone_width_atr",
-        "distance_to_swing_mid_pct","prior_BOS_within_50_bars","hour_NY",
-        "adx_at_entry","atr_pct_at_entry","tp_type","is_macro_day",
+        "date",
+        "dir",
+        "entry",
+        "sl",
+        "tp",
+        "sl_dist",
+        "tp_dist",
+        "rr",
+        "n_ct",
+        "result",
+        "pnl",
+        "fill_time",
+        "exit_time",
+        "exit",
+        "regime",
+        "zone_type",
+        "zone_age_bars",
+        "zone_width_atr",
+        "distance_to_swing_mid_pct",
+        "prior_BOS_within_50_bars",
+        "hour_NY",
+        "adx_at_entry",
+        "atr_pct_at_entry",
+        "tp_type",
+        "is_macro_day",
         "pnl_gross",
     ]
     if trades:
@@ -951,7 +1020,7 @@ def _prior_BOS_within(
     if n < 2 * pivot_length + window + 2:
         return False
     highs = df_past["high"].values
-    lows  = df_past["low"].values
+    lows = df_past["low"].values
     closes = df_past["close"].values
 
     max_pivot_idx = current_bar - pivot_length
@@ -985,6 +1054,7 @@ def _prior_BOS_within(
 # Visualisation par jour (pour --plot)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def plot_day(
     df_15m: pd.DataFrame,
     ticker: str,
@@ -998,7 +1068,7 @@ def plot_day(
     else:
         ts_idx = df_15m.index.tz_convert(_NY)
     mask = ts_idx.normalize() == pd.Timestamp(date_str, tz=_NY).normalize()
-    day  = df_15m[mask.values].copy()
+    day = df_15m[mask.values].copy()
     if day.empty:
         return
 
@@ -1011,9 +1081,14 @@ def plot_day(
     for i, (_, row) in enumerate(day.iterrows()):
         color = "#26a69a" if row["close"] >= row["open"] else "#ef5350"
         ax1.plot([i, i], [row["low"], row["high"]], color=color, lw=0.8)
-        ax1.bar(i, abs(row["close"] - row["open"]),
-                bottom=min(row["open"], row["close"]),
-                color=color, width=0.6, alpha=0.9)
+        ax1.bar(
+            i,
+            abs(row["close"] - row["open"]),
+            bottom=min(row["open"], row["close"]),
+            color=color,
+            width=0.6,
+            alpha=0.9,
+        )
 
     day_pnl = 0.0
     for trade in day_trades:
@@ -1028,10 +1103,10 @@ def plot_day(
         except (ValueError, KeyError):
             exit_idx = fill_idx
 
-        color  = "#00c853" if trade["dir"] == "long" else "#d50000"
-        marker = "^"       if trade["dir"] == "long" else "v"
+        color = "#00c853" if trade["dir"] == "long" else "#d50000"
+        marker = "^" if trade["dir"] == "long" else "v"
         ax1.scatter(fill_idx, trade["entry"], marker=marker, color=color, s=150, zorder=5)
-        ax1.scatter(exit_idx, trade["exit"],  marker="x", color="white", s=120, zorder=5)
+        ax1.scatter(exit_idx, trade["exit"], marker="x", color="white", s=120, zorder=5)
         ax1.axhline(trade["sl"], color="#ef5350", ls="--", lw=0.8, alpha=0.7)
         ax1.axhline(trade["tp"], color="#26a69a", ls="--", lw=0.8, alpha=0.7)
         day_pnl += trade.get("pnl", 0.0)
@@ -1042,7 +1117,8 @@ def plot_day(
 
     ax1.set_title(
         f"{ticker} — {date_str} (SMC v1)  |  P&L net jour : {day_pnl:+.0f} $",
-        fontsize=12, fontweight="bold",
+        fontsize=12,
+        fontweight="bold",
     )
     ax1.set_facecolor("#1a1a2e")
     ax2.set_facecolor("#1a1a2e")

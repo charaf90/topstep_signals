@@ -20,6 +20,7 @@ Usage :
     # Avec credentials explicites :
     PROJECTX_USERNAME=foo PROJECTX_API_KEY=bar python -m scripts.realtime_smoke
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,7 +28,6 @@ import json
 import os
 import sys
 import time
-from typing import List
 
 from broker.projectx_client import ProjectXClient
 from broker.projectx_realtime import ProjectXRealtimeClient, RealtimeEvent
@@ -36,7 +36,7 @@ from broker.projectx_realtime import ProjectXRealtimeClient, RealtimeEvent
 def _load_credentials() -> tuple:
     """Lit les credentials depuis ENV ou .env (fallback)."""
     user = os.environ.get("PROJECTX_USERNAME")
-    key  = os.environ.get("PROJECTX_API_KEY")
+    key = os.environ.get("PROJECTX_API_KEY")
     if user and key:
         return user, key
 
@@ -60,16 +60,22 @@ def _load_credentials() -> tuple:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Smoke test realtime ProjectX User Hub"
+    parser = argparse.ArgumentParser(description="Smoke test realtime ProjectX User Hub")
+    parser.add_argument(
+        "--duration", type=int, default=300, help="Durée d'écoute en secondes (défaut 300)"
     )
-    parser.add_argument("--duration", type=int, default=300,
-                        help="Durée d'écoute en secondes (défaut 300)")
-    parser.add_argument("--hub-url", type=str,
-                        default="https://rtc.topstepx.com/hubs/user",
-                        help="URL du hub (défaut User Hub TopstepX)")
-    parser.add_argument("--account-id", type=int, default=None,
-                        help="Account ID (sinon auto-détecté via get_accounts)")
+    parser.add_argument(
+        "--hub-url",
+        type=str,
+        default="https://rtc.topstepx.com/hubs/user",
+        help="URL du hub (défaut User Hub TopstepX)",
+    )
+    parser.add_argument(
+        "--account-id",
+        type=int,
+        default=None,
+        help="Account ID (sinon auto-détecté via get_accounts)",
+    )
     args = parser.parse_args()
 
     # ── 1. Login REST + récupération JWT et account_id ───────────────────
@@ -91,12 +97,12 @@ def main():
     # ── 2. Démarrer le client realtime ───────────────────────────────────
     print(f"→ Connexion SignalR à {args.hub_url}...")
     rt = ProjectXRealtimeClient(
-        account_id      = account_id,
-        token_provider  = lambda: client.token,
-        hub_url         = args.hub_url,
-        queue_maxsize   = 2048,
-        reconnect_delays= (0, 2, 5, 10),
-        max_silence_s   = 60.0,
+        account_id=account_id,
+        token_provider=lambda: client.token,
+        hub_url=args.hub_url,
+        queue_maxsize=2048,
+        reconnect_delays=(0, 2, 5, 10),
+        max_silence_s=60.0,
     )
     rt.start()
 
@@ -108,14 +114,16 @@ def main():
     total = 0
     try:
         while time.monotonic() - t0 < args.duration:
-            events: List[RealtimeEvent] = rt.drain_events(max_events=100)
+            events: list[RealtimeEvent] = rt.drain_events(max_events=100)
             for evt in events:
                 total += 1
-                print(f"[{evt.received_at.strftime('%H:%M:%S')}] "
-                      f"{evt.kind.upper():<10} "
-                      f"contract={evt.contract_id or '?':<25} "
-                      f"order_id={evt.order_id} tag={evt.custom_tag} "
-                      f"pnl={evt.pnl} size={evt.size} status={evt.status}")
+                print(
+                    f"[{evt.received_at.strftime('%H:%M:%S')}] "
+                    f"{evt.kind.upper():<10} "
+                    f"contract={evt.contract_id or '?':<25} "
+                    f"order_id={evt.order_id} tag={evt.custom_tag} "
+                    f"pnl={evt.pnl} size={evt.size} status={evt.status}"
+                )
                 # Payload brut pour analyse des champs disponibles (non tronqué)
                 print(f"           RAW: {json.dumps(evt.payload, default=str)}")
             time.sleep(1.0)
@@ -123,17 +131,19 @@ def main():
             # Heartbeat health toutes les 30s
             if int(time.monotonic() - t0) % 30 == 0 and not events:
                 h = rt.health()
-                print(f"  [health] connected={h['connected']} "
-                      f"queue={h['queue_depth']} "
-                      f"last_event_age={h['last_event_age_s']:.0f}s "
-                      f"disconnects={h['disconnect_count']}")
+                print(
+                    f"  [health] connected={h['connected']} "
+                    f"queue={h['queue_depth']} "
+                    f"last_event_age={h['last_event_age_s']:.0f}s "
+                    f"disconnects={h['disconnect_count']}"
+                )
     except KeyboardInterrupt:
         print("\n  ⏸ Interrompu par l'utilisateur")
 
     # ── 4. Stop propre ────────────────────────────────────────────────────
     print(f"{'─' * 78}")
     print(f"\n→ Total events reçus : {total}")
-    print(f"→ Arrêt du client realtime...")
+    print("→ Arrêt du client realtime...")
     rt.stop(timeout=5.0)
     print("  ✓ Stop OK")
 

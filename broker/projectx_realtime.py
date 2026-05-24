@@ -42,9 +42,9 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Callable, List, Optional
+from datetime import UTC, datetime
 
 _log = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ _log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Event normalisé pour transit cross-thread (producteur WS → consommateur runner)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class RealtimeEvent:
@@ -63,20 +64,22 @@ class RealtimeEvent:
     plausibles d'après la sémantique REST ProjectX — à valider via
     `scripts/realtime_smoke.py` qui imprime les payloads bruts.
     """
-    kind: str                                  # "order" | "position" | "trade" | "account"
-    received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    kind: str  # "order" | "position" | "trade" | "account"
+    received_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     payload: dict = field(default_factory=dict)
-    contract_id: Optional[str] = None
-    order_id: Optional[int] = None
-    custom_tag: Optional[str] = None
-    pnl: Optional[float] = None                # uniquement pour trades clôturants
-    size: Optional[int] = None                 # pour position events (0 = flat)
-    status: Optional[int] = None               # pour order events (code broker)
+    contract_id: str | None = None
+    order_id: int | None = None
+    custom_tag: str | None = None
+    pnl: float | None = None  # uniquement pour trades clôturants
+    size: int | None = None  # pour position events (0 = flat)
+    status: int | None = None  # pour order events (code broker)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Client realtime
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class ProjectXRealtimeClient:
     """
@@ -109,18 +112,18 @@ class ProjectXRealtimeClient:
         reconnect_delays: tuple = (0, 2, 5, 10, 30, 60, 120),
         max_silence_s: float = 180.0,
         force_reauth_s: float = 22 * 3600,
-        market_open_check: Optional[Callable[[], bool]] = None,
+        market_open_check: Callable[[], bool] | None = None,
     ):
         # Identité et providers
-        self._account_id     = int(account_id)
+        self._account_id = int(account_id)
         self._token_provider = token_provider
-        self._hub_url        = hub_url
-        self._market_open    = market_open_check or (lambda: True)
+        self._hub_url = hub_url
+        self._market_open = market_open_check or (lambda: True)
 
         # Politique reconnect/zombie
         self._reconnect_delays = tuple(reconnect_delays) or (5,)
-        self._max_silence_s    = float(max_silence_s)
-        self._force_reauth_s   = float(force_reauth_s)
+        self._max_silence_s = float(max_silence_s)
+        self._force_reauth_s = float(force_reauth_s)
 
         # Queue d'events (drop-oldest si saturée)
         self._queue: queue.Queue = queue.Queue(maxsize=int(queue_maxsize))
@@ -129,20 +132,20 @@ class ProjectXRealtimeClient:
         # RLock car _on_open peut être appelé synchroniquement depuis start()
         # et a besoin de re-prendre le lock pour send() les subscriptions.
         self._connection = None
-        self._lock        = threading.RLock()
-        self._connected   = threading.Event()
-        self._stop_event  = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.RLock()
+        self._connected = threading.Event()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
 
         # Télémétrie (lectures simples par drain — pas de lock nécessaire,
         # int writes sont atomiques en CPython)
-        self._last_event_ts    = time.monotonic()
-        self._last_open_ts     = 0.0
-        self._last_close_ts    = 0.0
+        self._last_event_ts = time.monotonic()
+        self._last_open_ts = 0.0
+        self._last_close_ts = 0.0
         self._last_drop_log_ts = 0.0
         self._disconnect_count = 0
         self._reconnect_attempt = 0
-        self._dropped_events   = 0
+        self._dropped_events = 0
 
     # ─────────────────────────────────────────────────────────────────────
     # API publique
@@ -180,9 +183,9 @@ class ProjectXRealtimeClient:
     def is_connected(self) -> bool:
         return self._connected.is_set()
 
-    def drain_events(self, max_events: int = 500) -> List[RealtimeEvent]:
+    def drain_events(self, max_events: int = 500) -> list[RealtimeEvent]:
         """Drain non-bloquant. Retourne jusqu'à `max_events` events FIFO."""
-        out: List[RealtimeEvent] = []
+        out: list[RealtimeEvent] = []
         for _ in range(max_events):
             try:
                 out.append(self._queue.get_nowait())
@@ -195,12 +198,12 @@ class ProjectXRealtimeClient:
         now = time.monotonic()
         last_evt = self._last_event_ts or now
         return {
-            "connected":          self._connected.is_set(),
-            "queue_depth":        self._queue.qsize(),
-            "dropped_events":     self._dropped_events,
-            "last_event_age_s":   now - last_evt,
-            "disconnect_count":   self._disconnect_count,
-            "reconnect_attempt":  self._reconnect_attempt,
+            "connected": self._connected.is_set(),
+            "queue_depth": self._queue.qsize(),
+            "dropped_events": self._dropped_events,
+            "last_event_age_s": now - last_evt,
+            "disconnect_count": self._disconnect_count,
+            "reconnect_attempt": self._reconnect_attempt,
         }
 
     # ─────────────────────────────────────────────────────────────────────
@@ -225,22 +228,24 @@ class ProjectXRealtimeClient:
                 url_with_token,
                 options={
                     "access_token_factory": self._token_provider,
-                    "skip_negotiation":     False,
+                    "skip_negotiation": False,
                 },
             )
-            .with_automatic_reconnect({
-                "type":               "raw",
-                "keep_alive_interval": 10,
-                "reconnect_interval":  5,
-                # max_attempts=-1 : désactive le reconnect AUTO de signalrcore
-                # (lève ValueError au 1er essai → la lib n'enchaîne pas). Le
-                # keep_alive_interval reste actif (géré par ConnectionStateChecker,
-                # indépendant du ReconnectionHandler). Notre supervisor (boucle
-                # 10 s + zombie detection) devient le SEUL responsable du
-                # reconnect → plus de course double-rebuild / HTTP 429.
-                # Fix bug observé en burn-in 2026-05-18 (95 erreurs / 6 min).
-                "max_attempts":        -1,
-            })
+            .with_automatic_reconnect(
+                {
+                    "type": "raw",
+                    "keep_alive_interval": 10,
+                    "reconnect_interval": 5,
+                    # max_attempts=-1 : désactive le reconnect AUTO de signalrcore
+                    # (lève ValueError au 1er essai → la lib n'enchaîne pas). Le
+                    # keep_alive_interval reste actif (géré par ConnectionStateChecker,
+                    # indépendant du ReconnectionHandler). Notre supervisor (boucle
+                    # 10 s + zombie detection) devient le SEUL responsable du
+                    # reconnect → plus de course double-rebuild / HTTP 429.
+                    # Fix bug observé en burn-in 2026-05-18 (95 erreurs / 6 min).
+                    "max_attempts": -1,
+                }
+            )
             .build()
         )
 
@@ -251,10 +256,10 @@ class ProjectXRealtimeClient:
         connection.on_reconnect(self._on_open)  # safety : ré-subscribe au reconnect
 
         # Event handlers — noms exacts à confirmer via smoke test
-        connection.on("GatewayUserOrder",    self._on_user_order)
+        connection.on("GatewayUserOrder", self._on_user_order)
         connection.on("GatewayUserPosition", self._on_user_position)
-        connection.on("GatewayUserTrade",    self._on_user_trade)
-        connection.on("GatewayUserAccount",  self._on_user_account)
+        connection.on("GatewayUserTrade", self._on_user_trade)
+        connection.on("GatewayUserAccount", self._on_user_account)
 
         with self._lock:
             self._connection = connection
@@ -275,8 +280,7 @@ class ProjectXRealtimeClient:
             self._build_connection_and_start()
             _log.info("Realtime: rebuild OK (tentative #%d)", self._reconnect_attempt)
         except Exception as exc:
-            _log.error("Realtime: rebuild échoué (#%d) : %s",
-                       self._reconnect_attempt, exc)
+            _log.error("Realtime: rebuild échoué (#%d) : %s", self._reconnect_attempt, exc)
 
     # ─── Hooks SignalR ────────────────────────────────────────────────────
 
@@ -287,12 +291,11 @@ class ProjectXRealtimeClient:
             self._last_event_ts = self._last_open_ts  # reset zombie watchdog
             with self._lock:
                 if self._connection is not None:
-                    self._connection.send("SubscribeAccounts",  [])
-                    self._connection.send("SubscribeOrders",    [self._account_id])
+                    self._connection.send("SubscribeAccounts", [])
+                    self._connection.send("SubscribeOrders", [self._account_id])
                     self._connection.send("SubscribePositions", [self._account_id])
-                    self._connection.send("SubscribeTrades",    [self._account_id])
-            _log.info("Realtime: connecté & subscriptions envoyées (account=%d)",
-                      self._account_id)
+                    self._connection.send("SubscribeTrades", [self._account_id])
+            _log.info("Realtime: connecté & subscriptions envoyées (account=%d)", self._account_id)
         except Exception as exc:
             _log.exception("Realtime: _on_open échoué : %s", exc)
 
@@ -409,8 +412,7 @@ class ProjectXRealtimeClient:
         now = time.monotonic()
         if now - self._last_drop_log_ts > 60:
             self._last_drop_log_ts = now
-            _log.warning("Realtime: queue saturée, drop oldest (total=%d)",
-                         self._dropped_events)
+            _log.warning("Realtime: queue saturée, drop oldest (total=%d)", self._dropped_events)
 
     # ─────────────────────────────────────────────────────────────────────
     # Supervisor thread — détection zombie + reconnect forcé + reauth périodique
@@ -446,8 +448,7 @@ class ProjectXRealtimeClient:
                         delay = self._reconnect_delays[
                             min(backoff_idx, len(self._reconnect_delays) - 1)
                         ]
-                        _log.info("Realtime: déconnecté %.0fs — rebuild dans %ds",
-                                  age, delay)
+                        _log.info("Realtime: déconnecté %.0fs — rebuild dans %ds", age, delay)
                         if delay > 0:
                             time.sleep(delay)
                         if self._stop_event.is_set():
@@ -461,17 +462,19 @@ class ProjectXRealtimeClient:
                 if silence > self._max_silence_s and self._market_open():
                     _log.warning(
                         "Realtime: silence %.0fs > max %.0fs → rebuild forcé",
-                        silence, self._max_silence_s,
+                        silence,
+                        self._max_silence_s,
                     )
                     self._rebuild_and_start()
                     backoff_idx = 0  # reset backoff après succès apparent
                     continue
 
                 # Cas 3 : re-auth périodique
-                if self._last_open_ts > 0 and \
-                        (now - self._last_open_ts) > self._force_reauth_s:
-                    _log.info("Realtime: re-auth périodique (open depuis %.0fh)",
-                              (now - self._last_open_ts) / 3600)
+                if self._last_open_ts > 0 and (now - self._last_open_ts) > self._force_reauth_s:
+                    _log.info(
+                        "Realtime: re-auth périodique (open depuis %.0fh)",
+                        (now - self._last_open_ts) / 3600,
+                    )
                     self._rebuild_and_start()
                     backoff_idx = 0
                     continue

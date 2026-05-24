@@ -15,6 +15,7 @@ Pipeline :
 
 Usage : python scripts/research_pivot_diagnostic.py --ticker MCL1
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,9 +23,9 @@ import sys
 import warnings
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -41,17 +42,35 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import research_pivot_nq1 as base  # noqa: E402
+from research_pivot_divergence import (  # noqa: E402
+    BASELINE_FEATURES,
+    OOS_HORIZON_DAYS,
+    ORDER,
+    SPLITS,
+)
+
 from core.data import load_csv  # noqa: E402
-from research_pivot_divergence import BASELINE_FEATURES, SPLITS, OOS_HORIZON_DAYS, ORDER  # noqa: E402
 
 OUT_ROOT = ROOT / "output" / "pivot_research_diag"
 
 # Features qu'on regarde pour le diagnostic (sous-ensemble interprétable)
 DIAG_FEATURES = [
-    "dist_to_min20_atr", "dist_to_max20_atr", "dist_close_ema21_atr",
-    "atr_14", "atr_ratio_short_long", "bb_width", "range_atr_ratio",
-    "adx_14", "vol_rel", "ret_lag_1", "ret_lag_2", "ret_lag_5",
-    "hour_ny", "dow", "is_macro_day", "past_pivot_density_2atr",
+    "dist_to_min20_atr",
+    "dist_to_max20_atr",
+    "dist_close_ema21_atr",
+    "atr_14",
+    "atr_ratio_short_long",
+    "bb_width",
+    "range_atr_ratio",
+    "adx_14",
+    "vol_rel",
+    "ret_lag_1",
+    "ret_lag_2",
+    "ret_lag_5",
+    "hour_ny",
+    "dow",
+    "is_macro_day",
+    "past_pivot_density_2atr",
 ]
 
 
@@ -87,8 +106,12 @@ def compute_oos_predictions(df, feature_cols, label_col="is_pivot_any"):
         y_oos = df_oos[label_col].to_numpy(dtype=np.int32)
 
         rf = RandomForestClassifier(
-            n_estimators=300, max_depth=8, class_weight="balanced",
-            random_state=42, n_jobs=-1, min_samples_leaf=20,
+            n_estimators=300,
+            max_depth=8,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+            min_samples_leaf=20,
         )
         rf.fit(X_is, y_is)
         p_oos = rf.predict_proba(X_oos)[:, 1]
@@ -146,7 +169,9 @@ def diagnose(ticker: str):
     tp = signals[signals["is_pivot_any"] == 1]
     fp = signals[signals["is_pivot_any"] == 0]
     print(f"  • Signaux totaux : {len(signals)}  (TP : {len(tp)} | FP : {len(fp)})")
-    print(f"  • Base rate global : {y.mean():.2%}  | Précision signaux : {len(tp)/max(1,len(signals)):.2%}")
+    print(
+        f"  • Base rate global : {y.mean():.2%}  | Précision signaux : {len(tp)/max(1,len(signals)):.2%}"
+    )
 
     # ────────── Analyse comparative TP vs FP ──────────
     # Pour chaque feature, on calcule mean(TP), mean(FP), Welch t-test
@@ -157,16 +182,18 @@ def diagnose(ticker: str):
         if len(a) < 5 or len(b) < 5:
             continue
         t_stat, p_val = stats.ttest_ind(a, b, equal_var=False)
-        compare_rows.append({
-            "feature": f,
-            "mean_TP": a.mean(),
-            "mean_FP": b.mean(),
-            "median_TP": a.median(),
-            "median_FP": b.median(),
-            "diff_mean": a.mean() - b.mean(),
-            "t_stat": t_stat,
-            "p_value": p_val,
-        })
+        compare_rows.append(
+            {
+                "feature": f,
+                "mean_TP": a.mean(),
+                "mean_FP": b.mean(),
+                "median_TP": a.median(),
+                "median_FP": b.median(),
+                "diff_mean": a.mean() - b.mean(),
+                "t_stat": t_stat,
+                "p_value": p_val,
+            }
+        )
     cmp_df = pd.DataFrame(compare_rows)
     cmp_df["abs_t"] = cmp_df["t_stat"].abs()
     cmp_df = cmp_df.sort_values("abs_t", ascending=False)
@@ -200,45 +227,71 @@ def diagnose(ticker: str):
                 continue
             prec_filtered = n_tp_kept / n_kept
             recall_kept = n_tp_kept / max(1, len(tp))
-            filter_rows.append({
-                "feature": f,
-                "rule": rule,
-                "quantile": q,
-                "n_signaux": n_kept,
-                "n_TP": n_tp_kept,
-                "n_FP": n_fp_kept,
-                "precision": prec_filtered,
-                "recall_pivots": recall_kept,
-                "lift_vs_baseline": prec_filtered / max(1e-6, p_at_10),
-            })
+            filter_rows.append(
+                {
+                    "feature": f,
+                    "rule": rule,
+                    "quantile": q,
+                    "n_signaux": n_kept,
+                    "n_TP": n_tp_kept,
+                    "n_FP": n_fp_kept,
+                    "precision": prec_filtered,
+                    "recall_pivots": recall_kept,
+                    "lift_vs_baseline": prec_filtered / max(1e-6, p_at_10),
+                }
+            )
     filt_df = pd.DataFrame(filter_rows).sort_values("precision", ascending=False)
 
     # ────────── Analyse heure NY ──────────
     by_hour = signals.groupby("hour_ny").apply(
-        lambda g: pd.Series({
-            "n_signaux": len(g),
-            "n_TP": (g["is_pivot_any"] == 1).sum(),
-            "precision": (g["is_pivot_any"] == 1).mean(),
-        })
+        lambda g: pd.Series(
+            {
+                "n_signaux": len(g),
+                "n_TP": (g["is_pivot_any"] == 1).sum(),
+                "precision": (g["is_pivot_any"] == 1).mean(),
+            }
+        )
     )
 
     # ────────── Plots ──────────
     # Distribution proba TP vs FP
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    axes[0].hist(tp["proba"], bins=30, alpha=0.6, label=f"TP (n={len(tp)})", color="seagreen", density=True)
-    axes[0].hist(fp["proba"], bins=30, alpha=0.6, label=f"FP (n={len(fp)})", color="indianred", density=True)
+    axes[0].hist(
+        tp["proba"], bins=30, alpha=0.6, label=f"TP (n={len(tp)})", color="seagreen", density=True
+    )
+    axes[0].hist(
+        fp["proba"], bins=30, alpha=0.6, label=f"FP (n={len(fp)})", color="indianred", density=True
+    )
     axes[0].axvline(thr_10, color="black", linestyle="--", label=f"seuil = {thr_10:.3f}")
     axes[0].set_title(f"{ticker} — Distribution proba")
-    axes[0].set_xlabel("proba pivot"); axes[0].legend(); axes[0].grid(alpha=0.3)
+    axes[0].set_xlabel("proba pivot")
+    axes[0].legend()
+    axes[0].grid(alpha=0.3)
 
     # Top feature discriminante : distribution TP vs FP
     if len(cmp_df) > 0:
         top_feat = cmp_df.iloc[0]["feature"]
         if top_feat in tp.columns:
-            axes[1].hist(tp[top_feat].dropna(), bins=30, alpha=0.6, label="TP", color="seagreen", density=True)
-            axes[1].hist(fp[top_feat].dropna(), bins=30, alpha=0.6, label="FP", color="indianred", density=True)
+            axes[1].hist(
+                tp[top_feat].dropna(),
+                bins=30,
+                alpha=0.6,
+                label="TP",
+                color="seagreen",
+                density=True,
+            )
+            axes[1].hist(
+                fp[top_feat].dropna(),
+                bins=30,
+                alpha=0.6,
+                label="FP",
+                color="indianred",
+                density=True,
+            )
             axes[1].set_title(f"{ticker} — {top_feat} (|t|={cmp_df.iloc[0]['abs_t']:.2f})")
-            axes[1].set_xlabel(top_feat); axes[1].legend(); axes[1].grid(alpha=0.3)
+            axes[1].set_xlabel(top_feat)
+            axes[1].legend()
+            axes[1].grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_dir / "fp_vs_tp.png", dpi=110)
     plt.close(fig)
@@ -259,7 +312,11 @@ def diagnose(ticker: str):
             cmp_show[c] = cmp_show[c].map(lambda x: f"{x:+.3f}")
         cmp_show["p_value"] = cmp_show["p_value"].map(lambda x: f"{x:.1e}")
         cmp_show["abs_t"] = cmp_show["abs_t"].map(lambda x: f"{x:.2f}")
-        w(cmp_show[["feature", "mean_TP", "mean_FP", "diff_mean", "t_stat", "p_value"]].to_markdown(index=False))
+        w(
+            cmp_show[
+                ["feature", "mean_TP", "mean_FP", "diff_mean", "t_stat", "p_value"]
+            ].to_markdown(index=False)
+        )
     else:
         w("_pas assez de signaux pour analyse_\n")
 
@@ -276,13 +333,27 @@ def diagnose(ticker: str):
         ftop["precision"] = ftop["precision"].map(lambda x: f"{x:.2%}")
         ftop["recall_pivots"] = ftop["recall_pivots"].map(lambda x: f"{x:.2%}")
         ftop["lift_vs_baseline"] = ftop["lift_vs_baseline"].map(lambda x: f"×{x:.2f}")
-        w(ftop[["rule", "n_signaux", "n_TP", "n_FP", "precision", "recall_pivots", "lift_vs_baseline"]].to_markdown(index=False))
+        w(
+            ftop[
+                [
+                    "rule",
+                    "n_signaux",
+                    "n_TP",
+                    "n_FP",
+                    "precision",
+                    "recall_pivots",
+                    "lift_vs_baseline",
+                ]
+            ].to_markdown(index=False)
+        )
         w("")
         # Best filter
         best = filt_df.iloc[0]
-        w(f"**Meilleur filtre** : `{best['rule']}` → précision **{best['precision']:.2%}** "
-          f"(vs baseline {p_at_10:.2%}, lift ×{best['lift_vs_baseline']:.2f}), "
-          f"recall pivots conservé : {best['recall_pivots']:.2%}")
+        w(
+            f"**Meilleur filtre** : `{best['rule']}` → précision **{best['precision']:.2%}** "
+            f"(vs baseline {p_at_10:.2%}, lift ×{best['lift_vs_baseline']:.2f}), "
+            f"recall pivots conservé : {best['recall_pivots']:.2%}"
+        )
     else:
         w("_aucune feature discriminante au seuil |t|>2_")
 

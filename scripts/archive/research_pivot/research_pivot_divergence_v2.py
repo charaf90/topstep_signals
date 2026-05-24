@@ -9,6 +9,7 @@ Différences vs v1 (research_pivot_divergence.py) :
 
 Usage : python scripts/research_pivot_divergence_v2.py --ticker MCL1
 """
+
 from __future__ import annotations
 
 import argparse
@@ -16,15 +17,13 @@ import sys
 import warnings
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance
-from sklearn.metrics import average_precision_score, precision_recall_curve
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -35,12 +34,17 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import research_pivot_nq1 as base  # noqa: E402
-from core.data import load_csv  # noqa: E402
+
 # On réutilise rolling_slope et rsi du script v1
 from research_pivot_divergence import (  # noqa: E402
-    rolling_slope, rsi, BASELINE_FEATURES, SPLITS, OOS_HORIZON_DAYS, ORDER,
-    score_proba, train_set, wf_run,
+    BASELINE_FEATURES,
+    ORDER,
+    rolling_slope,
+    rsi,
+    wf_run,
 )
+
+from core.data import load_csv  # noqa: E402
 
 OUT_ROOT = ROOT / "output" / "pivot_research_div_v2"
 ZSCORE_WIN = 200  # fenêtre pour z-score des pentes
@@ -146,7 +150,9 @@ def main():
     df = base.build_features(df)
     df, new_cols = add_v2_features(df)
     enriched = BASELINE_FEATURES + new_cols
-    print(f"  • baseline : {len(BASELINE_FEATURES)} | nouvelles : {len(new_cols)} | total : {len(enriched)}")
+    print(
+        f"  • baseline : {len(BASELINE_FEATURES)} | nouvelles : {len(new_cols)} | total : {len(enriched)}"
+    )
     print(f"  • nouvelles features : {new_cols}")
 
     df_clean = df.dropna(subset=enriched + ["is_pivot_any"]).copy()
@@ -155,46 +161,60 @@ def main():
     print("\n=== BASELINE ===")
     sum_base = wf_run(df_clean, BASELINE_FEATURES)
     for mk in ("rf", "hgb"):
-        print(f"  • {mk}  PR-AUC={sum_base[f'{mk}_pr_auc_mean']:.3f}±{sum_base[f'{mk}_pr_auc_std']:.3f}  "
-              f"P@R10%={sum_base[f'{mk}_p@r10_mean']:.2%}±{sum_base[f'{mk}_p@r10_std']:.2%}")
+        print(
+            f"  • {mk}  PR-AUC={sum_base[f'{mk}_pr_auc_mean']:.3f}±{sum_base[f'{mk}_pr_auc_std']:.3f}  "
+            f"P@R10%={sum_base[f'{mk}_p@r10_mean']:.2%}±{sum_base[f'{mk}_p@r10_std']:.2%}"
+        )
 
     print("\n=== ENRICHI V2 ===")
     sum_enr = wf_run(df_clean, enriched)
     for mk in ("rf", "hgb"):
-        print(f"  • {mk}  PR-AUC={sum_enr[f'{mk}_pr_auc_mean']:.3f}±{sum_enr[f'{mk}_pr_auc_std']:.3f}  "
-              f"P@R10%={sum_enr[f'{mk}_p@r10_mean']:.2%}±{sum_enr[f'{mk}_p@r10_std']:.2%}")
+        print(
+            f"  • {mk}  PR-AUC={sum_enr[f'{mk}_pr_auc_mean']:.3f}±{sum_enr[f'{mk}_pr_auc_std']:.3f}  "
+            f"P@R10%={sum_enr[f'{mk}_p@r10_mean']:.2%}±{sum_enr[f'{mk}_p@r10_std']:.2%}"
+        )
 
     # Permutation importance
     print("\n▸ Permutation importance (enrichi, dernier split)…")
     pi = permutation_importance(
-        sum_enr["last_model"], sum_enr["last_X_oos"], sum_enr["last_y_oos"],
-        n_repeats=5, random_state=42, n_jobs=-1, scoring="average_precision",
+        sum_enr["last_model"],
+        sum_enr["last_X_oos"],
+        sum_enr["last_y_oos"],
+        n_repeats=5,
+        random_state=42,
+        n_jobs=-1,
+        scoring="average_precision",
     )
-    imp = pd.DataFrame({
-        "feature": enriched, "importance": pi.importances_mean,
-        "is_new": [f in new_cols for f in enriched],
-    }).sort_values("importance", ascending=False)
+    imp = pd.DataFrame(
+        {
+            "feature": enriched,
+            "importance": pi.importances_mean,
+            "is_new": [f in new_cols for f in enriched],
+        }
+    ).sort_values("importance", ascending=False)
 
     # Rapport
     lines = [f"# Divergences V2 (continues + volume) — {ticker} order={ORDER}\n"]
     w = lines.append
     w(f"- Nouvelles features : **{len(new_cols)}** (vs 24 en v1)")
-    w(f"  - Volume-based : OBV slope 10/20, MFI(14), slope MFI(14)/10 → 4")
-    w(f"  - Divergences continues prix-(rsi/obv/mfi) sur w=10/20 → 6")
+    w("  - Volume-based : OBV slope 10/20, MFI(14), slope MFI(14)/10 → 4")
+    w("  - Divergences continues prix-(rsi/obv/mfi) sur w=10/20 → 6")
     w(f"- Z-score fenêtre : {ZSCORE_WIN} barres\n")
 
     w("## Baseline vs Enrichi V2\n")
     rows = []
     for mk, lbl in (("rf", "RF"), ("hgb", "HGB")):
-        rows.append({
-            "modèle": lbl,
-            "PR-AUC base": f"{sum_base[f'{mk}_pr_auc_mean']:.3f} ± {sum_base[f'{mk}_pr_auc_std']:.3f}",
-            "PR-AUC v2": f"{sum_enr[f'{mk}_pr_auc_mean']:.3f} ± {sum_enr[f'{mk}_pr_auc_std']:.3f}",
-            "Δ PR-AUC": f"{sum_enr[f'{mk}_pr_auc_mean'] - sum_base[f'{mk}_pr_auc_mean']:+.3f}",
-            "P@R10 base": f"{sum_base[f'{mk}_p@r10_mean']:.2%}",
-            "P@R10 v2": f"{sum_enr[f'{mk}_p@r10_mean']:.2%}",
-            "Δ P@R10": f"{sum_enr[f'{mk}_p@r10_mean'] - sum_base[f'{mk}_p@r10_mean']:+.2%}",
-        })
+        rows.append(
+            {
+                "modèle": lbl,
+                "PR-AUC base": f"{sum_base[f'{mk}_pr_auc_mean']:.3f} ± {sum_base[f'{mk}_pr_auc_std']:.3f}",
+                "PR-AUC v2": f"{sum_enr[f'{mk}_pr_auc_mean']:.3f} ± {sum_enr[f'{mk}_pr_auc_std']:.3f}",
+                "Δ PR-AUC": f"{sum_enr[f'{mk}_pr_auc_mean'] - sum_base[f'{mk}_pr_auc_mean']:+.3f}",
+                "P@R10 base": f"{sum_base[f'{mk}_p@r10_mean']:.2%}",
+                "P@R10 v2": f"{sum_enr[f'{mk}_p@r10_mean']:.2%}",
+                "Δ P@R10": f"{sum_enr[f'{mk}_p@r10_mean'] - sum_base[f'{mk}_p@r10_mean']:+.2%}",
+            }
+        )
     w(pd.DataFrame(rows).to_markdown(index=False))
 
     w("\n## Top 15 features global (enrichi)\n")
@@ -219,9 +239,11 @@ def main():
     enr_vals = [sum_enr[f"rf_{m}_mean"] for m in metrics]
     ax.bar(x - width / 2, base_vals, width, label="baseline (31)", color="steelblue")
     ax.bar(x + width / 2, enr_vals, width, label=f"v2 (+{len(new_cols)})", color="seagreen")
-    ax.set_xticks(x); ax.set_xticklabels(["PR-AUC", "P@R5%", "P@R10%", "P@R20%"])
+    ax.set_xticks(x)
+    ax.set_xticklabels(["PR-AUC", "P@R5%", "P@R10%", "P@R20%"])
     ax.set_title(f"{ticker} V2 — Baseline vs Enrichi (RF, WF mean)")
-    ax.legend(); ax.grid(alpha=0.3, axis="y")
+    ax.legend()
+    ax.grid(alpha=0.3, axis="y")
     fig.tight_layout()
     fig.savefig(out_dir / "baseline_vs_v2.png", dpi=110)
     plt.close(fig)

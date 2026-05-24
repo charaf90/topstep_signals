@@ -43,16 +43,15 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
-from typing import Deque, Dict, List, Optional
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 from broker.projectx_market_realtime import MarketEvent
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bar M1 OHLCV
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class M1Bar:
@@ -68,6 +67,7 @@ class M1Bar:
         closed      : bool, True si le bar est figé (minute passée)
         source      : "WS" (stream) | "REST" (gap-fill au reconnect)
     """
+
     contract_id: str
     start_ts: datetime
     open: float
@@ -87,15 +87,15 @@ class M1Bar:
         """Pour sérialisation / debugging."""
         return {
             "contract_id": self.contract_id,
-            "start_ts":    self.start_ts.isoformat(),
-            "open":        self.open,
-            "high":        self.high,
-            "low":         self.low,
-            "close":       self.close,
-            "volume":      self.volume,
-            "n_ticks":     self.n_ticks,
-            "closed":      self.closed,
-            "source":      self.source,
+            "start_ts": self.start_ts.isoformat(),
+            "open": self.open,
+            "high": self.high,
+            "low": self.low,
+            "close": self.close,
+            "volume": self.volume,
+            "n_ticks": self.n_ticks,
+            "closed": self.closed,
+            "source": self.source,
         }
 
 
@@ -103,18 +103,20 @@ class M1Bar:
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _floor_minute(ts: datetime) -> datetime:
     """Tronque un datetime UTC au début de sa minute."""
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.replace(tzinfo=UTC)
     else:
-        ts = ts.astimezone(timezone.utc)
+        ts = ts.astimezone(UTC)
     return ts.replace(second=0, microsecond=0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # M1Buffer
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class M1Buffer:
     """
@@ -139,14 +141,14 @@ class M1Buffer:
         self._lock = threading.RLock()
 
         # Par contract_id : deque[M1Bar fermés] + bar courant
-        self._closed_bars: Dict[str, Deque[M1Bar]] = {}
-        self._current_bar: Dict[str, M1Bar] = {}
+        self._closed_bars: dict[str, deque[M1Bar]] = {}
+        self._current_bar: dict[str, M1Bar] = {}
 
         # Diagnostic
-        self._trades_consumed   = 0
-        self._trades_dropped    = 0  # ts antérieur au bar courant déjà fermé
-        self._bars_closed       = 0
-        self._last_event_ts: Optional[datetime] = None
+        self._trades_consumed = 0
+        self._trades_dropped = 0  # ts antérieur au bar courant déjà fermé
+        self._bars_closed = 0
+        self._last_event_ts: datetime | None = None
 
     # ─────────────────────────────────────────────────────────────────────
     # Ingestion
@@ -200,7 +202,7 @@ class M1Buffer:
             if bucket == current.start_ts:
                 price = float(evt.price)
                 current.high = max(current.high, price)
-                current.low  = min(current.low, price)
+                current.low = min(current.low, price)
                 current.close = price
                 current.volume += int(evt.volume)
                 current.n_ticks += 1
@@ -231,7 +233,7 @@ class M1Buffer:
             # Cas 4 : trade out-of-order (antérieur au bar courant) → drop
             self._trades_dropped += 1
 
-    def flush_stale_bars(self, now_utc: Optional[datetime] = None) -> int:
+    def flush_stale_bars(self, now_utc: datetime | None = None) -> int:
         """
         Force la clôture du bar courant si sa minute est terminée.
 
@@ -241,9 +243,9 @@ class M1Buffer:
 
         Retourne le nombre de bars clôturés.
         """
-        now = now_utc or datetime.now(timezone.utc)
+        now = now_utc or datetime.now(UTC)
         if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
+            now = now.replace(tzinfo=UTC)
         current_bucket = _floor_minute(now)
 
         n_closed = 0
@@ -254,7 +256,7 @@ class M1Buffer:
                     n_closed += 1
         return n_closed
 
-    def inject_bars(self, bars: List[M1Bar]) -> int:
+    def inject_bars(self, bars: list[M1Bar]) -> int:
         """
         Injecte des bars (typiquement issus d'un gap-fill REST au reconnect).
 
@@ -267,9 +269,7 @@ class M1Buffer:
         with self._lock:
             for src in bars:
                 cid = src.contract_id
-                dq = self._closed_bars.setdefault(
-                    cid, deque(maxlen=self._max_minutes)
-                )
+                dq = self._closed_bars.setdefault(cid, deque(maxlen=self._max_minutes))
                 # Skip si déjà présent (priorité au WS)
                 if any(b.start_ts == src.start_ts for b in dq):
                     continue
@@ -291,14 +291,15 @@ class M1Buffer:
     # Lecture
     # ─────────────────────────────────────────────────────────────────────
 
-    def get_current_forming_bar(self, contract_id: str) -> Optional[M1Bar]:
+    def get_current_forming_bar(self, contract_id: str) -> M1Bar | None:
         """Bar en cours de formation (closed=False). None si aucun trade vu."""
         with self._lock:
             bar = self._current_bar.get(contract_id)
             return replace(bar) if bar is not None else None
 
-    def get_recent_bars(self, contract_id: str, n: int = 30,
-                        include_forming: bool = False) -> List[M1Bar]:
+    def get_recent_bars(
+        self, contract_id: str, n: int = 30, include_forming: bool = False
+    ) -> list[M1Bar]:
         """
         Retourne les `n` derniers bars (closed) du plus ancien au plus récent.
 
@@ -315,11 +316,12 @@ class M1Buffer:
                     out.append(replace(cur))
             return out
 
-    def get_bars_since(self, contract_id: str, since_utc: datetime,
-                       include_forming: bool = False) -> List[M1Bar]:
+    def get_bars_since(
+        self, contract_id: str, since_utc: datetime, include_forming: bool = False
+    ) -> list[M1Bar]:
         """Bars dont start_ts >= since_utc (croissant)."""
         if since_utc.tzinfo is None:
-            since_utc = since_utc.replace(tzinfo=timezone.utc)
+            since_utc = since_utc.replace(tzinfo=UTC)
         with self._lock:
             dq = self._closed_bars.get(contract_id, deque())
             out = [replace(b) for b in dq if b.start_ts >= since_utc]
@@ -329,25 +331,23 @@ class M1Buffer:
                     out.append(replace(cur))
             return out
 
-    def contracts(self) -> List[str]:
+    def contracts(self) -> list[str]:
         """Liste des contract_ids actuellement observés (closed ou en cours)."""
         with self._lock:
-            return sorted(
-                set(self._closed_bars.keys()) | set(self._current_bar.keys())
-            )
+            return sorted(set(self._closed_bars.keys()) | set(self._current_bar.keys()))
 
     def health(self) -> dict:
         """Snapshot santé pour monitoring."""
         with self._lock:
             return {
-                "contracts":         self.contracts(),
-                "closed_bars":       {cid: len(dq) for cid, dq in self._closed_bars.items()},
-                "has_forming":       {cid: True for cid in self._current_bar.keys()},
-                "trades_consumed":   self._trades_consumed,
-                "trades_dropped":    self._trades_dropped,
-                "bars_closed":       self._bars_closed,
-                "last_event_ts":     self._last_event_ts.isoformat() if self._last_event_ts else None,
-                "max_minutes":       self._max_minutes,
+                "contracts": self.contracts(),
+                "closed_bars": {cid: len(dq) for cid, dq in self._closed_bars.items()},
+                "has_forming": {cid: True for cid in self._current_bar.keys()},
+                "trades_consumed": self._trades_consumed,
+                "trades_dropped": self._trades_dropped,
+                "bars_closed": self._bars_closed,
+                "last_event_ts": self._last_event_ts.isoformat() if self._last_event_ts else None,
+                "max_minutes": self._max_minutes,
             }
 
     # ─────────────────────────────────────────────────────────────────────
@@ -360,8 +360,6 @@ class M1Buffer:
         if bar is None:
             return
         bar.closed = True
-        dq = self._closed_bars.setdefault(
-            cid, deque(maxlen=self._max_minutes)
-        )
+        dq = self._closed_bars.setdefault(cid, deque(maxlen=self._max_minutes))
         dq.append(bar)
         self._bars_closed += 1

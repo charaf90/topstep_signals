@@ -12,22 +12,27 @@ appelle `_drain_realtime()` puis `_sync_broker()` pour vérifier que :
   5. End-to-end : WS détecte un close, puis polling REST détecte le même
      close → register_close appelé une SEULE fois (idempotence cross-path)
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 
 from broker.live_runner import (
-    SessionRunner, _ST_PENDING, _ST_ACTIVE, _ST_CLOSED, _ST_CANCELLED,
+    _ST_ACTIVE,
+    _ST_CANCELLED,
+    _ST_CLOSED,
+    _ST_PENDING,
+    SessionRunner,
 )
 from broker.projectx_realtime import RealtimeEvent
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class StubRealtime:
     """Stub minimal pour self.rt — pas de threads, pas de réseau."""
@@ -97,14 +102,14 @@ def runner(tmp_path):
 def _make_pending_tag(runner, tag="OPR_NQ1_20260518_long_1"):
     """Place un ordre PENDING dans le state + register_open sur le RM."""
     info = {
-        "status":      _ST_PENDING,
-        "order_id":    101,
-        "ticker":      "NQ1",
+        "status": _ST_PENDING,
+        "order_id": 101,
+        "ticker": "NQ1",
         "contract_id": "CON.F.US.MNQ.M26",
-        "direction":   "long",
-        "entry":       17000.0,
-        "n_ct":        1,
-        "strategy":    "OPR",
+        "direction": "long",
+        "entry": 17000.0,
+        "n_ct": 1,
+        "strategy": "OPR",
     }
     runner.state["placed_tags"][tag] = info
     runner.rm.register_open(tag, risk_usd=100.0)
@@ -114,7 +119,7 @@ def _make_pending_tag(runner, tag="OPR_NQ1_20260518_long_1"):
 def _make_active_tag(runner, tag="OPR_NQ1_20260518_long_1"):
     """Place un tag ACTIVE (déjà fillé)."""
     tag, info = _make_pending_tag(runner, tag)
-    info["status"]    = _ST_ACTIVE
+    info["status"] = _ST_ACTIVE
     info["fill_time"] = "2026-05-18T13:30:00Z"
     # Reflect on RM
     runner.rm.register_fill(tag, when=datetime.utcnow())
@@ -125,16 +130,19 @@ def _make_active_tag(runner, tag="OPR_NQ1_20260518_long_1"):
 # Tests
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_trade_event_with_pnl_triggers_close(runner):
     """trade event avec pnl sur tag ACTIVE → register_close + notify_close 1×."""
     tag, info = _make_active_tag(runner)
 
-    runner.rt.push(RealtimeEvent(
-        kind="trade",
-        custom_tag=tag,
-        contract_id=info["contract_id"],
-        pnl=150.0,
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="trade",
+            custom_tag=tag,
+            contract_id=info["contract_id"],
+            pnl=150.0,
+        )
+    )
     runner._drain_realtime()
 
     assert info["status"] == _ST_CLOSED
@@ -151,8 +159,10 @@ def test_duplicate_close_event_is_noop(runner):
     tag, info = _make_active_tag(runner)
 
     evt = RealtimeEvent(
-        kind="trade", custom_tag=tag,
-        contract_id=info["contract_id"], pnl=100.0,
+        kind="trade",
+        custom_tag=tag,
+        contract_id=info["contract_id"],
+        pnl=100.0,
     )
     runner.rt.push(evt)
     runner._drain_realtime()
@@ -171,11 +181,13 @@ def test_position_event_size_gt_0_triggers_fill(runner):
     """position size>0 sur tag PENDING → transition ACTIVE."""
     tag, info = _make_pending_tag(runner)
 
-    runner.rt.push(RealtimeEvent(
-        kind="position",
-        contract_id=info["contract_id"],
-        size=1,
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="position",
+            contract_id=info["contract_id"],
+            size=1,
+        )
+    )
     runner._drain_realtime()
 
     assert info["status"] == _ST_ACTIVE
@@ -188,11 +200,13 @@ def test_position_event_size_0_marks_close_seen(runner):
     """position size=0 sur tag ACTIVE → marque _close_seen, attend trade event."""
     tag, info = _make_active_tag(runner)
 
-    runner.rt.push(RealtimeEvent(
-        kind="position",
-        contract_id=info["contract_id"],
-        size=0,
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="position",
+            contract_id=info["contract_id"],
+            size=0,
+        )
+    )
     runner._drain_realtime()
 
     assert info.get("_close_seen") is True
@@ -205,13 +219,15 @@ def test_order_event_cancel_status_triggers_cancel(runner):
     sur PENDING → CANCELLED."""
     tag, info = _make_pending_tag(runner)
 
-    runner.rt.push(RealtimeEvent(
-        kind="order",
-        custom_tag=tag,
-        contract_id=info["contract_id"],
-        order_id=101,
-        status=3,  # cancelled (confirmé via smoke test)
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="order",
+            custom_tag=tag,
+            contract_id=info["contract_id"],
+            order_id=101,
+            status=3,  # cancelled (confirmé via smoke test)
+        )
+    )
     runner._drain_realtime()
 
     assert info["status"] == _ST_CANCELLED
@@ -223,13 +239,15 @@ def test_order_event_status_active_does_not_cancel(runner):
     """status=1 (actif, non-terminal) ne doit PAS déclencher un cancel."""
     tag, info = _make_pending_tag(runner)
 
-    runner.rt.push(RealtimeEvent(
-        kind="order",
-        custom_tag=tag,
-        contract_id=info["contract_id"],
-        order_id=101,
-        status=1,  # actif/placed → on attend, pas de transition
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="order",
+            custom_tag=tag,
+            contract_id=info["contract_id"],
+            order_id=101,
+            status=1,  # actif/placed → on attend, pas de transition
+        )
+    )
     runner._drain_realtime()
 
     # Toujours PENDING — l'ordre est juste confirmé actif, pas terminé
@@ -238,12 +256,14 @@ def test_order_event_status_active_does_not_cancel(runner):
 
 def test_event_without_matching_tag_is_dropped(runner):
     """Un event sans tag matchable → drop silencieusement (pas de crash)."""
-    runner.rt.push(RealtimeEvent(
-        kind="trade",
-        custom_tag="UNKNOWN_TAG",
-        contract_id="UNKNOWN_CONTRACT",
-        pnl=999.0,
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="trade",
+            custom_tag="UNKNOWN_TAG",
+            contract_id="UNKNOWN_CONTRACT",
+            pnl=999.0,
+        )
+    )
     # Ne doit pas crasher
     runner._drain_realtime()
     assert runner.tg.notify_close.call_count == 0
@@ -257,12 +277,14 @@ def test_fallback_lookup_by_contract_id(runner):
     """
     tag, info = _make_active_tag(runner)
 
-    runner.rt.push(RealtimeEvent(
-        kind="trade",
-        custom_tag=None,  # closing trade n'a souvent pas le customTag d'entrée
-        contract_id=info["contract_id"],
-        pnl=50.0,
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="trade",
+            custom_tag=None,  # closing trade n'a souvent pas le customTag d'entrée
+            contract_id=info["contract_id"],
+            pnl=50.0,
+        )
+    )
     runner._drain_realtime()
 
     assert info["status"] == _ST_CLOSED
@@ -277,10 +299,14 @@ def test_idempotence_ws_then_rest_sync(runner):
     tag, info = _make_active_tag(runner)
 
     # 1. WS détecte la close en premier
-    runner.rt.push(RealtimeEvent(
-        kind="trade", custom_tag=tag,
-        contract_id=info["contract_id"], pnl=200.0,
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="trade",
+            custom_tag=tag,
+            contract_id=info["contract_id"],
+            pnl=200.0,
+        )
+    )
     runner._drain_realtime()
     assert info["status"] == _ST_CLOSED
     assert runner.rm.cum_pnl == 200.0
@@ -305,10 +331,14 @@ def test_idempotence_rest_then_ws(runner):
     assert info["status"] == _ST_CLOSED
 
     # 2. WS pousse le même event après
-    runner.rt.push(RealtimeEvent(
-        kind="trade", custom_tag=tag,
-        contract_id=info["contract_id"], pnl=80.0,
-    ))
+    runner.rt.push(
+        RealtimeEvent(
+            kind="trade",
+            custom_tag=tag,
+            contract_id=info["contract_id"],
+            pnl=80.0,
+        )
+    )
     runner._drain_realtime()
 
     assert runner.rm.cum_pnl == 80.0

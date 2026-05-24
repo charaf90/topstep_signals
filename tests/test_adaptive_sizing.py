@@ -6,33 +6,29 @@ Couvre :
   - adaptive_risk_usd : monotonie, bornes, cas dégénérés
   - cohérence avec PortfolioRiskManager.can_open
 """
+
 from __future__ import annotations
 
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import pytest
 
 from config import (
     CHALLENGE_DD_GUARD_BUFFER,
-    CHALLENGE_RESET_DAY,
     CHALLENGE_RISK_MAX_USD,
     CHALLENGE_RISK_MIN_USD,
-    TOPSTEP_DAILY_LOSS_MAX,
-    TOPSTEP_PROFIT_TARGET,
-    TOPSTEP_TRAILING_DD,
 )
 from core.adaptive_sizing import (
     adaptive_risk_usd,
-    compute_factors,
     trading_days_until,
 )
 from core.risk_portfolio import PortfolioRiskManager
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # trading_days_until
 # ────────────────────────────────────────────────────────────────────────────
+
 
 class TestTradingDaysUntil:
 
@@ -78,6 +74,7 @@ class TestTradingDaysUntil:
 # ────────────────────────────────────────────────────────────────────────────
 # adaptive_risk_usd — bornes et monotonie
 # ────────────────────────────────────────────────────────────────────────────
+
 
 def _make_status(cum_pnl=0.0, peak_pnl=0.0, realized_day_pnl=0.0):
     return {
@@ -129,24 +126,18 @@ class TestMonotonie:
         risk_far, _ = adaptive_risk_usd(status, signal, datetime(2026, 6, 1))
         # 3 jours restants (28 du mois)
         risk_near, _ = adaptive_risk_usd(status, signal, datetime(2026, 6, 28))
-        assert risk_near >= risk_far, (
-            f"risk_near={risk_near} should be >= risk_far={risk_far}"
-        )
+        assert risk_near >= risk_far, f"risk_near={risk_near} should be >= risk_far={risk_far}"
 
     def test_more_progress_less_risk(self):
         # à days_left fixe, plus cum_pnl approche le target, moins le risk
         # est élevé (lockin)
         signal = _make_signal()
         today = datetime(2026, 6, 10)
-        risk_low, _ = adaptive_risk_usd(
-            _make_status(cum_pnl=500, peak_pnl=500), signal, today
-        )
-        risk_high, _ = adaptive_risk_usd(
-            _make_status(cum_pnl=2800, peak_pnl=2800), signal, today
-        )
-        assert risk_high <= risk_low, (
-            f"risk_high={risk_high} (cum=2800) should be <= risk_low={risk_low} (cum=500)"
-        )
+        risk_low, _ = adaptive_risk_usd(_make_status(cum_pnl=500, peak_pnl=500), signal, today)
+        risk_high, _ = adaptive_risk_usd(_make_status(cum_pnl=2800, peak_pnl=2800), signal, today)
+        assert (
+            risk_high <= risk_low
+        ), f"risk_high={risk_high} (cum=2800) should be <= risk_low={risk_low} (cum=500)"
 
     def test_fib_boost_vs_opr(self):
         # à état fixe, Fib doit produire un risk >= OPR (boost = 1.2)
@@ -213,6 +204,7 @@ class TestCasDegeneres:
 # Cohérence avec PortfolioRiskManager.can_open
 # ────────────────────────────────────────────────────────────────────────────
 
+
 class TestCoherenceRiskManager:
 
     def test_passes_can_open_in_normal_state(self):
@@ -236,6 +228,16 @@ class TestCoherenceRiskManager:
 # Reset mensuel (PortfolioRiskManager._maybe_roll_month)
 # ────────────────────────────────────────────────────────────────────────────
 
+
+@pytest.mark.xfail(
+    reason=(
+        "Reset mensuel retiré avec la désactivation du challenge mode "
+        "(politique 2026-05-21, USD fixe). Le code attend toujours un "
+        "comportement de reset day-2 qui n'est plus implémenté. "
+        "À refixer ou supprimer quand le challenge mode sera réactivé."
+    ),
+    strict=False,
+)
 class TestMonthlyReset:
 
     def test_reset_triggers_on_day_2(self):

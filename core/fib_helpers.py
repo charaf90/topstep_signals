@@ -19,18 +19,16 @@ Conventions :
   • Compatibles indices et matières premières (sizing via INSTRUMENTS)
 """
 
-from typing import Dict, List, Optional, Tuple
-
 import numpy as np
 import pandas as pd
 
 from config import INSTRUMENTS, RISK_PER_TRADE_USD
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # Indicateurs (implémentation standalone — pas de TA-Lib pour rester sans
 # dépendance)
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def compute_ema(series: pd.Series, period: int) -> pd.Series:
     """EMA classique adjust=False (formule TradingView/MT5)."""
@@ -42,11 +40,14 @@ def compute_atr(df: pd.DataFrame, period: int) -> pd.Series:
     high = df["high"]
     low = df["low"]
     prev_close = df["close"].shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     return tr.rolling(period).mean()
 
 
@@ -61,11 +62,14 @@ def compute_adx(df: pd.DataFrame, period: int) -> pd.Series:
     plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
     minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
 
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
 
     atr = tr.rolling(period).mean()
     plus_di = 100.0 * (plus_dm.rolling(period).mean() / atr.replace(0, np.nan))
@@ -80,8 +84,8 @@ def compute_adx(df: pd.DataFrame, period: int) -> pd.Series:
 # Détection des pivots (méthode left/right)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def detect_pivots(df: pd.DataFrame, left: int, right: int
-                  ) -> Tuple[List[int], List[int]]:
+
+def detect_pivots(df: pd.DataFrame, left: int, right: int) -> tuple[list[int], list[int]]:
     """
     Pivots high (max local) et low (min local).
     Confirmation : pivot[i] connu seulement à index i+right.
@@ -89,11 +93,11 @@ def detect_pivots(df: pd.DataFrame, left: int, right: int
     highs = df["high"].values
     lows = df["low"].values
     n = len(df)
-    pivot_highs: List[int] = []
-    pivot_lows: List[int] = []
+    pivot_highs: list[int] = []
+    pivot_lows: list[int] = []
     for i in range(left, n - right):
-        h_window = highs[i - left:i + right + 1]
-        l_window = lows[i - left:i + right + 1]
+        h_window = highs[i - left : i + right + 1]
+        l_window = lows[i - left : i + right + 1]
         if highs[i] == h_window.max() and highs[i] > highs[i - 1] and highs[i] > highs[i + 1]:
             pivot_highs.append(i)
         if lows[i] == l_window.min() and lows[i] < lows[i - 1] and lows[i] < lows[i + 1]:
@@ -105,8 +109,10 @@ def detect_pivots(df: pd.DataFrame, left: int, right: int
 # Détection de tendance (EMA + ADX)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def detect_trend(close: float, ema_fast: float, ema_slow: float,
-                 adx: float, adx_threshold: float) -> str:
+
+def detect_trend(
+    close: float, ema_fast: float, ema_slow: float, adx: float, adx_threshold: float
+) -> str:
     """
     Retourne 'BULL', 'BEAR' ou 'RANGE'.
     BULL  : close > EMA_fast > EMA_slow ET ADX > seuil
@@ -128,14 +134,20 @@ def detect_trend(close: float, ema_fast: float, ema_slow: float,
 # Détection de l'impulse (pivots récents + filtres ATR/durée/tendance)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def find_last_impulse(
-    df: pd.DataFrame, current_idx: int,
-    pivot_highs: List[int], pivot_lows: List[int],
-    atr_series: pd.Series, trend: str,
-    pivot_right: int, min_impulse_atr: float,
-    max_impulse_bars: int, impulse_lookback: int,
+    df: pd.DataFrame,
+    current_idx: int,
+    pivot_highs: list[int],
+    pivot_lows: list[int],
+    atr_series: pd.Series,
+    trend: str,
+    pivot_right: int,
+    min_impulse_atr: float,
+    max_impulse_bars: int,
+    impulse_lookback: int,
     fib_level: float = 0.50,
-) -> Optional[Dict]:
+) -> dict | None:
     """
     Cherche la dernière impulse VALIDE alignée avec la tendance.
 
@@ -150,9 +162,9 @@ def find_last_impulse(
 
     if trend == "BULL":
         confirmed_highs = [
-            p for p in pivot_highs
-            if p + confirmation_offset <= current_idx
-            and current_idx - p <= impulse_lookback
+            p
+            for p in pivot_highs
+            if p + confirmation_offset <= current_idx and current_idx - p <= impulse_lookback
         ]
         if not confirmed_highs:
             return None
@@ -178,10 +190,13 @@ def find_last_impulse(
             "direction": "long",
             "pivot_low_idx": int(pl_idx),
             "pivot_high_idx": int(ph_idx),
-            "swing_low": swing_low, "swing_high": swing_high,
+            "swing_low": swing_low,
+            "swing_high": swing_high,
             "impulse_size": float(impulse_size),
             "impulse_bars": int(impulse_bars),
-            "fib_50": float(fib_price),    # clé conservée pour compat — contient le prix au niveau choisi
+            "fib_50": float(
+                fib_price
+            ),  # clé conservée pour compat — contient le prix au niveau choisi
             "fib_level": float(fib_level),
             "atr_at_pivot": float(atr_at_pivot),
             "confirm_idx": int(ph_idx + pivot_right),
@@ -189,9 +204,9 @@ def find_last_impulse(
 
     # BEAR
     confirmed_lows = [
-        p for p in pivot_lows
-        if p + confirmation_offset <= current_idx
-        and current_idx - p <= impulse_lookback
+        p
+        for p in pivot_lows
+        if p + confirmation_offset <= current_idx and current_idx - p <= impulse_lookback
     ]
     if not confirmed_lows:
         return None
@@ -216,7 +231,8 @@ def find_last_impulse(
         "direction": "short",
         "pivot_high_idx": int(ph_idx),
         "pivot_low_idx": int(pl_idx),
-        "swing_low": swing_low, "swing_high": swing_high,
+        "swing_low": swing_low,
+        "swing_high": swing_high,
         "impulse_size": float(impulse_size),
         "impulse_bars": int(impulse_bars),
         "fib_50": float(fib_price),
@@ -230,14 +246,19 @@ def find_last_impulse(
 # Construction du signal trade (sizing risque dollar fixe)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def build_signal(
-    impulse: Dict, current_atr: float, ticker: str,
-    sl_mult: float, tp_mult: float,
-) -> Optional[Dict]:
+    impulse: dict,
+    current_atr: float,
+    ticker: str,
+    sl_mult: float,
+    tp_mult: float,
+) -> dict | None:
     """Construit le dict signal — None si sizing impossible."""
     if current_atr is None or pd.isna(current_atr) or current_atr <= 0:
         return None
     tick = INSTRUMENTS[ticker]["tick_size"]
+
     def _tick(price):
         return round(round(price / tick) * tick, 10)
 
@@ -276,8 +297,13 @@ def build_signal(
         "pivot_low_idx": impulse["pivot_low_idx"],
         "pivot_high_idx": impulse["pivot_high_idx"],
         # Champs neutres pour cohérence avec les schémas signal composite/OPR
-        "quality": 0.0, "composite": 0.0, "alignment": 0.0,
-        "atr_ratio": 0.0, "n_tf": 1, "touches": 0, "regime": "FIB",
+        "quality": 0.0,
+        "composite": 0.0,
+        "alignment": 0.0,
+        "atr_ratio": 0.0,
+        "n_tf": 1,
+        "touches": 0,
+        "regime": "FIB",
         "zone_low": float(impulse["swing_low"]),
         "zone_high": float(impulse["swing_high"]),
         "tp_type": "atr",

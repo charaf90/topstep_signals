@@ -42,9 +42,7 @@ comparaison apples-to-apples, opr_h4-v1 reste sur le même régime brut. Cf.
 rapport opr_h4 pour explication détaillée.
 """
 
-from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -53,27 +51,39 @@ import pandas as pd
 # projet l'impose en tête de tout module potentiellement stochastique).
 np.random.seed(42)
 
-import config as cfg
 from config import (
-    INSTRUMENTS, RISK_PER_TRADE_USD, OPR_ENABLED,
-    OPR_TIMEZONE, OPR_WINDOW_START, OPR_WINDOW_END, OPR_SESSION_END,
-    OPR_ATR_PERIOD, OPR_SL_ATR_MULT, OPR_TP_ATR_MULT, OPR_SL_MIN_POINTS,
-    OPR_MAX_TRADES_PER_DAY,
-    OPR_H4_STRATEGY_VERSION, OPR_H4_BUFFER_ATR, OPR_H4_TICKERS,
-    OPR_H4_ICHIMOKU_TENKAN, OPR_H4_ICHIMOKU_KIJUN,
-    OPR_H4_ICHIMOKU_SENKOU_B, OPR_H4_ICHIMOKU_SHIFT,
-    OPR_H4_INTRADAY_ATR_PERIOD,
+    CONSEC_LOSS_PAUSE_DAYS,
     CUTOFF_HOUR_UTC,
-    DAILY_STOP_AFTER_SL, CONSEC_LOSS_PAUSE_DAYS, DAILY_LOCKIN_THRESHOLD,
+    DAILY_LOCKIN_THRESHOLD,
+    DAILY_STOP_AFTER_SL,
+    INSTRUMENTS,
+    OPR_ATR_PERIOD,
+    OPR_ENABLED,
+    OPR_H4_BUFFER_ATR,
+    OPR_H4_ICHIMOKU_KIJUN,
+    OPR_H4_ICHIMOKU_SENKOU_B,
+    OPR_H4_ICHIMOKU_SHIFT,
+    OPR_H4_ICHIMOKU_TENKAN,
+    OPR_H4_INTRADAY_ATR_PERIOD,
+    OPR_H4_STRATEGY_VERSION,
+    OPR_H4_TICKERS,
+    OPR_MAX_TRADES_PER_DAY,
+    OPR_SESSION_END,
+    OPR_SL_ATR_MULT,
+    OPR_SL_MIN_POINTS,
+    OPR_TIMEZONE,
+    OPR_TP_ATR_MULT,
+    OPR_WINDOW_END,
+    OPR_WINDOW_START,
+    RISK_PER_TRADE_USD,
 )
 from core.explore_chart import compute_ichimoku
 from core.risk_topstep import trade_allowed
 
-
 # ── Identité de la stratégie ─────────────────────────────────────────────────
-STRATEGY_ID = OPR_H4_STRATEGY_VERSION          # "opr_h4-v1"
-TICKERS     = list(OPR_H4_TICKERS)             # ["MES1", "NQ1", "YM1"]
-CSV_SUFFIX  = "_opr_h4"
+STRATEGY_ID = OPR_H4_STRATEGY_VERSION  # "opr_h4-v1"
+TICKERS = list(OPR_H4_TICKERS)  # ["MES1", "NQ1", "YM1"]
+CSV_SUFFIX = "_opr_h4"
 CSV_TIMEFRAME = "m15"
 
 # ── Grille d'optimisation (walk-forward via core/optimizer.py) ───────────────
@@ -88,8 +98,10 @@ PARAM_GRID = {
 # Helpers timezone (clonés de core/opr.py — sans coupling)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _ny_session_view(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
-                     tz: ZoneInfo) -> Optional[pd.DataFrame]:
+
+def _ny_session_view(
+    df_15m: pd.DataFrame, day_ny: pd.Timestamp, tz: ZoneInfo
+) -> pd.DataFrame | None:
     """Vue de session bornée [WINDOW_START NY, SESSION_END NY] inclusivement."""
     if df_15m.empty:
         return None
@@ -102,15 +114,13 @@ def _ny_session_view(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
 
     h_start, m_start = OPR_WINDOW_START
     h_end, m_end = OPR_SESSION_END
-    session_start = day_ny.replace(hour=h_start, minute=m_start,
-                                   second=0, microsecond=0)
-    session_end = day_ny.replace(hour=h_end, minute=m_end,
-                                 second=0, microsecond=0)
+    session_start = day_ny.replace(hour=h_start, minute=m_start, second=0, microsecond=0)
+    session_end = day_ny.replace(hour=h_end, minute=m_end, second=0, microsecond=0)
     mask = (df_ny.index >= session_start) & (df_ny.index <= session_end)
     return df_ny.loc[mask]
 
 
-def _opr_bar(df_session_ny: pd.DataFrame) -> Optional[pd.Series]:
+def _opr_bar(df_session_ny: pd.DataFrame) -> pd.Series | None:
     """Bougie OPR = pic de volume dans la fenêtre [OPR_WINDOW_START, OPR_WINDOW_END[."""
     if df_session_ny is None or df_session_ny.empty:
         return None
@@ -121,16 +131,14 @@ def _opr_bar(df_session_ny: pd.DataFrame) -> Optional[pd.Series]:
     day_anchor = df_session_ny.index[0].normalize()
     win_start = day_anchor.replace(hour=h_start, minute=m_start)
     win_end = day_anchor.replace(hour=h_end, minute=m_end)
-    cand = df_session_ny[(df_session_ny.index >= win_start)
-                         & (df_session_ny.index < win_end)]
+    cand = df_session_ny[(df_session_ny.index >= win_start) & (df_session_ny.index < win_end)]
     if cand.empty or float(cand["volume"].sum()) <= 0:
         return None
     peak_ts = cand["volume"].idxmax()
     return df_session_ny.loc[peak_ts]
 
 
-def _compute_atr_daily(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
-                       period: int) -> Optional[float]:
+def _compute_atr_daily(df_15m: pd.DataFrame, day_ny: pd.Timestamp, period: int) -> float | None:
     """ATR journalier — référence pour SL/TP (clone de core/opr.py, sans leak)."""
     if df_15m.empty or period <= 0:
         return None
@@ -144,19 +152,31 @@ def _compute_atr_daily(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
         before = df_15m[df_15m.index < day_start_utc]
     if len(before) < period * 80:
         return None
-    daily = before.resample("D").agg({
-        "open": "first", "high": "max", "low": "min", "close": "last",
-    }).dropna()
+    daily = (
+        before.resample("D")
+        .agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+            }
+        )
+        .dropna()
+    )
     if len(daily) < period + 1:
         return None
     high = daily["high"]
     low = daily["low"]
     prev_close = daily["close"].shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     atr = tr.rolling(period).mean().dropna()
     if atr.empty:
         return None
@@ -173,11 +193,14 @@ def _wilder_atr_15m(df_15m: pd.DataFrame, period: int) -> pd.Series:
     """
     high, low, close = df_15m["high"], df_15m["low"], df_15m["close"]
     prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     # Wilder smoothing : EMA avec alpha = 1/period, adjust=False
     return tr.ewm(alpha=1.0 / period, adjust=False).mean()
 
@@ -186,9 +209,18 @@ def _wilder_atr_15m(df_15m: pd.DataFrame, period: int) -> pd.Series:
 # Trade builder (clone de core/opr.py)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _make_signal(ticker: str, direction: str, entry: float,
-                 opr_high: float, opr_low: float, trigger_time: pd.Timestamp,
-                 sl_pts: float, tp_pts: float, atr_daily: float) -> Optional[Dict]:
+
+def _make_signal(
+    ticker: str,
+    direction: str,
+    entry: float,
+    opr_high: float,
+    opr_low: float,
+    trigger_time: pd.Timestamp,
+    sl_pts: float,
+    tp_pts: float,
+    atr_daily: float,
+) -> dict | None:
     inst = INSTRUMENTS[ticker]
     tick = inst["tick_size"]
     dpp = inst["dollar_per_point"]
@@ -213,21 +245,29 @@ def _make_signal(ticker: str, direction: str, entry: float,
         return None
     risk = n_ct * sl_pts * dpp
     return {
-        "ticker": ticker, "strategy": "OPR_H4", "direction": direction,
-        "entry": float(entry), "sl": float(sl_price), "tp": float(tp_price),
-        "sl_dist": float(sl_pts), "tp_dist": float(tp_pts),
+        "ticker": ticker,
+        "strategy": "OPR_H4",
+        "direction": direction,
+        "entry": float(entry),
+        "sl": float(sl_price),
+        "tp": float(tp_price),
+        "sl_dist": float(sl_pts),
+        "tp_dist": float(tp_pts),
         "rr": round(tp_pts / sl_pts, 2),
-        "n_ct": int(n_ct), "risk": float(risk),
-        "opr_high": float(opr_high), "opr_low": float(opr_low),
-        "opr_range": float(opr_high - opr_low), "atr_daily": float(atr_daily),
+        "n_ct": int(n_ct),
+        "risk": float(risk),
+        "opr_high": float(opr_high),
+        "opr_low": float(opr_low),
+        "opr_range": float(opr_high - opr_low),
+        "atr_daily": float(atr_daily),
         "trigger_time": str(trigger_time),
-        "zone_low": float(opr_low), "zone_high": float(opr_high),
+        "zone_low": float(opr_low),
+        "zone_high": float(opr_high),
         "regime": "OPR_H4",
     }
 
 
-def _check_trigger(bar: pd.Series, opr_high: float, opr_low: float
-                   ) -> Optional[str]:
+def _check_trigger(bar: pd.Series, opr_high: float, opr_low: float) -> str | None:
     o = float(bar["open"])
     c = float(bar["close"])
     if o < opr_high and c > opr_high:
@@ -244,6 +284,7 @@ def _bar_hits(direction: str, level: float, bar: pd.Series) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Filtre H4 — cloud Ichimoku 15m + buffer ATR
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _passes_h4_cloud_filter(
     direction: str,
@@ -298,6 +339,7 @@ def _passes_h4_cloud_filter(
 # Moteur de session (1 jour) — clone de core/opr.run_opr_day + filtre H4
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _run_opr_h4_day(
     df_15m_full: pd.DataFrame,
     senkou_a_15m: pd.Series,
@@ -308,7 +350,7 @@ def _run_opr_h4_day(
     sl_mult: float,
     tp_mult: float,
     buffer_atr: float,
-) -> Tuple[List[Dict], List[Dict]]:
+) -> tuple[list[dict], list[dict]]:
     """
     Joue une session 1 jour. Identique à core.opr.run_opr_day SAUF :
       • Les filtres OPR_MIN_EXCURSION_ATR / OPR_MAX_VOL_ZSCORE ne sont PAS
@@ -353,14 +395,13 @@ def _run_opr_h4_day(
         return [], []
 
     h_close, m_close = OPR_SESSION_END
-    session_end_t = day_ny.replace(hour=h_close, minute=m_close,
-                                   second=0, microsecond=0)
+    session_end_t = day_ny.replace(hour=h_close, minute=m_close, second=0, microsecond=0)
     opr_ts_ny = opr_bar.name
 
-    pending: Optional[Dict] = None
-    position: Optional[Dict] = None
-    signals: List[Dict] = []
-    trades: List[Dict] = []
+    pending: dict | None = None
+    position: dict | None = None
+    signals: list[dict] = []
+    trades: list[dict] = []
     n_fills = 0
 
     bars = df_session
@@ -372,7 +413,7 @@ def _run_opr_h4_day(
     # df_15m_full.
     idx_full = df_15m_full.index
     # Construit un dict {ts_utc_naive: int_pos}
-    pos_map: Dict[pd.Timestamp, int] = {}
+    pos_map: dict[pd.Timestamp, int] = {}
     for k, ts_utc in enumerate(idx_full):
         pos_map[ts_utc] = k
 
@@ -416,16 +457,18 @@ def _run_opr_h4_day(
                 exit_price = float(bar["close"])
 
             if result is not None:
-                pnl_pts = (exit_price - entry) if direction == "long" \
-                    else (entry - exit_price)
+                pnl_pts = (exit_price - entry) if direction == "long" else (entry - exit_price)
                 pnl = n_ct * pnl_pts * dpp
-                trades.append({
-                    "_signal_idx": position["signal_idx"],
-                    "result": result, "pnl": float(pnl),
-                    "exit": float(exit_price),
-                    "fill_time": str(position["fill_time"]),
-                    "exit_time": str(ts),
-                })
+                trades.append(
+                    {
+                        "_signal_idx": position["signal_idx"],
+                        "result": result,
+                        "pnl": float(pnl),
+                        "exit": float(exit_price),
+                        "fill_time": str(position["fill_time"]),
+                        "exit_time": str(ts),
+                    }
+                )
                 position = None
                 continue
             continue
@@ -444,9 +487,12 @@ def _run_opr_h4_day(
                     sig_idx = pending["signal_idx"]
                     position = {
                         "direction": direction,
-                        "entry": sig["entry"], "sl": sig["sl"],
-                        "tp": sig["tp"], "n_ct": sig["n_ct"],
-                        "fill_time": ts, "signal_idx": sig_idx,
+                        "entry": sig["entry"],
+                        "sl": sig["sl"],
+                        "tp": sig["tp"],
+                        "n_ct": sig["n_ct"],
+                        "fill_time": ts,
+                        "signal_idx": sig_idx,
                     }
                     n_fills += 1
                     pending = None
@@ -472,17 +518,22 @@ def _run_opr_h4_day(
                     elif hit_tp:
                         result, exit_price = "TP", tp
                     if result is not None:
-                        pnl_pts = (exit_price - position["entry"]) \
-                            if direction == "long" \
+                        pnl_pts = (
+                            (exit_price - position["entry"])
+                            if direction == "long"
                             else (position["entry"] - exit_price)
+                        )
                         pnl = position["n_ct"] * pnl_pts * dpp
-                        trades.append({
-                            "_signal_idx": position["signal_idx"],
-                            "result": result, "pnl": float(pnl),
-                            "exit": float(exit_price),
-                            "fill_time": str(position["fill_time"]),
-                            "exit_time": str(ts),
-                        })
+                        trades.append(
+                            {
+                                "_signal_idx": position["signal_idx"],
+                                "result": result,
+                                "pnl": float(pnl),
+                                "exit": float(exit_price),
+                                "fill_time": str(position["fill_time"]),
+                                "exit_time": str(ts),
+                            }
+                        )
                         position = None
                     continue
 
@@ -512,26 +563,38 @@ def _run_opr_h4_day(
                 continue
 
         if not _passes_h4_cloud_filter(
-            direction=trig, bar_idx=bar_idx,
-            senkou_a_15m=senkou_a_15m, senkou_b_15m=senkou_b_15m,
-            close_15m=df_15m_full["close"], atr_15m=atr_15m,
+            direction=trig,
+            bar_idx=bar_idx,
+            senkou_a_15m=senkou_a_15m,
+            senkou_b_15m=senkou_b_15m,
+            close_15m=df_15m_full["close"],
+            atr_15m=atr_15m,
             buffer_atr=buffer_atr,
         ):
             continue
 
         entry_level = opr_high if trig == "long" else opr_low
         sig = _make_signal(
-            ticker=ticker, direction=trig, entry=entry_level,
-            opr_high=opr_high, opr_low=opr_low, trigger_time=ts,
-            sl_pts=sl_pts, tp_pts=tp_pts, atr_daily=atr_daily,
+            ticker=ticker,
+            direction=trig,
+            entry=entry_level,
+            opr_high=opr_high,
+            opr_low=opr_low,
+            trigger_time=ts,
+            sl_pts=sl_pts,
+            tp_pts=tp_pts,
+            atr_daily=atr_daily,
         )
         if sig is None:
             continue
         sig_idx = len(signals)
         signals.append(sig)
         pending = {
-            "direction": trig, "entry": entry_level,
-            "signal": sig, "signal_idx": sig_idx, "armed_at": ts,
+            "direction": trig,
+            "entry": entry_level,
+            "signal": sig,
+            "signal_idx": sig_idx,
+            "armed_at": ts,
         }
 
     # Fin de boucle
@@ -539,32 +602,50 @@ def _run_opr_h4_day(
         last_bar = bars.iloc[-1]
         exit_price = float(last_bar["close"])
         direction = position["direction"]
-        pnl_pts = (exit_price - position["entry"]) if direction == "long" \
+        pnl_pts = (
+            (exit_price - position["entry"])
+            if direction == "long"
             else (position["entry"] - exit_price)
+        )
         pnl = position["n_ct"] * pnl_pts * dpp
-        trades.append({
-            "_signal_idx": position["signal_idx"],
-            "result": "TE", "pnl": float(pnl), "exit": float(exit_price),
-            "fill_time": str(position["fill_time"]),
-            "exit_time": str(timestamps[-1]),
-        })
+        trades.append(
+            {
+                "_signal_idx": position["signal_idx"],
+                "result": "TE",
+                "pnl": float(pnl),
+                "exit": float(exit_price),
+                "fill_time": str(position["fill_time"]),
+                "exit_time": str(timestamps[-1]),
+            }
+        )
         position = None
     if pending is not None:
-        trades.append({
-            "_signal_idx": pending["signal_idx"],
-            "result": "NOT_FILLED", "pnl": 0.0, "exit": None,
-            "fill_time": None, "exit_time": None,
-        })
+        trades.append(
+            {
+                "_signal_idx": pending["signal_idx"],
+                "result": "NOT_FILLED",
+                "pnl": 0.0,
+                "exit": None,
+                "fill_time": None,
+                "exit_time": None,
+            }
+        )
         pending = None
 
     # 1:1 signaux ↔ trades par index
     indexed = {t["_signal_idx"]: t for t in trades}
-    out_trades: List[Dict] = []
+    out_trades: list[dict] = []
     for i in range(len(signals)):
-        t = indexed.get(i, {
-            "result": "NOT_FILLED", "pnl": 0.0,
-            "exit": None, "fill_time": None, "exit_time": None,
-        })
+        t = indexed.get(
+            i,
+            {
+                "result": "NOT_FILLED",
+                "pnl": 0.0,
+                "exit": None,
+                "fill_time": None,
+                "exit_time": None,
+            },
+        )
         t = {k: v for k, v in t.items() if k != "_signal_idx"}
         out_trades.append(t)
     return signals, out_trades
@@ -573,6 +654,7 @@ def _run_opr_h4_day(
 # ═══════════════════════════════════════════════════════════════════════════════
 # Interface plug-and-play : run_backtest
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def run_backtest(
     df_15m: pd.DataFrame,
@@ -634,9 +716,7 @@ def run_backtest(
             continue
 
         if topstep_guard:
-            allowed, _ = trade_allowed(
-                day_pnl=0.0, cum_pnl=cum_pnl, peak_pnl=peak_pnl
-            )
+            allowed, _ = trade_allowed(day_pnl=0.0, cum_pnl=cum_pnl, peak_pnl=peak_pnl)
             if not allowed:
                 continue
 
@@ -647,7 +727,8 @@ def run_backtest(
             atr_15m=atr_15m,
             ticker=ticker,
             day_ny=day_ny,
-            sl_mult=sl_mult, tp_mult=tp_mult,
+            sl_mult=sl_mult,
+            tp_mult=tp_mult,
             buffer_atr=buffer_atr,
         )
         if not signals:
@@ -655,24 +736,26 @@ def run_backtest(
 
         day_trades = []
         for sig, res in zip(signals, sim_results):
-            day_trades.append({
-                "date": ds,
-                "strategy": "OPR_H4",
-                "dir": sig["direction"],
-                "entry": sig["entry"],
-                "sl": sig["sl"],
-                "tp": sig["tp"],
-                "sl_dist": sig["sl_dist"],
-                "tp_dist": sig["tp_dist"],
-                "rr": sig["rr"],
-                "n_ct": sig["n_ct"],
-                "risk_$": sig["risk"],
-                "regime": sig["regime"],
-                "zone_low": sig["zone_low"],
-                "zone_high": sig["zone_high"],
-                "trigger_time": sig.get("trigger_time"),
-                **res,
-            })
+            day_trades.append(
+                {
+                    "date": ds,
+                    "strategy": "OPR_H4",
+                    "dir": sig["direction"],
+                    "entry": sig["entry"],
+                    "sl": sig["sl"],
+                    "tp": sig["tp"],
+                    "sl_dist": sig["sl_dist"],
+                    "tp_dist": sig["tp_dist"],
+                    "rr": sig["rr"],
+                    "n_ct": sig["n_ct"],
+                    "risk_$": sig["risk"],
+                    "regime": sig["regime"],
+                    "zone_low": sig["zone_low"],
+                    "zone_high": sig["zone_high"],
+                    "trigger_time": sig.get("trigger_time"),
+                    **res,
+                }
+            )
 
         filled = [t for t in day_trades if t["result"] != "NOT_FILLED"]
         not_filled = [t for t in day_trades if t["result"] == "NOT_FILLED"]
@@ -688,14 +771,24 @@ def run_backtest(
                 continue
             kept.append(t)
             running_pnl += t["pnl"]
-            if DAILY_STOP_AFTER_SL and t["result"] == "SL":
-                breaker_armed = True
-            elif DAILY_LOCKIN_THRESHOLD > 0 and running_pnl >= DAILY_LOCKIN_THRESHOLD:
+            if (
+                DAILY_STOP_AFTER_SL
+                and t["result"] == "SL"
+                or DAILY_LOCKIN_THRESHOLD > 0
+                and running_pnl >= DAILY_LOCKIN_THRESHOLD
+            ):
                 breaker_armed = True
 
         for t in cancelled_cb:
-            t.update({"result": "NOT_FILLED", "pnl": 0,
-                      "fill_time": None, "exit_time": None, "exit": None})
+            t.update(
+                {
+                    "result": "NOT_FILLED",
+                    "pnl": 0,
+                    "fill_time": None,
+                    "exit_time": None,
+                    "exit": None,
+                }
+            )
 
         trades_out.extend(kept + not_filled + cancelled_cb)
 
@@ -715,6 +808,7 @@ def run_backtest(
 # Chart d'une journée
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def plot_day(
     df_15m: pd.DataFrame,
     ticker: str,
@@ -732,27 +826,38 @@ def plot_day(
     opr_bar = _opr_bar(df_session) if df_session is not None else None
 
     cutoff = pd.Timestamp(f"{date_str} {CUTOFF_HOUR_UTC:02d}:00:00")
-    us_end = (day_ny.replace(hour=16, minute=30)
-              .tz_convert("UTC").tz_localize(None))
+    us_end = day_ny.replace(hour=16, minute=30).tz_convert("UTC").tz_localize(None)
 
     zones_for_chart = []
     if opr_bar is not None:
         opr_high = float(opr_bar["high"])
         opr_low = float(opr_bar["low"])
-        zones_for_chart.append({
-            "low": opr_low, "high": opr_high,
-            "mid": (opr_high + opr_low) / 2.0,
-            "quality": 100.0, "n_tf": 1, "touches": 1,
-            "tfs": ["OPR_H4"], "dominant_tf": "OPR_H4",
-            "start_time": opr_bar.name.tz_convert("UTC").tz_localize(None),
-        })
+        zones_for_chart.append(
+            {
+                "low": opr_low,
+                "high": opr_high,
+                "mid": (opr_high + opr_low) / 2.0,
+                "quality": 100.0,
+                "n_tf": 1,
+                "touches": 1,
+                "tfs": ["OPR_H4"],
+                "dominant_tf": "OPR_H4",
+                "start_time": opr_bar.name.tz_convert("UTC").tz_localize(None),
+            }
+        )
 
     plot_day_analysis(
-        df_15m=df_15m, ticker=ticker, date_str=date_str,
-        cutoff=cutoff, us_end=us_end,
+        df_15m=df_15m,
+        ticker=ticker,
+        date_str=date_str,
+        cutoff=cutoff,
+        us_end=us_end,
         zones=zones_for_chart,
         signals=[t for t in day_trades if t.get("result") != "NOT_FILLED"],
-        trades=day_trades, regime=None, alignment_score=None,
-        pm_features=None, vol_features=None,
+        trades=day_trades,
+        regime=None,
+        alignment_score=None,
+        pm_features=None,
+        vol_features=None,
         output_path=output_path,
     )

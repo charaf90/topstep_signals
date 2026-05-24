@@ -37,9 +37,9 @@ def test_golden_master(strategy_name: str) -> None:
     actual = build_baseline(strategy_name)
 
     # Comparaison fine pour produire un message d'erreur utile
-    assert actual["strategy_id"] == expected["strategy_id"], (
-        f"strategy_id changé : {expected['strategy_id']} → {actual['strategy_id']}"
-    )
+    assert (
+        actual["strategy_id"] == expected["strategy_id"]
+    ), f"strategy_id changé : {expected['strategy_id']} → {actual['strategy_id']}"
 
     for ticker in expected["tickers"]:
         assert ticker in actual["tickers"], f"Ticker manquant dans actual : {ticker}"
@@ -48,8 +48,7 @@ def test_golden_master(strategy_name: str) -> None:
 
         if "missing_data" in exp:
             assert "missing_data" in act, (
-                f"[{strategy_name}/{ticker}] baseline marqué missing_data, "
-                f"actual a des données"
+                f"[{strategy_name}/{ticker}] baseline marqué missing_data, " f"actual a des données"
             )
             continue
 

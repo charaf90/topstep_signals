@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 import requests
 
@@ -38,13 +37,12 @@ def send(message: str, parse_mode: str = "HTML") -> bool:
     Envoie un message au chat Telegram configuré dans .env.
     Retourne True si succès, False sinon (échoue silencieusement).
     """
-    env      = _load_env()
-    token    = env.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id  = env.get("TELEGRAM_CHAT_ID",   "").strip()
+    env = _load_env()
+    token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = env.get("TELEGRAM_CHAT_ID", "").strip()
 
     if not token or not chat_id:
-        print("[tg_notify] Token ou chat_id manquant — message non envoyé",
-              file=sys.stderr)
+        print("[tg_notify] Token ou chat_id manquant — message non envoyé", file=sys.stderr)
         return False
 
     try:
@@ -68,7 +66,7 @@ def send_code(title: str, body: str) -> bool:
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args:
-        print("Usage : python broker/tg_notify.py \"message\"")
+        print('Usage : python broker/tg_notify.py "message"')
         sys.exit(1)
 
     parse_mode = "HTML"
@@ -77,5 +75,5 @@ if __name__ == "__main__":
         args = args[1:]
 
     msg = " ".join(args).replace("\\n", "\n")
-    ok  = send(msg, parse_mode=parse_mode)
+    ok = send(msg, parse_mode=parse_mode)
     sys.exit(0 if ok else 1)

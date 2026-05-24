@@ -18,37 +18,49 @@ Sortie :
 Usage :
   python scripts/data_science_fib_v4.py
 """
+
 from __future__ import annotations
+
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
-import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 from scipy.stats import pearsonr, spearmanr
-from sklearn.tree import DecisionTreeClassifier, export_text
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier, export_text
 
 OUTPUT_DIR = PROJECT_ROOT / "output"
 RNG = np.random.default_rng(42)
 
 FEATURES_NUM = [
-    "bars_to_fill", "pivot_break_atr", "mae_pending_atr",
-    "wick_through_atr", "dist_to_ema_fast_atr", "bar_color_streak_pre",
+    "bars_to_fill",
+    "pivot_break_atr",
+    "mae_pending_atr",
+    "wick_through_atr",
+    "dist_to_ema_fast_atr",
+    "bar_color_streak_pre",
     "volume_at_arm_norm",
-    "bars_since_confirm", "adx_at_arm", "adx_slope_3", "ema_stack_atr",
-    "price_extension_atr", "impulse_velocity_atr", "impulse_size_atr",
-    "recent_vol_atr", "session_hour_utc",
+    "bars_since_confirm",
+    "adx_at_arm",
+    "adx_slope_3",
+    "ema_stack_atr",
+    "price_extension_atr",
+    "impulse_velocity_atr",
+    "impulse_size_atr",
+    "recent_vol_atr",
+    "session_hour_utc",
 ]
 
 N_PERMUTATIONS = 10_000
@@ -69,8 +81,14 @@ def best_threshold_univariate(df: pd.DataFrame, feat: str, n_grid: int = 21) -> 
         return {}
     qs = np.linspace(0.1, 0.9, n_grid)
     candidates = np.quantile(s, qs)
-    best = {"feature": feat, "direction": None, "threshold": None,
-            "pf_after": float("nan"), "n_after": 0, "pf_before": pf(df["pnl"].to_numpy())}
+    best = {
+        "feature": feat,
+        "direction": None,
+        "threshold": None,
+        "pf_after": float("nan"),
+        "n_after": 0,
+        "pf_before": pf(df["pnl"].to_numpy()),
+    }
     base_pf = best["pf_before"]
     for thr in candidates:
         for direction in ("gt", "lt"):
@@ -84,15 +102,18 @@ def best_threshold_univariate(df: pd.DataFrame, feat: str, n_grid: int = 21) -> 
             cur_pf = pf(kept)
             if pd.isna(best["pf_after"]) or cur_pf > best["pf_after"]:
                 best.update(
-                    direction=direction, threshold=float(thr),
-                    pf_after=cur_pf, n_after=int(mask.sum()),
+                    direction=direction,
+                    threshold=float(thr),
+                    pf_after=cur_pf,
+                    n_after=int(mask.sum()),
                     delta_pf=cur_pf - base_pf,
                 )
     return best
 
 
-def permutation_test_pf(df: pd.DataFrame, feat: str, direction: str,
-                         threshold: float, n_iter: int = N_PERMUTATIONS) -> float:
+def permutation_test_pf(
+    df: pd.DataFrame, feat: str, direction: str, threshold: float, n_iter: int = N_PERMUTATIONS
+) -> float:
     """Test : la PF après filtre est-elle significativement > random ?"""
     mask = (df[feat] > threshold) if direction == "gt" else (df[feat] < threshold)
     n_kept = int(mask.sum())
@@ -130,8 +151,7 @@ def fit_models(X: pd.DataFrame, y: np.ndarray):
     }
 
     # Random Forest
-    rf = RandomForestClassifier(n_estimators=200, max_depth=4,
-                                 random_state=42, n_jobs=-1)
+    rf = RandomForestClassifier(n_estimators=200, max_depth=4, random_state=42, n_jobs=-1)
     rf.fit(X, y)
     results["random_forest"] = {
         "feature_importance": dict(zip(X.columns, rf.feature_importances_)),
@@ -162,10 +182,12 @@ def fit_models(X: pd.DataFrame, y: np.ndarray):
 def top_features_consensus(model_results: dict, k: int = 5) -> list:
     """Combine les rankings des 4 méthodes pour un top-k consensus."""
     methods = {
-        "decision_tree":           model_results["decision_tree"]["feature_importance"],
-        "random_forest":           model_results["random_forest"]["feature_importance"],
-        "logistic_regression":     {f: abs(v) for f, v in model_results["logistic_regression"]["coefficients"].items()},
-        "permutation_importance":  model_results["permutation_importance"]["mean"],
+        "decision_tree": model_results["decision_tree"]["feature_importance"],
+        "random_forest": model_results["random_forest"]["feature_importance"],
+        "logistic_regression": {
+            f: abs(v) for f, v in model_results["logistic_regression"]["coefficients"].items()
+        },
+        "permutation_importance": model_results["permutation_importance"]["mean"],
     }
     # Rank moyen (1 = meilleur)
     all_features = list(next(iter(methods.values())).keys())
@@ -225,10 +247,14 @@ def main():
 
     lines = []
     lines.append("# Phase 3b — Data science fib-v4 (sklearn + permutation tests)\n")
-    lines.append(f"**Méthodologie** : reproduction de OPR v5.1 — 4 modèles "
-                 f"sklearn + permutation tests à {N_PERMUTATIONS:,} itérations.\n")
-    lines.append(f"**Population globale** : {len(df_all)} trades sur "
-                 f"{df_all['cell_id'].nunique()} cellules viables.\n")
+    lines.append(
+        f"**Méthodologie** : reproduction de OPR v5.1 — 4 modèles "
+        f"sklearn + permutation tests à {N_PERMUTATIONS:,} itérations.\n"
+    )
+    lines.append(
+        f"**Population globale** : {len(df_all)} trades sur "
+        f"{df_all['cell_id'].nunique()} cellules viables.\n"
+    )
 
     # ── A. Corrélations globales ──
     lines.append("\n## A. Corrélations globales feature ↔ PnL\n")
@@ -242,9 +268,7 @@ def main():
             continue
         r_p, p_p = pearsonr(d[feat], d["pnl"])
         r_s, p_s = spearmanr(d[feat], d["pnl"])
-        lines.append(
-            f"| `{feat}` | {r_p:+.3f} | {p_p:.4f} | {r_s:+.3f} | {p_s:.4f} |"
-        )
+        lines.append(f"| `{feat}` | {r_p:+.3f} | {p_p:.4f} | {r_s:+.3f} | {p_s:.4f} |")
 
     # ── B. Grid univarié — meilleur seuil par feature ──
     lines.append("\n\n## B. Grid univarié — meilleur seuil par feature\n")
@@ -283,46 +307,51 @@ def main():
     print(f"  Ajustement modèles globaux ({len(X)} échantillons)...")
     models = fit_models(X, y)
 
-    lines.append("\n### Decision Tree (depth=2)\n```\n"
-                 f"{models['decision_tree']['tree_text']}\n```")
+    lines.append(
+        "\n### Decision Tree (depth=2)\n```\n" f"{models['decision_tree']['tree_text']}\n```"
+    )
 
     lines.append("\n### Random Forest — Top importances\n")
-    rf_imp = sorted(models["random_forest"]["feature_importance"].items(),
-                    key=lambda x: -x[1])
+    rf_imp = sorted(models["random_forest"]["feature_importance"].items(), key=lambda x: -x[1])
     for f, v in rf_imp[:8]:
         lines.append(f"- `{f}` : {v:.3f}")
 
     lines.append("\n### Logistic Regression — Top coefficients (|c|)\n")
-    lr_coefs = sorted(models["logistic_regression"]["coefficients"].items(),
-                      key=lambda x: -abs(x[1]))
+    lr_coefs = sorted(
+        models["logistic_regression"]["coefficients"].items(), key=lambda x: -abs(x[1])
+    )
     for f, v in lr_coefs[:8]:
         sign = "+" if v > 0 else "−"
-        lines.append(f"- `{f}` : {sign}{abs(v):.3f}  (effet "
-                     f"{'augmente P(win)' if v > 0 else 'réduit P(win)'})")
+        lines.append(
+            f"- `{f}` : {sign}{abs(v):.3f}  (effet "
+            f"{'augmente P(win)' if v > 0 else 'réduit P(win)'})"
+        )
 
     lines.append("\n### Permutation importance — Top (mean)\n")
-    perm_imp = sorted(models["permutation_importance"]["mean"].items(),
-                      key=lambda x: -x[1])
+    perm_imp = sorted(models["permutation_importance"]["mean"].items(), key=lambda x: -x[1])
     for f, v in perm_imp[:8]:
         std = models["permutation_importance"]["std"][f]
         lines.append(f"- `{f}` : {v:+.4f} ± {std:.4f}")
 
     # ── D. Consensus top features ──
     consensus = top_features_consensus(models, k=5)
-    lines.append(f"\n### Consensus top-5 (rank moyen des 4 méthodes)\n")
+    lines.append("\n### Consensus top-5 (rank moyen des 4 méthodes)\n")
     for i, f in enumerate(consensus, 1):
         lines.append(f"{i}. `{f}`")
 
     # ── E. Permutation tests sur le top univariate ──
     lines.append("\n\n## D. Permutation tests (significativité statistique)\n")
-    lines.append(f"Test : la PF observée après filtre est-elle supérieure "
-                 f"à des filtres aléatoires de même n ? "
-                 f"({N_PERMUTATIONS:,} itérations)\n")
+    lines.append(
+        f"Test : la PF observée après filtre est-elle supérieure "
+        f"à des filtres aléatoires de même n ? "
+        f"({N_PERMUTATIONS:,} itérations)\n"
+    )
     lines.append("| Feature | Filtre | PF observée | p-value | Verdict |")
     lines.append("|---|---|---|---|---|")
     for b in univariate_results[:8]:
-        p = permutation_test_pf(df_all, b["feature"], b["direction"],
-                                 b["threshold"], n_iter=N_PERMUTATIONS)
+        p = permutation_test_pf(
+            df_all, b["feature"], b["direction"], b["threshold"], n_iter=N_PERMUTATIONS
+        )
         if pd.isna(p):
             continue
         if p < 0.001:
@@ -366,7 +395,7 @@ def main():
             )
 
     # ── Visuels ──
-    print(f"  Génération figures...")
+    print("  Génération figures...")
     plot_feature_importance(models, OUTPUT_DIR / "fib_v4_feature_importance.png")
     # Décile pour les 3 top features
     plot_decile_pf(df_all, consensus[:3], OUTPUT_DIR / "fib_v4_decile_pf.png")

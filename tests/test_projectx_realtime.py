@@ -8,18 +8,19 @@ push dans la queue + drop-oldest + reconnect.
 
 Tous les tests doivent tourner offline en < 100 ms chacun.
 """
+
 from __future__ import annotations
 
 import time
-import threading
+
 import pytest
 
-from broker.projectx_realtime import ProjectXRealtimeClient, RealtimeEvent
-
+from broker.projectx_realtime import ProjectXRealtimeClient
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fake SignalR — patch via monkeypatch fixture
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class FakeHubConnection:
     """Imite l'API HubConnection de signalrcore 0.9.5."""
@@ -31,17 +32,24 @@ class FakeHubConnection:
         self._on_error_cb = None
         self._on_reconnect_cb = None
         self.started = False
-        self.sent = []   # list of (method, args) pour vérifier les subscribes
+        self.sent = []  # list of (method, args) pour vérifier les subscribes
         self.stop_called = 0
 
     # ── API consommée par notre client ──
     def on(self, event_name, callback):
         self.handlers[event_name] = callback
 
-    def on_open(self, cb):       self._on_open_cb = cb
-    def on_close(self, cb):      self._on_close_cb = cb
-    def on_error(self, cb):      self._on_error_cb = cb
-    def on_reconnect(self, cb):  self._on_reconnect_cb = cb
+    def on_open(self, cb):
+        self._on_open_cb = cb
+
+    def on_close(self, cb):
+        self._on_close_cb = cb
+
+    def on_error(self, cb):
+        self._on_error_cb = cb
+
+    def on_reconnect(self, cb):
+        self._on_reconnect_cb = cb
 
     def send(self, method, args):
         self.sent.append((method, list(args)))
@@ -68,15 +76,20 @@ class FakeHubConnection:
 class FakeBuilder:
     """Imite la chaîne fluent HubConnectionBuilder()...build()."""
 
-    instances = []   # accumulateur des HubConnections créés (pour rebuild test)
+    instances = []  # accumulateur des HubConnections créés (pour rebuild test)
 
     def __init__(self):
         self._connection = FakeHubConnection()
         FakeBuilder.instances.append(self._connection)
 
-    def with_url(self, *_, **__):              return self
-    def with_automatic_reconnect(self, *_, **__): return self
-    def build(self):                            return self._connection
+    def with_url(self, *_, **__):
+        return self
+
+    def with_automatic_reconnect(self, *_, **__):
+        return self
+
+    def build(self):
+        return self._connection
 
     @classmethod
     def reset(cls):
@@ -110,8 +123,8 @@ def client(patched_signalr):
         hub_url="https://fake/hub",
         queue_maxsize=4,
         reconnect_delays=(0,),  # pas d'attente en test
-        max_silence_s=0.5,      # 500 ms — pour tester zombie rapidement
-        force_reauth_s=1e9,     # jamais en test
+        max_silence_s=0.5,  # 500 ms — pour tester zombie rapidement
+        force_reauth_s=1e9,  # jamais en test
         market_open_check=lambda: True,
     )
     rt._token_calls = token_calls
@@ -122,6 +135,7 @@ def client(patched_signalr):
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_subscribe_on_open_sends_4_methods(client, patched_signalr):
     """À l'open, le client doit envoyer les 4 subscriptions User Hub."""
@@ -147,14 +161,21 @@ def test_order_event_pushes_to_queue(client, patched_signalr):
     """
     client.start()
     hub = patched_signalr.instances[-1]
-    hub.fire("GatewayUserOrder", {
-        "action": 1,
-        "data": {
-            "id": 42, "contractId": "CON.F.US.MNQ.M26",
-            "customTag": "OPR_NQ1_20260518_long_1",
-            "status": 1, "type": 1, "side": 0, "size": 1,
-        }
-    })
+    hub.fire(
+        "GatewayUserOrder",
+        {
+            "action": 1,
+            "data": {
+                "id": 42,
+                "contractId": "CON.F.US.MNQ.M26",
+                "customTag": "OPR_NQ1_20260518_long_1",
+                "status": 1,
+                "type": 1,
+                "side": 0,
+                "size": 1,
+            },
+        },
+    )
     events = client.drain_events()
     assert len(events) == 1
     assert events[0].kind == "order"
@@ -168,13 +189,18 @@ def test_trade_event_extracts_pnl(client, patched_signalr):
     """GatewayUserTrade avec profitAndLoss doit remplir RealtimeEvent.pnl."""
     client.start()
     hub = patched_signalr.instances[-1]
-    hub.fire("GatewayUserTrade", {
-        "action": 1,
-        "data": {
-            "orderId": 7, "contractId": "CON.F.US.MES.M26",
-            "customTag": "TEST", "profitAndLoss": 123.45,
-        }
-    })
+    hub.fire(
+        "GatewayUserTrade",
+        {
+            "action": 1,
+            "data": {
+                "orderId": 7,
+                "contractId": "CON.F.US.MES.M26",
+                "customTag": "TEST",
+                "profitAndLoss": 123.45,
+            },
+        },
+    )
     events = client.drain_events()
     assert len(events) == 1
     assert events[0].kind == "trade"
@@ -185,10 +211,7 @@ def test_position_event_extracts_size(client, patched_signalr):
     """GatewayUserPosition doit remplir RealtimeEvent.size (incluant 0 pour flat)."""
     client.start()
     hub = patched_signalr.instances[-1]
-    hub.fire("GatewayUserPosition", {
-        "action": 1,
-        "data": {"contractId": "ABC", "size": 0}
-    })
+    hub.fire("GatewayUserPosition", {"action": 1, "data": {"contractId": "ABC", "size": 0}})
     events = client.drain_events()
     assert events[0].size == 0
 
@@ -203,8 +226,8 @@ def test_payload_envelope_unwrapping(client, patched_signalr):
     hub.fire("GatewayUserOrder", {"id": 200})
     events = client.drain_events()
     assert len(events) == 2
-    assert events[0].order_id == 100   # wrappé
-    assert events[1].order_id == 200   # raw
+    assert events[0].order_id == 100  # wrappé
+    assert events[1].order_id == 200  # raw
 
 
 def test_queue_overflow_drops_oldest(client, patched_signalr):
@@ -212,8 +235,7 @@ def test_queue_overflow_drops_oldest(client, patched_signalr):
     client.start()
     hub = patched_signalr.instances[-1]
     for i in range(10):
-        hub.fire("GatewayUserOrder",
-                  {"action": 1, "data": {"id": i, "contractId": "X"}})
+        hub.fire("GatewayUserOrder", {"action": 1, "data": {"id": i, "contractId": "X"}})
     events = client.drain_events()
     assert len(events) == 4
     # Les 4 derniers : 6,7,8,9
@@ -255,8 +277,14 @@ def test_health_snapshot(client, patched_signalr):
     """health() retourne un dict avec les clés attendues."""
     client.start()
     h = client.health()
-    for key in ["connected", "queue_depth", "dropped_events",
-                "last_event_age_s", "disconnect_count", "reconnect_attempt"]:
+    for key in [
+        "connected",
+        "queue_depth",
+        "dropped_events",
+        "last_event_age_s",
+        "disconnect_count",
+        "reconnect_attempt",
+    ]:
         assert key in h
     assert h["connected"] is True
 

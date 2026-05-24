@@ -26,6 +26,7 @@ Estimation a priori : fidélité M5 ≈ 82-85 %.
 Usage :
     python -m scripts.live_eq_v5_1_m5 --csv-dir ./data
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,19 +39,17 @@ import pandas as pd
 
 np.random.seed(42)
 
-import config as cfg
 from config import (
+    COMMISSION_RT_PER_CONTRACT,
     OPR_TIMEZONE,
     OPR_V5_1_F2_MIN_ATR,
     SLIPPAGE_TICKS_PER_TICKER,
-    COMMISSION_RT_PER_CONTRACT,
 )
 from core.data import load_csv
-from core.opr import _compute_atr_daily, OPR_ATR_PERIOD
 from core.metrics import compute_stats
+from core.opr import OPR_ATR_PERIOD, _compute_atr_daily
 from core.optimizer import OOS_START
 from strategies import opr_v5_1 as v51
-
 
 SELECTED_TICKERS = ["NQ1", "YM1"]
 DOLLARS_PER_TICK = {"MES1": 1.25, "NQ1": 0.50, "YM1": 0.50}
@@ -59,6 +58,7 @@ DOLLARS_PER_TICK = {"MES1": 1.25, "NQ1": 0.50, "YM1": 0.50}
 # ─────────────────────────────────────────────────────────────────────────────
 # Recalcul F2 pre-fill sur M5 (au lieu de M15)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def compute_f2_pre_fill_m5(
     df_m5_ny: pd.DataFrame,
@@ -84,8 +84,7 @@ def compute_f2_pre_fill_m5(
     # Approche simple : bougie de fill = floor(fill_ts à 5 min)
     fill_m5_start = fill_ts.floor("5min")
 
-    bars = df_m5_ny[(df_m5_ny.index >= trigger_ts) &
-                    (df_m5_ny.index < fill_m5_start)]
+    bars = df_m5_ny[(df_m5_ny.index >= trigger_ts) & (df_m5_ny.index < fill_m5_start)]
 
     if len(bars) == 0:
         return 0.0
@@ -102,6 +101,7 @@ def compute_f2_pre_fill_m5(
 # Friction (identique au script M15)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def friction_per_trade(ticker: str, n_ct: int) -> float:
     slip_ticks = SLIPPAGE_TICKS_PER_TICKER.get(ticker, 1)
     dollars_per_tick = DOLLARS_PER_TICK.get(ticker, 0.50)
@@ -116,8 +116,11 @@ def add_net_pnl(trades: pd.DataFrame) -> pd.DataFrame:
         out["pnl_net"] = pd.Series(dtype=float)
         return out
     out["friction"] = out.apply(
-        lambda r: friction_per_trade(r.get("ticker", "?"), int(r.get("n_ct", 1) or 1))
-        if r.get("result", "NOT_FILLED") != "NOT_FILLED" else 0.0,
+        lambda r: (
+            friction_per_trade(r.get("ticker", "?"), int(r.get("n_ct", 1) or 1))
+            if r.get("result", "NOT_FILLED") != "NOT_FILLED"
+            else 0.0
+        ),
         axis=1,
     )
     out["pnl_net"] = out["pnl"] - out["friction"]
@@ -127,6 +130,7 @@ def add_net_pnl(trades: pd.DataFrame) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline principal
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def run_live_eq_m5(csv_dir: str, oos_start: str = OOS_START) -> dict:
     tz = ZoneInfo(OPR_TIMEZONE)
@@ -142,6 +146,7 @@ def run_live_eq_m5(csv_dir: str, oos_start: str = OOS_START) -> dict:
         df_15m = load_csv(str(csv_m15))
         # tf pour run_backtest — pas vraiment utilisé par v5_1 mais requis
         from core.data import build_timeframes
+
         tf = build_timeframes(df_15m)
 
         # M5 pour le recalcul F2 fine
@@ -160,8 +165,7 @@ def run_live_eq_m5(csv_dir: str, oos_start: str = OOS_START) -> dict:
             df_m5_ny.index = df_m5_ny.index.tz_convert(tz)
 
         # 1. Run v5.1 backtest (post-fill, params optima config)
-        trades_post = v51.run_backtest(df_15m, ticker, tf=tf, params=None,
-                                        topstep_guard=False)
+        trades_post = v51.run_backtest(df_15m, ticker, tf=tf, params=None, topstep_guard=False)
         trades_post["ticker"] = ticker
         trades_post_oos = trades_post[trades_post["date"] >= oos_start].copy()
         trades_post_oos = trades_post_oos.reset_index(drop=True)
@@ -327,7 +331,7 @@ def main():
 
     print("=" * 70)
     print("  LIVE-EQUIVALENCE M5 — opr-v5.1 (NQ1+YM1)")
-    print(f"  Schéma A (entrée différée) avec data M5 (granularité 5 min)")
+    print("  Schéma A (entrée différée) avec data M5 (granularité 5 min)")
     print("=" * 70)
 
     results = run_live_eq_m5(args.csv_dir, args.oos_start)

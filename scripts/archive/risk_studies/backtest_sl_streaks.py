@@ -12,10 +12,8 @@ Sortie : output/sl_streaks/
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "OPR/NQ1 (v5.1)": ROOT / "output/backtest_NQ1_opr_v5_1.csv",
     "OPR/YM1 (v5.1)": ROOT / "output/backtest_YM1_opr_v5_1.csv",
-    "FIB/MES1 (v4)":  ROOT / "output/backtest_MES1_fib_v4.csv",
-    "FIB/NQ1 (v4)":   ROOT / "output/backtest_NQ1_fib_v4.csv",
-    "FIB/MGC1 (v4)":  ROOT / "output/backtest_MGC1_fib_v4.csv",
+    "FIB/MES1 (v4)": ROOT / "output/backtest_MES1_fib_v4.csv",
+    "FIB/NQ1 (v4)": ROOT / "output/backtest_NQ1_fib_v4.csv",
+    "FIB/MGC1 (v4)": ROOT / "output/backtest_MGC1_fib_v4.csv",
 }
 
 REFERENCE_RISK = 200
@@ -33,7 +31,7 @@ OUTDIR = ROOT / "output/sl_streaks"
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_trades_chrono(risk: int) -> Dict[str, pd.DataFrame]:
+def load_trades_chrono(risk: int) -> dict[str, pd.DataFrame]:
     """Charge chaque stratégie, rescale PnL, trie par fill_time si dispo sinon date."""
     out = {}
     for name, path in FILES.items():
@@ -56,7 +54,7 @@ def load_trades_chrono(risk: int) -> Dict[str, pd.DataFrame]:
     return out
 
 
-def compute_intraday_streaks(df: pd.DataFrame) -> List[Dict]:
+def compute_intraday_streaks(df: pd.DataFrame) -> list[dict]:
     """
     Pour chaque jour, identifie les streaks de SL consécutifs (au sein du jour).
     Retourne une liste de dicts avec longueur, date.
@@ -112,22 +110,24 @@ def cutoff_cost_benefit(df_with_streak: pd.DataFrame, max_n: int = 5) -> pd.Data
         kept_pnl = kept["pnl_rescaled"].sum()
         blocked_wins = blocked[blocked["pnl_rescaled"] > 0]
         blocked_losses = blocked[blocked["pnl_rescaled"] < 0]
-        rows.append({
-            "N": n,
-            "n_blocked": int(len(blocked)),
-            "n_kept": int(len(kept)),
-            "blocked_pnl": float(blocked_pnl),
-            "blocked_wins_$": float(blocked_wins["pnl_rescaled"].sum()),
-            "blocked_losses_$": float(blocked_losses["pnl_rescaled"].sum()),
-            "n_blocked_wins": int(len(blocked_wins)),
-            "n_blocked_losses": int(len(blocked_losses)),
-            "kept_pnl": float(kept_pnl),
-            "delta_vs_baseline": float(kept_pnl - total_pnl),
-        })
+        rows.append(
+            {
+                "N": n,
+                "n_blocked": int(len(blocked)),
+                "n_kept": int(len(kept)),
+                "blocked_pnl": float(blocked_pnl),
+                "blocked_wins_$": float(blocked_wins["pnl_rescaled"].sum()),
+                "blocked_losses_$": float(blocked_losses["pnl_rescaled"].sum()),
+                "n_blocked_wins": int(len(blocked_wins)),
+                "n_blocked_losses": int(len(blocked_losses)),
+                "kept_pnl": float(kept_pnl),
+                "delta_vs_baseline": float(kept_pnl - total_pnl),
+            }
+        )
     return pd.DataFrame(rows)
 
 
-def plot_streaks_intraday(trades_by_strat: Dict[str, pd.DataFrame]) -> Path:
+def plot_streaks_intraday(trades_by_strat: dict[str, pd.DataFrame]) -> Path:
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
     for ax, (name, df) in zip(axes.flat[:5], trades_by_strat.items()):
         streaks = compute_intraday_streaks(df)
@@ -135,9 +135,16 @@ def plot_streaks_intraday(trades_by_strat: Dict[str, pd.DataFrame]) -> Path:
         if not lens:
             ax.text(0.5, 0.5, "Aucun streak", ha="center", va="center")
         else:
-            ax.hist(lens, bins=range(1, max(lens) + 2),
-                    color="#d62728", alpha=0.75, edgecolor="black", align="left")
+            ax.hist(
+                lens,
+                bins=range(1, max(lens) + 2),
+                color="#d62728",
+                alpha=0.75,
+                edgecolor="black",
+                align="left",
+            )
             from collections import Counter
+
             cnt = Counter(lens)
             for k, v in sorted(cnt.items()):
                 ax.text(k, v + 0.5, str(v), ha="center", fontsize=9)
@@ -146,8 +153,11 @@ def plot_streaks_intraday(trades_by_strat: Dict[str, pd.DataFrame]) -> Path:
         ax.set_ylabel("Nb d'occurrences")
         ax.grid(alpha=0.3, axis="y")
     axes.flat[5].axis("off")
-    plt.suptitle("Distribution des streaks de SL consécutifs intra-day (toutes périodes)",
-                 fontsize=12, fontweight="bold")
+    plt.suptitle(
+        "Distribution des streaks de SL consécutifs intra-day (toutes périodes)",
+        fontsize=12,
+        fontweight="bold",
+    )
     plt.tight_layout()
     path = OUTDIR / "streaks_intraday.png"
     plt.savefig(path, dpi=110, bbox_inches="tight")
@@ -155,27 +165,29 @@ def plot_streaks_intraday(trades_by_strat: Dict[str, pd.DataFrame]) -> Path:
     return path
 
 
-def plot_cutoff_analysis(trades_by_strat: Dict[str, pd.DataFrame]) -> Path:
+def plot_cutoff_analysis(trades_by_strat: dict[str, pd.DataFrame]) -> Path:
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
     ax1, ax2 = axes
     for color, (name, df) in zip(colors, trades_by_strat.items()):
         df_s = streak_position_history(df)
         cb = cutoff_cost_benefit(df_s, max_n=5)
-        ax1.plot(cb["N"], cb["delta_vs_baseline"], marker="o",
-                 label=name, linewidth=1.8, color=color)
-        ax2.plot(cb["N"], cb["n_blocked"], marker="s",
-                 label=name, linewidth=1.8, color=color)
+        ax1.plot(
+            cb["N"], cb["delta_vs_baseline"], marker="o", label=name, linewidth=1.8, color=color
+        )
+        ax2.plot(cb["N"], cb["n_blocked"], marker="s", label=name, linewidth=1.8, color=color)
     ax1.axhline(0, color="black", linewidth=0.5)
-    ax1.set_title("Impact PnL d'un cutoff après N SL/jour (par stratégie)",
-                  fontsize=11, fontweight="bold")
+    ax1.set_title(
+        "Impact PnL d'un cutoff après N SL/jour (par stratégie)", fontsize=11, fontweight="bold"
+    )
     ax1.set_xlabel("N (cut après N SL consécutifs intra-day)")
     ax1.set_ylabel("Δ PnL vs baseline ($)")
     ax1.legend(fontsize=8)
     ax1.grid(alpha=0.3)
 
-    ax2.set_title("Nb de trades qui auraient été bloqués (par stratégie)",
-                  fontsize=11, fontweight="bold")
+    ax2.set_title(
+        "Nb de trades qui auraient été bloqués (par stratégie)", fontsize=11, fontweight="bold"
+    )
     ax2.set_xlabel("N (cut après N SL consécutifs intra-day)")
     ax2.set_ylabel("Nb trades bloqués")
     ax2.legend(fontsize=8)
@@ -194,14 +206,18 @@ def main():
     print(f"  {n_total} trades sur {len(trades_by_strat)} stratégies")
 
     print("→ Charts streaks intra-day + cutoff…")
-    p1 = plot_streaks_intraday(trades_by_strat); print(f"  {p1}")
-    p2 = plot_cutoff_analysis(trades_by_strat); print(f"  {p2}")
+    p1 = plot_streaks_intraday(trades_by_strat)
+    print(f"  {p1}")
+    p2 = plot_cutoff_analysis(trades_by_strat)
+    print(f"  {p2}")
 
     print("→ Report.md…")
     lines = []
     lines.append(f"# Analyse séquences de SL consécutifs (risk = ${REFERENCE_RISK}/trade)\n")
-    lines.append("**Objectif** : calibrer un éventuel garde-fou "
-                 "« stop trading sur ce ticker après N SL le même jour ».\n")
+    lines.append(
+        "**Objectif** : calibrer un éventuel garde-fou "
+        "« stop trading sur ce ticker après N SL le même jour ».\n"
+    )
     lines.append(f"Stratégies : {list(trades_by_strat.keys())}\n")
 
     # 1. Distribution streaks intra-day
@@ -216,6 +232,7 @@ def main():
             lines.append(f"| {name} | — | — | — | — | — | — |")
             continue
         from collections import Counter
+
         c = Counter(lens)
         ge5 = sum(v for k, v in c.items() if k >= 5)
         lines.append(
@@ -237,12 +254,16 @@ def main():
 
     # 3. Analyse coût/bénéfice cutoff
     lines.append("\n## 3. Analyse coût/bénéfice — cutoff après N SL intra-day\n")
-    lines.append("Pour chaque seuil N : on simule « si après N SL on arrête de "
-                 "trader CE TICKER pour la journée, quel impact ?»\n")
-    lines.append("- **n_blocked** : trades qui n'auraient pas été pris\n"
-                 "- **delta_pnl** : variation PnL portfolio (négatif = on aurait perdu en bloquant, positif = gain)\n"
-                 "- **gains_loss** : gains qu'on aurait raté ($)\n"
-                 "- **losses_avoided** : pertes qu'on aurait évité ($)")
+    lines.append(
+        "Pour chaque seuil N : on simule « si après N SL on arrête de "
+        "trader CE TICKER pour la journée, quel impact ?»\n"
+    )
+    lines.append(
+        "- **n_blocked** : trades qui n'auraient pas été pris\n"
+        "- **delta_pnl** : variation PnL portfolio (négatif = on aurait perdu en bloquant, positif = gain)\n"
+        "- **gains_loss** : gains qu'on aurait raté ($)\n"
+        "- **losses_avoided** : pertes qu'on aurait évité ($)"
+    )
 
     portfolio_summary = []
     for name, df in trades_by_strat.items():
@@ -276,10 +297,13 @@ def main():
         if best["delta_vs_baseline"] <= 0:
             explanation = "aucun cutoff bénéfique"
         else:
-            explanation = f"évite ${-best['blocked_losses_$']:,.0f}, " \
-                          f"rate ${best['blocked_wins_$']:,.0f}"
-        lines.append(f"| {name} | N={int(best['N'])} | "
-                     f"${best['delta_vs_baseline']:+,.0f} | {explanation} |")
+            explanation = (
+                f"évite ${-best['blocked_losses_$']:,.0f}, " f"rate ${best['blocked_wins_$']:,.0f}"
+            )
+        lines.append(
+            f"| {name} | N={int(best['N'])} | "
+            f"${best['delta_vs_baseline']:+,.0f} | {explanation} |"
+        )
 
     (OUTDIR / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\n✓ Tout dans {OUTDIR}/")

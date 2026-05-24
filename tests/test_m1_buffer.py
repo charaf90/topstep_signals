@@ -13,36 +13,42 @@ Couvre :
 
 Tous offline, < 10 ms par test.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from broker.m1_buffer import M1Bar, M1Buffer, _floor_minute
 from broker.projectx_market_realtime import MarketEvent
 
-
 CID = "CON.F.US.MNQ.M26"
 
 
 def _trade(price: float, vol: int, ts: datetime, cid: str = CID) -> MarketEvent:
     return MarketEvent(
-        kind="trade", contract_id=cid,
-        ts_exchange=ts, price=price, volume=vol,
+        kind="trade",
+        contract_id=cid,
+        ts_exchange=ts,
+        price=price,
+        volume=vol,
     )
 
 
 def _quote(ts: datetime, cid: str = CID) -> MarketEvent:
     return MarketEvent(
-        kind="quote", contract_id=cid,
-        ts_exchange=ts, best_bid=100.0, best_ask=100.5,
+        kind="quote",
+        contract_id=cid,
+        ts_exchange=ts,
+        best_bid=100.0,
+        best_ask=100.5,
     )
 
 
 @pytest.fixture
 def base_ts():
-    return datetime(2026, 5, 18, 14, 30, 0, tzinfo=timezone.utc)
+    return datetime(2026, 5, 18, 14, 30, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -53,6 +59,7 @@ def buf():
 # ─────────────────────────────────────────────────────────────────────────────
 # Aggrégation
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_aggregation_ohlcv_within_one_minute(buf, base_ts):
     """3 trades dans la même minute → 1 bar avec OHLCV cohérent."""
@@ -69,7 +76,7 @@ def test_aggregation_ohlcv_within_one_minute(buf, base_ts):
     assert cur.volume == 6
     assert cur.n_ticks == 3
     assert not cur.closed
-    assert buf.get_recent_bars(CID) == []   # rien de fermé encore
+    assert buf.get_recent_bars(CID) == []  # rien de fermé encore
 
 
 def test_bar_closes_on_minute_rollover(buf, base_ts):
@@ -116,6 +123,7 @@ def test_out_of_order_trade_dropped(buf, base_ts):
 # Filtrage des non-trades
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_quote_events_ignored(buf, base_ts):
     """Les quotes ne contribuent pas au bar M1 (choix Phase C)."""
     buf.consume(_quote(base_ts.replace(second=5)))
@@ -125,8 +133,7 @@ def test_quote_events_ignored(buf, base_ts):
 
 
 def test_trade_without_price_ignored(buf, base_ts):
-    evt = MarketEvent(kind="trade", contract_id=CID,
-                      ts_exchange=base_ts, price=None, volume=1)
+    evt = MarketEvent(kind="trade", contract_id=CID, ts_exchange=base_ts, price=None, volume=1)
     buf.consume(evt)
     assert buf.get_current_forming_bar(CID) is None
 
@@ -135,12 +142,27 @@ def test_trade_without_price_ignored(buf, base_ts):
 # inject_bars (gap-fill REST)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_inject_bars_marks_REST(buf, base_ts):
     bars = [
-        M1Bar(contract_id=CID, start_ts=base_ts.replace(minute=20),
-              open=100.0, high=101.0, low=99.5, close=100.5, volume=50),
-        M1Bar(contract_id=CID, start_ts=base_ts.replace(minute=21),
-              open=100.5, high=102.0, low=100.0, close=101.5, volume=80),
+        M1Bar(
+            contract_id=CID,
+            start_ts=base_ts.replace(minute=20),
+            open=100.0,
+            high=101.0,
+            low=99.5,
+            close=100.5,
+            volume=50,
+        ),
+        M1Bar(
+            contract_id=CID,
+            start_ts=base_ts.replace(minute=21),
+            open=100.5,
+            high=102.0,
+            low=100.0,
+            close=101.5,
+            volume=80,
+        ),
     ]
     n = buf.inject_bars(bars)
     assert n == 2
@@ -158,10 +180,17 @@ def test_inject_dedup_priority_to_WS(buf, base_ts):
     # Maintenant minute 30 est closed (WS)
 
     # Tentative d'injection sur minute 30 (qui existe déjà en WS)
-    rest_bar = M1Bar(contract_id=CID, start_ts=base_ts.replace(minute=30),
-                     open=999.0, high=999.0, low=999.0, close=999.0, volume=99)
+    rest_bar = M1Bar(
+        contract_id=CID,
+        start_ts=base_ts.replace(minute=30),
+        open=999.0,
+        high=999.0,
+        low=999.0,
+        close=999.0,
+        volume=99,
+    )
     n = buf.inject_bars([rest_bar])
-    assert n == 0   # skip — déjà présent
+    assert n == 0  # skip — déjà présent
     out = buf.get_recent_bars(CID)
     assert len(out) == 1
     assert out[0].open == 100.0  # WS conservé
@@ -171,12 +200,33 @@ def test_inject_dedup_priority_to_WS(buf, base_ts):
 def test_inject_bars_sorted_after_mixed_insert(buf, base_ts):
     """Inject en désordre puis tri auto."""
     bars = [
-        M1Bar(contract_id=CID, start_ts=base_ts.replace(minute=25),
-              open=2, high=2, low=2, close=2, volume=1),
-        M1Bar(contract_id=CID, start_ts=base_ts.replace(minute=20),
-              open=1, high=1, low=1, close=1, volume=1),
-        M1Bar(contract_id=CID, start_ts=base_ts.replace(minute=22),
-              open=1.5, high=1.5, low=1.5, close=1.5, volume=1),
+        M1Bar(
+            contract_id=CID,
+            start_ts=base_ts.replace(minute=25),
+            open=2,
+            high=2,
+            low=2,
+            close=2,
+            volume=1,
+        ),
+        M1Bar(
+            contract_id=CID,
+            start_ts=base_ts.replace(minute=20),
+            open=1,
+            high=1,
+            low=1,
+            close=1,
+            volume=1,
+        ),
+        M1Bar(
+            contract_id=CID,
+            start_ts=base_ts.replace(minute=22),
+            open=1.5,
+            high=1.5,
+            low=1.5,
+            close=1.5,
+            volume=1,
+        ),
     ]
     buf.inject_bars(bars)
     out = buf.get_recent_bars(CID, n=10)
@@ -187,6 +237,7 @@ def test_inject_bars_sorted_after_mixed_insert(buf, base_ts):
 # ─────────────────────────────────────────────────────────────────────────────
 # flush_stale_bars
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_flush_stale_closes_bar_when_minute_passed(buf, base_ts):
     buf.consume(_trade(100.0, 1, base_ts.replace(second=5)))
@@ -210,6 +261,7 @@ def test_flush_stale_keeps_bar_if_still_in_minute(buf, base_ts):
 # ─────────────────────────────────────────────────────────────────────────────
 # Lecture
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_get_bars_since(buf, base_ts):
     """get_bars_since filtre correctement par start_ts."""
@@ -256,6 +308,7 @@ def test_get_recent_bars_include_forming(buf, base_ts):
 # Multi-contract
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_multiple_contracts_isolated(buf, base_ts):
     """Deux contracts → buffers indépendants."""
     buf.consume(_trade(100.0, 1, base_ts.replace(second=5), cid="A"))
@@ -271,7 +324,7 @@ def test_multiple_contracts_isolated(buf, base_ts):
 
 def test_empty_buffer_returns_empty(buf):
     assert buf.get_recent_bars(CID) == []
-    assert buf.get_bars_since(CID, datetime(2026, 1, 1, tzinfo=timezone.utc)) == []
+    assert buf.get_bars_since(CID, datetime(2026, 1, 1, tzinfo=UTC)) == []
     assert buf.get_current_forming_bar(CID) is None
     assert buf.contracts() == []
 
@@ -279,6 +332,7 @@ def test_empty_buffer_returns_empty(buf):
 # ─────────────────────────────────────────────────────────────────────────────
 # Validation
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_floor_minute_naive_assumes_utc(base_ts):
     naive = base_ts.replace(tzinfo=None, second=42)

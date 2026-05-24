@@ -12,24 +12,23 @@ visible (low.min / high.max), pas sur les zones — cela garantit qu'on voit
 toujours le mouvement du prix en clair.
 """
 
-from typing import Dict, List, Optional
-
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
-from matplotlib.lines import Line2D
 
+matplotlib.use("Agg")
 from zoneinfo import ZoneInfo
 
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+
 from config import (
-    INSTRUMENTS, CHART_STYLE,
     ANALYSIS_CHART_CONTEXT_BEFORE,
+    CHART_STYLE,
+    INSTRUMENTS,
     OPR_TIMEZONE,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────
 # Palette
@@ -44,11 +43,11 @@ TV_DIM = "#787b86"
 
 # Couleur par TF — D1 le plus saillant, 15m le plus discret
 TF_COLORS = {
-    "D1":  "#f7b801",   # ambre
-    "H4":  "#a566ff",   # violet
-    "H1":  "#42a5f5",   # bleu clair
-    "15m": "#9e9e9e",   # gris
-    "OPR": "#ffd54f",   # jaune (zone OPR)
+    "D1": "#f7b801",  # ambre
+    "H4": "#a566ff",  # violet
+    "H1": "#42a5f5",  # bleu clair
+    "15m": "#9e9e9e",  # gris
+    "OPR": "#ffd54f",  # jaune (zone OPR)
 }
 
 EXIT_COLORS = {"TP": TV_GREEN, "SL": TV_RED, "TE": TV_ORANGE}
@@ -57,6 +56,7 @@ EXIT_COLORS = {"TP": TV_GREEN, "SL": TV_RED, "TE": TV_ORANGE}
 # ─────────────────────────────────────────────────────────────────────────
 # Helpers de tracé
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def _draw_candles(ax, data, x):
     """Bougies OHLC sur axe x continu (mèches + corps)."""
@@ -73,8 +73,16 @@ def _draw_candles(ax, data, x):
         ax.plot([x[i], x[i]], [l[i], h[i]], color=clr, lw=0.6, alpha=0.9, zorder=2)
         body = max(o[i], c[i]) - min(o[i], c[i])
         if body > 0:
-            ax.bar(x[i], body, bottom=min(o[i], c[i]),
-                   width=bw, color=clr, edgecolor=clr, lw=0, zorder=2)
+            ax.bar(
+                x[i],
+                body,
+                bottom=min(o[i], c[i]),
+                width=bw,
+                color=clr,
+                edgecolor=clr,
+                lw=0,
+                zorder=2,
+            )
 
 
 def _draw_x_axis(ax, data, n, tz=None):
@@ -122,17 +130,15 @@ def _draw_volume_bars(ax, data, x):
     n = len(data)
     bw = max(0.35, min(0.7, 120 / max(n, 1)))
     colors = np.where(bull, TV_GREEN, TV_RED)
-    ax.bar(x, v, width=bw, color=colors, alpha=0.55,
-           edgecolor=colors, linewidth=0, zorder=2)
+    ax.bar(x, v, width=bw, color=colors, alpha=0.55, edgecolor=colors, linewidth=0, zorder=2)
     vmax = float(v.max()) if v.size else 1.0
     ax.set_ylim(0, vmax * 1.15)
     ax.set_yticks([])
-    ax.set_ylabel("vol", color=TV_DIM, fontsize=7, rotation=0,
-                  ha="right", va="center")
+    ax.set_ylabel("vol", color=TV_DIM, fontsize=7, rotation=0, ha="right", va="center")
     ax.grid(True, alpha=0.4, color="#1e222d", zorder=0)
 
 
-def _format_pm(pm: Optional[Dict]) -> str:
+def _format_pm(pm: dict | None) -> str:
     if not pm:
         return "n/a"
     return (
@@ -142,7 +148,7 @@ def _format_pm(pm: Optional[Dict]) -> str:
     )
 
 
-def _format_vol(vol: Optional[Dict]) -> str:
+def _format_vol(vol: dict | None) -> str:
     if not vol:
         return "n/a"
     return (
@@ -157,19 +163,20 @@ def _format_vol(vol: Optional[Dict]) -> str:
 # Plot principal
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def plot_day_analysis(
     df_15m: pd.DataFrame,
     ticker: str,
     date_str: str,
     cutoff: pd.Timestamp,
     us_end: pd.Timestamp,
-    zones: List[Dict],
-    signals: List[Dict],
-    trades: List[Dict],
-    regime: Optional[str],
-    alignment_score: Optional[float],
-    pm_features: Optional[Dict],
-    vol_features: Optional[Dict],
+    zones: list[dict],
+    signals: list[dict],
+    trades: list[dict],
+    regime: str | None,
+    alignment_score: float | None,
+    pm_features: dict | None,
+    vol_features: dict | None,
     output_path: str,
     context_before: int = None,
 ):
@@ -219,7 +226,10 @@ def plot_day_analysis(
     # Layout : prix (large) + volume (compact) — style TradingView.
     # `gridspec_kw` donne 4 fois plus de hauteur au prix qu'au volume.
     fig, (ax, ax_vol) = plt.subplots(
-        2, 1, figsize=(18, 10), sharex=True,
+        2,
+        1,
+        figsize=(18, 10),
+        sharex=True,
         gridspec_kw={"height_ratios": [4, 1], "hspace": 0.05},
     )
 
@@ -241,10 +251,7 @@ def plot_day_analysis(
     # ── Zones S/R agrégées ───────────────────────────────────────────────
     # Chaque zone est dessinée en bande horizontale colorée par TF dominante.
     # On limite à un nombre raisonnable pour ne pas saturer.
-    visible_zones = [
-        z for z in zones
-        if z["high"] >= y_lo and z["low"] <= y_hi
-    ]
+    visible_zones = [z for z in zones if z["high"] >= y_lo and z["low"] <= y_hi]
     visible_zones = sorted(visible_zones, key=lambda z: -z["quality"])[:12]
 
     used_tfs = set()
@@ -273,38 +280,51 @@ def plot_day_analysis(
                 x1 = int(data.index.get_indexer([et_ts], method="pad")[0])
 
         # Bande bornée (rectangle prix)
-        ax.fill_between([x0 - 0.5, x1 + 0.5],
-                        z["low"], z["high"],
-                        color=clr, alpha=0.18, zorder=1)
+        ax.fill_between([x0 - 0.5, x1 + 0.5], z["low"], z["high"], color=clr, alpha=0.18, zorder=1)
         # Bordures fines
-        ax.plot([x0 - 0.5, x1 + 0.5], [z["low"], z["low"]],
-                color=clr, lw=0.7, alpha=0.7, zorder=1)
-        ax.plot([x0 - 0.5, x1 + 0.5], [z["high"], z["high"]],
-                color=clr, lw=0.7, alpha=0.7, zorder=1)
+        ax.plot([x0 - 0.5, x1 + 0.5], [z["low"], z["low"]], color=clr, lw=0.7, alpha=0.7, zorder=1)
+        ax.plot(
+            [x0 - 0.5, x1 + 0.5], [z["high"], z["high"]], color=clr, lw=0.7, alpha=0.7, zorder=1
+        )
 
         # Étiquette : à gauche pour zones full-width, sinon contre la
         # bordure gauche de la zone bornée.
         tfs_str = "+".join(z.get("tfs", [dom_tf]))
         if st is not None and x0 > 0:
             ax.text(
-                x0, z["mid"],
+                x0,
+                z["mid"],
                 f" {tfs_str} Q{z['quality']:.0f} ({z['touches']}t)",
-                fontsize=6.5, color=clr, va="center", ha="left", alpha=0.95,
+                fontsize=6.5,
+                color=clr,
+                va="center",
+                ha="left",
+                alpha=0.95,
             )
         else:
             ax.text(
-                -2, z["mid"],
+                -2,
+                z["mid"],
                 f"{tfs_str} Q{z['quality']:.0f} ({z['touches']}t)",
-                fontsize=6.5, color=clr, va="center", ha="right", alpha=0.95,
+                fontsize=6.5,
+                color=clr,
+                va="center",
+                ha="right",
+                alpha=0.95,
             )
 
     # ── Marqueur cutoff (verticale) ──────────────────────────────────────
     ax.axvline(n_pre - 0.5, color=TV_FG, ls=":", lw=1.0, alpha=0.55, zorder=3)
-    ax_vol.axvline(n_pre - 0.5, color=TV_FG, ls=":", lw=1.0,
-                   alpha=0.55, zorder=3)
+    ax_vol.axvline(n_pre - 0.5, color=TV_FG, ls=":", lw=1.0, alpha=0.55, zorder=3)
     ax.text(
-        n_pre - 0.5, y_hi, "  cutoff",
-        fontsize=7.5, color=TV_FG, va="top", ha="left", alpha=0.65,
+        n_pre - 0.5,
+        y_hi,
+        "  cutoff",
+        fontsize=7.5,
+        color=TV_FG,
+        va="top",
+        ha="left",
+        alpha=0.65,
     )
 
     # ── Signaux & trades ─────────────────────────────────────────────────
@@ -351,29 +371,44 @@ def plot_day_analysis(
         # Lignes horizontales légères (scope = post-cutoff jusqu'à fin)
         x_left = n_pre - 0.5
         x_right = n - 1 + 0.5
-        ax.plot([x_left, x_right], [entry, entry], color=TV_BLUE,
-                ls="-", lw=1.4, alpha=0.85, zorder=4)
-        ax.plot([x_left, x_right], [sl, sl], color=TV_RED,
-                ls="--", lw=1.0, alpha=0.7, zorder=4)
-        ax.plot([x_left, x_right], [tp, tp], color=TV_GREEN,
-                ls="--", lw=1.0, alpha=0.7, zorder=4)
+        ax.plot(
+            [x_left, x_right], [entry, entry], color=TV_BLUE, ls="-", lw=1.4, alpha=0.85, zorder=4
+        )
+        ax.plot([x_left, x_right], [sl, sl], color=TV_RED, ls="--", lw=1.0, alpha=0.7, zorder=4)
+        ax.plot([x_left, x_right], [tp, tp], color=TV_GREEN, ls="--", lw=1.0, alpha=0.7, zorder=4)
 
         # Étiquettes droite : E#, SL#, TP#
-        ax.text(label_x, entry, f"  E{idx} {entry:.2f}",
-                fontsize=7, color=TV_BLUE, va="center", fontweight="bold",
-                bbox=dict(fc=TV_BG, ec=TV_BLUE, alpha=0.85,
-                          pad=2, boxstyle="round,pad=0.25"),
-                zorder=5)
-        ax.text(label_x, sl, f"  SL{idx} {sl:.2f}",
-                fontsize=6.5, color=TV_RED, va="center",
-                bbox=dict(fc=TV_BG, ec=TV_RED, alpha=0.85,
-                          pad=2, boxstyle="round,pad=0.25"),
-                zorder=5)
-        ax.text(label_x, tp, f"  TP{idx} {tp:.2f}",
-                fontsize=6.5, color=TV_GREEN, va="center",
-                bbox=dict(fc=TV_BG, ec=TV_GREEN, alpha=0.85,
-                          pad=2, boxstyle="round,pad=0.25"),
-                zorder=5)
+        ax.text(
+            label_x,
+            entry,
+            f"  E{idx} {entry:.2f}",
+            fontsize=7,
+            color=TV_BLUE,
+            va="center",
+            fontweight="bold",
+            bbox=dict(fc=TV_BG, ec=TV_BLUE, alpha=0.85, pad=2, boxstyle="round,pad=0.25"),
+            zorder=5,
+        )
+        ax.text(
+            label_x,
+            sl,
+            f"  SL{idx} {sl:.2f}",
+            fontsize=6.5,
+            color=TV_RED,
+            va="center",
+            bbox=dict(fc=TV_BG, ec=TV_RED, alpha=0.85, pad=2, boxstyle="round,pad=0.25"),
+            zorder=5,
+        )
+        ax.text(
+            label_x,
+            tp,
+            f"  TP{idx} {tp:.2f}",
+            fontsize=6.5,
+            color=TV_GREEN,
+            va="center",
+            bbox=dict(fc=TV_BG, ec=TV_GREEN, alpha=0.85, pad=2, boxstyle="round,pad=0.25"),
+            zorder=5,
+        )
 
         # Marqueur fill / exit si trade simulé.
         # Les timestamps OPR sont tz-aware NY ; on les ramène à la même
@@ -393,26 +428,52 @@ def plot_day_analysis(
                 if data.index[0] <= ft <= data.index[-1]:
                     fx = int(data.index.get_indexer([ft], method="pad")[0])
                     marker = "^" if direction == "long" else "v"
-                    ax.scatter(fx, entry, marker=marker, s=85,
-                               color=TV_BLUE, edgecolors="white",
-                               linewidths=0.7, zorder=6)
-                    ax.text(fx, entry, f" #{idx}", fontsize=6.5,
-                            color=TV_BLUE, va="bottom", ha="left",
-                            zorder=6)
+                    ax.scatter(
+                        fx,
+                        entry,
+                        marker=marker,
+                        s=85,
+                        color=TV_BLUE,
+                        edgecolors="white",
+                        linewidths=0.7,
+                        zorder=6,
+                    )
+                    ax.text(
+                        fx,
+                        entry,
+                        f" #{idx}",
+                        fontsize=6.5,
+                        color=TV_BLUE,
+                        va="bottom",
+                        ha="left",
+                        zorder=6,
+                    )
             exit_price = tr.get("exit")
             if et is not None and exit_price is not None:
                 et = _to_naive_utc(et)
                 if data.index[0] <= et <= data.index[-1]:
                     ex = int(data.index.get_indexer([et], method="pad")[0])
                     ec = EXIT_COLORS.get(tr["result"], "#ffffff")
-                    ax.scatter(ex, float(exit_price), marker="o", s=80,
-                               color=ec, edgecolors="white",
-                               linewidths=0.7, zorder=6)
+                    ax.scatter(
+                        ex,
+                        float(exit_price),
+                        marker="o",
+                        s=80,
+                        color=ec,
+                        edgecolors="white",
+                        linewidths=0.7,
+                        zorder=6,
+                    )
                     ax.text(
-                        ex, float(exit_price),
+                        ex,
+                        float(exit_price),
                         f" {tr['result']} ${tr.get('pnl', 0):+.0f}",
-                        fontsize=6.5, color=ec, va="bottom", ha="left",
-                        fontweight="bold", zorder=6,
+                        fontsize=6.5,
+                        color=ec,
+                        va="bottom",
+                        ha="left",
+                        fontweight="bold",
+                        zorder=6,
                     )
 
     # ── Bandeau récap des signaux (haut gauche) ──────────────────────────
@@ -436,12 +497,16 @@ def plot_day_analysis(
         lines = ["aucun signal généré ce jour"]
 
     ax.text(
-        0.005, 0.985, "\n".join(lines),
+        0.005,
+        0.985,
+        "\n".join(lines),
         transform=ax.transAxes,
-        fontsize=7.2, ha="left", va="top", color=TV_FG,
+        fontsize=7.2,
+        ha="left",
+        va="top",
+        color=TV_FG,
         family="monospace",
-        bbox=dict(fc=TV_BG, ec=TV_DIM, alpha=0.88,
-                  pad=5, boxstyle="round,pad=0.4"),
+        bbox=dict(fc=TV_BG, ec=TV_DIM, alpha=0.88, pad=5, boxstyle="round,pad=0.4"),
         zorder=7,
     )
 
@@ -454,12 +519,16 @@ def plot_day_analysis(
         f"vol: {_format_vol(vol_features)}",
     ]
     ax.text(
-        0.005, 0.015, "\n".join(context_lines),
+        0.005,
+        0.015,
+        "\n".join(context_lines),
         transform=ax.transAxes,
-        fontsize=7.2, ha="left", va="bottom", color=TV_FG,
+        fontsize=7.2,
+        ha="left",
+        va="bottom",
+        color=TV_FG,
         family="monospace",
-        bbox=dict(fc=TV_BG, ec=TV_DIM, alpha=0.88,
-                  pad=5, boxstyle="round,pad=0.4"),
+        bbox=dict(fc=TV_BG, ec=TV_DIM, alpha=0.88, pad=5, boxstyle="round,pad=0.4"),
         zorder=7,
     )
 
@@ -467,7 +536,8 @@ def plot_day_analysis(
     if used_tfs:
         legend_handles = [
             Patch(facecolor=TF_COLORS[tf], alpha=0.5, label=f"zones {tf}")
-            for tf in ["D1", "H4", "H1", "15m"] if tf in used_tfs
+            for tf in ["D1", "H4", "H1", "15m"]
+            if tf in used_tfs
         ]
         legend_handles += [
             Line2D([0], [0], color=TV_BLUE, lw=1.5, label="entry"),
@@ -475,8 +545,12 @@ def plot_day_analysis(
             Line2D([0], [0], color=TV_GREEN, lw=1.0, ls="--", label="TP"),
         ]
         ax.legend(
-            handles=legend_handles, loc="upper right",
-            fontsize=7, framealpha=0.85, facecolor=TV_BG, edgecolor=TV_DIM,
+            handles=legend_handles,
+            loc="upper right",
+            fontsize=7,
+            framealpha=0.85,
+            facecolor=TV_BG,
+            edgecolor=TV_DIM,
             labelcolor=TV_FG,
         )
 
@@ -494,20 +568,17 @@ def plot_day_analysis(
     ax.grid(True, alpha=0.5, color="#1e222d", zorder=0)
 
     # ── Titre ────────────────────────────────────────────────────────────
-    n_filled = sum(
-        1 for t in trades
-        if t.get("result") and t["result"] != "NOT_FILLED"
-    )
+    n_filled = sum(1 for t in trades if t.get("result") and t["result"] != "NOT_FILLED")
     day_pnl = sum(
-        float(t.get("pnl", 0) or 0) for t in trades
+        float(t.get("pnl", 0) or 0)
+        for t in trades
         if t.get("result") and t["result"] != "NOT_FILLED"
     )
     title = (
         f"{ticker}  •  {date_str}  •  15min  •  "
         f"{sig_count} signal(s)  /  {n_filled} fill(s)  •  P&L jour ${day_pnl:+,.0f}"
     )
-    ax.set_title(title, fontsize=11, pad=10, loc="left",
-                 color=TV_FG, fontweight="bold")
+    ax.set_title(title, fontsize=11, pad=10, loc="left", color=TV_FG, fontweight="bold")
 
     fig.savefig(output_path, dpi=160, bbox_inches="tight", facecolor=TV_BG)
     plt.close(fig)

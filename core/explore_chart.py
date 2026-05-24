@@ -32,19 +32,24 @@ import argparse
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from config import CHART_STYLE, MACRO_EVENT_DATES
-from core.data import load_csv, build_timeframes
 from core.analysis_chart import (
-    _draw_candles, _draw_volume_bars,
-    TV_GREEN, TV_RED, TV_BLUE, TV_ORANGE, TV_BG, TV_FG, TV_DIM,
+    TV_BG,
+    TV_BLUE,
+    TV_DIM,
+    TV_FG,
+    TV_ORANGE,
+    _draw_candles,
+    _draw_volume_bars,
 )
-
+from core.data import build_timeframes, load_csv
 
 np.random.seed(42)
 
@@ -55,15 +60,16 @@ CONTEXT = {
     # 15m : ~7h pré-marché + ~12.5h session US (= ~78 barres totales)
     "15m": {"before": 30, "after": 48},
     # H1  : 48h avant + 24h après (3 jours visibles)
-    "H1":  {"before": 48, "after": 24},
+    "H1": {"before": 48, "after": 24},
     # D1  : 15 jours avant + 15 jours après (1 mois visible)
-    "D1":  {"before": 15, "after": 15},
+    "D1": {"before": 15, "after": 15},
 }
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # Indicateurs (Wilder)
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def _wilder_smooth(values: pd.Series, period: int) -> pd.Series:
     """Lissage de Wilder (EMA avec alpha = 1/period)."""
@@ -74,11 +80,14 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """ATR de Wilder."""
     high, low, close = df["high"], df["low"], df["close"]
     prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     return _wilder_smooth(tr, period)
 
 
@@ -102,6 +111,7 @@ def compute_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
 # ─────────────────────────────────────────────────────────────────────────
 # Classification & sélection
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def classify_regime(df_d1: pd.DataFrame, atr_pct_window: int = 60) -> pd.Series:
     """Étiquette chaque jour D1 avec un régime parmi trending/ranging/macro/vol_h/vol_b/mixed."""
@@ -158,6 +168,7 @@ def select_days_stratified(regime_series: pd.Series, n: int) -> list:
 # Plotting
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def _format_x_axis(ax_vol, data: pd.DataFrame, tf: str, n: int) -> None:
     """Configure l'axe X selon le TF (heure NY pour 15m/H1, date pour D1)."""
     step = max(1, n // 8)
@@ -180,9 +191,14 @@ def _format_x_axis(ax_vol, data: pd.DataFrame, tf: str, n: int) -> None:
     ax_vol.set_xticklabels(labels, fontsize=7)
 
 
-def plot_pure_chart(df_tf: pd.DataFrame, ticker: str, tf: str,
-                    center_day: pd.Timestamp, output_path: str,
-                    regime_label: str = "") -> bool:
+def plot_pure_chart(
+    df_tf: pd.DataFrame,
+    ticker: str,
+    tf: str,
+    center_day: pd.Timestamp,
+    output_path: str,
+    regime_label: str = "",
+) -> bool:
     """Chart pur (sans signaux) — bougies + EMA20/EMA50 + volume."""
     plt.rcParams.update(CHART_STYLE)
 
@@ -208,7 +224,10 @@ def plot_pure_chart(df_tf: pd.DataFrame, ticker: str, tf: str,
     ema50 = data["close"].ewm(span=50, adjust=False).mean()
 
     fig, (ax, ax_vol) = plt.subplots(
-        2, 1, figsize=(18, 10), sharex=True,
+        2,
+        1,
+        figsize=(18, 10),
+        sharex=True,
         gridspec_kw={"height_ratios": [4, 1], "hspace": 0.05},
     )
 
@@ -240,7 +259,8 @@ def plot_pure_chart(df_tf: pd.DataFrame, ticker: str, tf: str,
     regime_tag = f"  [{regime_label}]" if regime_label else ""
     ax.set_title(
         f"{ticker} — {date_str}  [{tf}]{regime_tag}  |  EXPLORE (sans signaux)",
-        color=TV_FG, fontsize=11,
+        color=TV_FG,
+        fontsize=11,
     )
 
     _format_x_axis(ax_vol, data, tf, n)
@@ -255,16 +275,19 @@ def plot_pure_chart(df_tf: pd.DataFrame, ticker: str, tf: str,
 # Indicateurs supplémentaires (vue hebdomadaire enrichie)
 # ─────────────────────────────────────────────────────────────────────────
 
-def compute_ichimoku(df: pd.DataFrame,
-                     tenkan: int = 9, kijun: int = 26, senkou_b: int = 52,
-                     shift: int = 26) -> dict:
+
+def compute_ichimoku(
+    df: pd.DataFrame, tenkan: int = 9, kijun: int = 26, senkou_b: int = 52, shift: int = 26
+) -> dict:
     """Ichimoku Kinko Hyo. Retourne 5 séries (Tenkan, Kijun, SenkouA, SenkouB, Chikou)."""
     high, low, close = df["high"], df["low"], df["close"]
 
     tenkan_sen = (high.rolling(tenkan).max() + low.rolling(tenkan).min()) / 2.0
     kijun_sen = (high.rolling(kijun).max() + low.rolling(kijun).min()) / 2.0
     senkou_a = ((tenkan_sen + kijun_sen) / 2.0).shift(shift)
-    senkou_b_line = ((high.rolling(senkou_b).max() + low.rolling(senkou_b).min()) / 2.0).shift(shift)
+    senkou_b_line = ((high.rolling(senkou_b).max() + low.rolling(senkou_b).min()) / 2.0).shift(
+        shift
+    )
     chikou = close.shift(-shift)
 
     return {
@@ -287,9 +310,9 @@ def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-def compute_stochrsi(close: pd.Series,
-                     rsi_period: int = 14, stoch_period: int = 14,
-                     k: int = 3, d: int = 3) -> tuple:
+def compute_stochrsi(
+    close: pd.Series, rsi_period: int = 14, stoch_period: int = 14, k: int = 3, d: int = 3
+) -> tuple:
     """StochRSI %K et %D (Stoch sur RSI, lissé)."""
     rsi = compute_rsi(close, rsi_period)
     rsi_min = rsi.rolling(stoch_period).min()
@@ -309,8 +332,8 @@ def detect_fractals(df: pd.DataFrame, n: int = 2) -> tuple:
     is_high = pd.Series(False, index=df.index)
     is_low = pd.Series(False, index=df.index)
     for i in range(n, len(df) - n):
-        window_h = high.iloc[i - n:i + n + 1]
-        window_l = low.iloc[i - n:i + n + 1]
+        window_h = high.iloc[i - n : i + n + 1]
+        window_l = low.iloc[i - n : i + n + 1]
         if high.iloc[i] == window_h.max() and (window_h.values == high.iloc[i]).sum() == 1:
             is_high.iloc[i] = True
         if low.iloc[i] == window_l.min() and (window_l.values == low.iloc[i]).sum() == 1:
@@ -321,6 +344,7 @@ def detect_fractals(df: pd.DataFrame, n: int = 2) -> tuple:
 # ─────────────────────────────────────────────────────────────────────────
 # Chart hebdomadaire enrichi
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def _get_week_window(center_day: pd.Timestamp) -> tuple:
     """Retourne (week_start_utc, week_end_utc) — lundi 00:00 NY → vendredi 23:59 NY.
@@ -336,14 +360,18 @@ def _get_week_window(center_day: pd.Timestamp) -> tuple:
     friday = monday + pd.Timedelta(days=4)
     # Heure NY : on prend de lundi 00:00 NY à vendredi 23:59 NY
     # Conversion en UTC naïf (les CSV sont UTC naïfs)
-    week_start = monday + pd.Timedelta(hours=5)   # ≈ 00:00 NY = 05:00 UTC (hors DST)
-    week_end = friday + pd.Timedelta(hours=22)    # ≈ 17:00 NY = 22:00 UTC
+    week_start = monday + pd.Timedelta(hours=5)  # ≈ 00:00 NY = 05:00 UTC (hors DST)
+    week_end = friday + pd.Timedelta(hours=22)  # ≈ 17:00 NY = 22:00 UTC
     return week_start, week_end
 
 
-def plot_weekly_chart(df_15m: pd.DataFrame, ticker: str,
-                      center_day: pd.Timestamp, output_path: str,
-                      regime_label: str = "") -> bool:
+def plot_weekly_chart(
+    df_15m: pd.DataFrame,
+    ticker: str,
+    center_day: pd.Timestamp,
+    output_path: str,
+    regime_label: str = "",
+) -> bool:
     """Chart hebdomadaire 15m enrichi.
 
     Layout :
@@ -357,7 +385,9 @@ def plot_weekly_chart(df_15m: pd.DataFrame, ticker: str,
 
     # Warmup ~60 barres avant pour init Ichimoku/RSI (Senkou B = 52 barres)
     warmup_start = week_start - pd.Timedelta(days=4)
-    df_full = df_15m[(df_15m.index >= warmup_start) & (df_15m.index <= week_end + pd.Timedelta(hours=8))].copy()
+    df_full = df_15m[
+        (df_15m.index >= warmup_start) & (df_15m.index <= week_end + pd.Timedelta(hours=8))
+    ].copy()
     if len(df_full) < 80:
         return False
 
@@ -385,7 +415,10 @@ def plot_weekly_chart(df_15m: pd.DataFrame, ticker: str,
 
     # Layout 3 panneaux
     fig, axes = plt.subplots(
-        3, 1, figsize=(22, 12), sharex=True,
+        3,
+        1,
+        figsize=(22, 12),
+        sharex=True,
         gridspec_kw={"height_ratios": [6, 1.2, 2.5], "hspace": 0.05},
     )
     ax, ax_vol, ax_osc = axes
@@ -411,18 +444,34 @@ def plot_weekly_chart(df_15m: pd.DataFrame, ticker: str,
     high_idx = np.where(_vis(is_high))[0]
     low_idx = np.where(_vis(is_low))[0]
     if len(high_idx) > 0:
-        ax.scatter(high_idx, data["high"].iloc[high_idx].values + (data["high"].max() - data["low"].min()) * 0.005,
-                   marker="v", color="#f7b801", s=30, zorder=5, label="Swing H")
+        ax.scatter(
+            high_idx,
+            data["high"].iloc[high_idx].values + (data["high"].max() - data["low"].min()) * 0.005,
+            marker="v",
+            color="#f7b801",
+            s=30,
+            zorder=5,
+            label="Swing H",
+        )
     if len(low_idx) > 0:
-        ax.scatter(low_idx, data["low"].iloc[low_idx].values - (data["high"].max() - data["low"].min()) * 0.005,
-                   marker="^", color="#a566ff", s=30, zorder=5, label="Swing L")
+        ax.scatter(
+            low_idx,
+            data["low"].iloc[low_idx].values - (data["high"].max() - data["low"].min()) * 0.005,
+            marker="^",
+            color="#a566ff",
+            s=30,
+            zorder=5,
+            label="Swing L",
+        )
 
     ax.legend(loc="upper left", fontsize=8, ncol=2)
 
     # Marqueurs verticaux : début de chaque jour (lundi 09:30 NY, mardi 09:30 NY, etc.)
     day_starts = []
     for day_offset in range(5):
-        d = pd.Timestamp(week_start.normalize()) + pd.Timedelta(days=day_offset, hours=14, minutes=30)
+        d = pd.Timestamp(week_start.normalize()) + pd.Timedelta(
+            days=day_offset, hours=14, minutes=30
+        )
         if data.index[0] <= d <= data.index[-1]:
             idx = int(data.index.get_indexer([d], method="nearest")[0])
             day_starts.append((idx, d))
@@ -441,7 +490,8 @@ def plot_weekly_chart(df_15m: pd.DataFrame, ticker: str,
     regime_tag = f"  [{regime_label}]" if regime_label else ""
     ax.set_title(
         f"{ticker} — Semaine {week_label}  [15m]{regime_tag}  |  EXPLORE (Ichimoku + RSI + StochRSI)",
-        color=TV_FG, fontsize=12,
+        color=TV_FG,
+        fontsize=12,
     )
     ax.grid(True, alpha=0.4, color="#1e222d")
 
@@ -491,17 +541,21 @@ def plot_weekly_chart(df_15m: pd.DataFrame, ticker: str,
 
 REGIME_COLORS = {
     "trending": "#26a69a",
-    "ranging":  "#787b86",
-    "macro":    "#ef5350",
-    "vol_h":    "#ff9800",
-    "vol_b":    "#42a5f5",
-    "mixed":    "#a566ff",
+    "ranging": "#787b86",
+    "macro": "#ef5350",
+    "vol_h": "#ff9800",
+    "vol_b": "#42a5f5",
+    "mixed": "#a566ff",
 }
 
 
-def plot_panoramic_d1(df_d1: pd.DataFrame, ticker: str,
-                      selected_days: list, regime_series: pd.Series,
-                      output_path: str) -> bool:
+def plot_panoramic_d1(
+    df_d1: pd.DataFrame,
+    ticker: str,
+    selected_days: list,
+    regime_series: pd.Series,
+    output_path: str,
+) -> bool:
     """Vue d'ensemble D1 sur toute la période avec marqueurs des semaines analysées.
 
     Sert de 'carte' pour le chartist : où se situent les semaines analysées
@@ -525,7 +579,10 @@ def plot_panoramic_d1(df_d1: pd.DataFrame, ticker: str,
     x = np.arange(n)
 
     fig, axes = plt.subplots(
-        2, 1, figsize=(22, 10), sharex=True,
+        2,
+        1,
+        figsize=(22, 10),
+        sharex=True,
         gridspec_kw={"height_ratios": [4, 1.2], "hspace": 0.05},
     )
     ax, ax_rsi = axes
@@ -555,8 +612,7 @@ def plot_panoramic_d1(df_d1: pd.DataFrame, ticker: str,
         if data.index[0] <= target <= data.index[-1]:
             idx = int(data.index.get_indexer([target], method="nearest")[0])
             label = regime_label if regime_label not in used_regimes else None
-            ax.axvspan(idx - 0.5, idx + 4.5, color=color, alpha=0.20, zorder=0,
-                       label=label)
+            ax.axvspan(idx - 0.5, idx + 4.5, color=color, alpha=0.20, zorder=0, label=label)
             used_regimes.add(regime_label)
 
     ax.legend(loc="upper left", fontsize=8, ncol=3)
@@ -573,7 +629,8 @@ def plot_panoramic_d1(df_d1: pd.DataFrame, ticker: str,
     ax.set_title(
         f"{ticker} — Vue PANORAMIQUE D1  {period_label}  |  "
         f"{len(selected_days)} semaines analysées (couleur = régime)",
-        color=TV_FG, fontsize=12,
+        color=TV_FG,
+        fontsize=12,
     )
     ax.grid(True, alpha=0.4, color="#1e222d")
 
@@ -605,24 +662,31 @@ def plot_panoramic_d1(df_d1: pd.DataFrame, ticker: str,
 # CLI
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Génère N jours stratifiés par régime pour l'idéation chartist.",
     )
-    parser.add_argument("--ticker", required=True,
-                        help="MES1 | NQ1 | YM1 | MGC1 | MCL1 | ...")
-    parser.add_argument("--n", type=int, default=20,
-                        help="Nombre de jours à générer (défaut 20)")
-    parser.add_argument("--stratify", default="regime",
-                        choices=["regime", "random"],
-                        help="Échantillonnage stratifié par régime ou aléatoire")
-    parser.add_argument("--multi-tf", action="store_true",
-                        help="Génère le trio 15m + H1 + D1 par jour")
-    parser.add_argument("--weekly", action="store_true",
-                        help="Mode vue hebdomadaire enrichie (Ichimoku + RSI + "
-                             "StochRSI + swing H/L) — 1 chart par semaine")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Seed pour reproductibilité (défaut 42)")
+    parser.add_argument("--ticker", required=True, help="MES1 | NQ1 | YM1 | MGC1 | MCL1 | ...")
+    parser.add_argument("--n", type=int, default=20, help="Nombre de jours à générer (défaut 20)")
+    parser.add_argument(
+        "--stratify",
+        default="regime",
+        choices=["regime", "random"],
+        help="Échantillonnage stratifié par régime ou aléatoire",
+    )
+    parser.add_argument(
+        "--multi-tf", action="store_true", help="Génère le trio 15m + H1 + D1 par jour"
+    )
+    parser.add_argument(
+        "--weekly",
+        action="store_true",
+        help="Mode vue hebdomadaire enrichie (Ichimoku + RSI + "
+        "StochRSI + swing H/L) — 1 chart par semaine",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Seed pour reproductibilité (défaut 42)"
+    )
     parser.add_argument("--csv-dir", default="./data")
     parser.add_argument("--output-dir", default="./output/explore")
     args = parser.parse_args()
@@ -672,7 +736,10 @@ def main():
             regime_label = str(regime_series.get(day, ""))
             output_path = out_dir / f"week_{week_key}.png"
             ok = plot_weekly_chart(
-                df_15m, args.ticker, day, str(output_path),
+                df_15m,
+                args.ticker,
+                day,
+                str(output_path),
                 regime_label=regime_label,
             )
             if ok:
@@ -685,7 +752,11 @@ def main():
         if kept_days:
             pano_path = out_dir / "panoramic_D1.png"
             ok = plot_panoramic_d1(
-                tfs["D1"], args.ticker, kept_days, regime_series, str(pano_path),
+                tfs["D1"],
+                args.ticker,
+                kept_days,
+                regime_series,
+                str(pano_path),
             )
             if ok:
                 n_ok += 1
@@ -699,7 +770,11 @@ def main():
             for tf in tf_list:
                 output_path = out_dir / f"{date_str}_{tf}.png"
                 ok = plot_pure_chart(
-                    tfs[tf], args.ticker, tf, day, str(output_path),
+                    tfs[tf],
+                    args.ticker,
+                    tf,
+                    day,
+                    str(output_path),
                     regime_label=regime_label,
                 )
                 if ok:

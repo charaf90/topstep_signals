@@ -10,6 +10,7 @@ M5, donc le lift devrait monter encore (au prix d'une base rate ↓ et d'un
 
 Usage : python scripts/research_pivot_h1.py --ticker NQ1 --order 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,9 +18,9 @@ import sys
 import warnings
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -36,22 +37,42 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import research_pivot_nq1 as base  # noqa: E402
+
 from core.data import load_csv  # noqa: E402
 
 OUT_ROOT = ROOT / "output" / "pivot_research_h1"
 IS_END = pd.Timestamp("2026-02-15")
 
 FEATURE_COLS = [
-    "ema9_slope", "ema21_slope", "ema50_slope",
-    "roc_5", "roc_20", "roc_50", "adx_14",
-    "atr_14", "atr_ratio_short_long", "bb_width",
-    "dist_close_ema21_atr", "range_atr_ratio",
-    "body_range_ratio", "upper_wick_ratio", "lower_wick_ratio", "vol_rel",
-    "dist_to_max20_atr", "dist_to_min20_atr",
-    "past_pivot_density_2atr", "past_pivot_density_1atr",
-    "ret_lag_1", "ret_lag_2", "ret_lag_3", "ret_lag_5", "ret_lag_10",
+    "ema9_slope",
+    "ema21_slope",
+    "ema50_slope",
+    "roc_5",
+    "roc_20",
+    "roc_50",
+    "adx_14",
+    "atr_14",
+    "atr_ratio_short_long",
+    "bb_width",
+    "dist_close_ema21_atr",
+    "range_atr_ratio",
+    "body_range_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+    "vol_rel",
+    "dist_to_max20_atr",
+    "dist_to_min20_atr",
+    "past_pivot_density_2atr",
+    "past_pivot_density_1atr",
+    "ret_lag_1",
+    "ret_lag_2",
+    "ret_lag_3",
+    "ret_lag_5",
+    "ret_lag_10",
     "up_bars_last_10",
-    "hour_ny", "dow", "is_macro_day",
+    "hour_ny",
+    "dow",
+    "is_macro_day",
     # On retire bars_since_open et minute_ny (peu de sens en H1)
 ]
 
@@ -130,29 +151,40 @@ def main():
     base_rate_oos = float(y_oos.mean())
 
     rf = RandomForestClassifier(
-        n_estimators=500, max_depth=8, class_weight="balanced",
-        random_state=42, n_jobs=-1, min_samples_leaf=10,
+        n_estimators=500,
+        max_depth=8,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        min_samples_leaf=10,
     )
     rf.fit(X_is, y_is)
     p_rf = rf.predict_proba(X_oos)[:, 1]
     sc_rf = score_proba(y_oos, p_rf, base_rate_oos)
 
     hgb = HistGradientBoostingClassifier(
-        max_iter=300, learning_rate=0.05, max_depth=6,
-        class_weight="balanced", random_state=42,
+        max_iter=300,
+        learning_rate=0.05,
+        max_depth=6,
+        class_weight="balanced",
+        random_state=42,
     )
     hgb.fit(X_is, y_is)
     p_hgb = hgb.predict_proba(X_oos)[:, 1]
     sc_hgb = score_proba(y_oos, p_hgb, base_rate_oos)
 
-    print(f"  • rf   PR-AUC={sc_rf['pr_auc']:.3f}  "
-          f"P@R5%={sc_rf['prec_at_recall_5']:.2%}  "
-          f"P@R10%={sc_rf['prec_at_recall_10']:.2%}  "
-          f"P@R20%={sc_rf['prec_at_recall_20']:.2%}")
-    print(f"  • hgb  PR-AUC={sc_hgb['pr_auc']:.3f}  "
-          f"P@R5%={sc_hgb['prec_at_recall_5']:.2%}  "
-          f"P@R10%={sc_hgb['prec_at_recall_10']:.2%}  "
-          f"P@R20%={sc_hgb['prec_at_recall_20']:.2%}")
+    print(
+        f"  • rf   PR-AUC={sc_rf['pr_auc']:.3f}  "
+        f"P@R5%={sc_rf['prec_at_recall_5']:.2%}  "
+        f"P@R10%={sc_rf['prec_at_recall_10']:.2%}  "
+        f"P@R20%={sc_rf['prec_at_recall_20']:.2%}"
+    )
+    print(
+        f"  • hgb  PR-AUC={sc_hgb['pr_auc']:.3f}  "
+        f"P@R5%={sc_hgb['prec_at_recall_5']:.2%}  "
+        f"P@R10%={sc_hgb['prec_at_recall_10']:.2%}  "
+        f"P@R20%={sc_hgb['prec_at_recall_20']:.2%}"
+    )
 
     # Plot PR
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -160,8 +192,9 @@ def main():
         prec, rec, _ = precision_recall_curve(y_oos, p)
         ap = average_precision_score(y_oos, p)
         ax.plot(rec, prec, label=f"{name} (PR-AUC={ap:.3f})", linewidth=1.5)
-    ax.axhline(base_rate_oos, color="gray", linestyle="--",
-               label=f"base rate OOS ({base_rate_oos:.2%})")
+    ax.axhline(
+        base_rate_oos, color="gray", linestyle="--", label=f"base rate OOS ({base_rate_oos:.2%})"
+    )
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
     ax.set_title(f"Précision-Recall H1 — {ticker} (order={order})")
@@ -176,13 +209,24 @@ def main():
     # Permutation importance sur RF
     try:
         pi = permutation_importance(
-            rf, X_oos, y_oos, n_repeats=5, random_state=42, n_jobs=-1,
+            rf,
+            X_oos,
+            y_oos,
+            n_repeats=5,
+            random_state=42,
+            n_jobs=-1,
             scoring="average_precision",
         )
-        imp_df = pd.DataFrame({
-            "feature": FEATURE_COLS,
-            "importance": pi.importances_mean,
-        }).sort_values("importance", ascending=False).head(15)
+        imp_df = (
+            pd.DataFrame(
+                {
+                    "feature": FEATURE_COLS,
+                    "importance": pi.importances_mean,
+                }
+            )
+            .sort_values("importance", ascending=False)
+            .head(15)
+        )
         fig, ax = plt.subplots(figsize=(8, 5))
         ax.barh(imp_df["feature"][::-1], imp_df["importance"][::-1], color="steelblue")
         ax.set_xlabel("Δ PR-AUC (permutation)")
@@ -205,13 +249,15 @@ def main():
     w("## Scores OOS\n")
     rows = []
     for k, sc in (("RF", sc_rf), ("HGB", sc_hgb)):
-        rows.append({
-            "modèle": k,
-            "PR-AUC": f"{sc['pr_auc']:.3f}",
-            "P@R5%": f"{sc['prec_at_recall_5']:.2%}",
-            "P@R10%": f"{sc['prec_at_recall_10']:.2%}",
-            "P@R20%": f"{sc['prec_at_recall_20']:.2%}",
-        })
+        rows.append(
+            {
+                "modèle": k,
+                "PR-AUC": f"{sc['pr_auc']:.3f}",
+                "P@R5%": f"{sc['prec_at_recall_5']:.2%}",
+                "P@R10%": f"{sc['prec_at_recall_10']:.2%}",
+                "P@R20%": f"{sc['prec_at_recall_20']:.2%}",
+            }
+        )
     w(pd.DataFrame(rows).to_markdown(index=False))
     best_p10 = max(sc_rf["prec_at_recall_10"], sc_hgb["prec_at_recall_10"])
     lift = best_p10 / base_rate_oos if base_rate_oos else 0

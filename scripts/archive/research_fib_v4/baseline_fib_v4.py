@@ -23,27 +23,30 @@ Méthodologie M5 :
 Usage :
   python scripts/baseline_fib_v4.py
 """
+
 from __future__ import annotations
+
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
-import sys
 
 # Garantit l'import des modules projet quel que soit le cwd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import core.strategy_fib as sf
+
 from config import (
-    INSTRUMENTS,
-    SLIPPAGE_TICKS_PER_TICKER,
     COMMISSION_RT_PER_CONTRACT,
+    FIB_MIN_IMPULSE_ATR_PER_TICKER,
     FIB_SL_ATR_MULT_PER_TICKER,
     FIB_TP_ATR_MULT_PER_TICKER,
-    FIB_MIN_IMPULSE_ATR_PER_TICKER,
+    INSTRUMENTS,
+    SLIPPAGE_TICKS_PER_TICKER,
 )
 from core.data import load_csv
-import core.strategy_fib as sf
 
 # ── Paramètres de l'expérience ──────────────────────────────────────────────
 TICKERS = ["MES1", "NQ1", "YM1", "MGC1", "MCL1"]
@@ -56,16 +59,16 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Constantes Fib pour M15 (valeurs natives config.py)
 FIB_CONSTANTS_M15 = {
-    "FIB_ATR_PERIOD":         14,
-    "FIB_EMA_FAST_PERIOD":    50,
-    "FIB_EMA_SLOW_PERIOD":    200,
-    "FIB_ADX_PERIOD":         14,
-    "FIB_PIVOT_LEFT":         8,
-    "FIB_PIVOT_RIGHT":        8,
-    "FIB_MAX_IMPULSE_BARS":   25,
-    "FIB_IMPULSE_LOOKBACK":   60,
+    "FIB_ATR_PERIOD": 14,
+    "FIB_EMA_FAST_PERIOD": 50,
+    "FIB_EMA_SLOW_PERIOD": 200,
+    "FIB_ADX_PERIOD": 14,
+    "FIB_PIVOT_LEFT": 8,
+    "FIB_PIVOT_RIGHT": 8,
+    "FIB_MAX_IMPULSE_BARS": 25,
+    "FIB_IMPULSE_LOOKBACK": 60,
     "FIB_ORDER_TIMEOUT_BARS": 12,
-    "FIB_MAX_HOLD_BARS":      32,
+    "FIB_MAX_HOLD_BARS": 32,
 }
 
 # M5 = M15 × 3 (3 barres M5 par barre M15)
@@ -106,23 +109,40 @@ def apply_frictions(trades: pd.DataFrame, ticker: str) -> pd.DataFrame:
 def compute_metrics(trades: pd.DataFrame) -> dict:
     """Métriques baseline : n, WR, PF, P&L, DD, Sharpe (par trade), avg_bars_held."""
     if len(trades) == 0:
-        return dict(n_trades=0, n_filled=0, wr_pct=np.nan, pf=np.nan,
-                    pnl_total=0.0, dd_max=0.0, sharpe_trade=np.nan,
-                    avg_bars_held=np.nan)
+        return dict(
+            n_trades=0,
+            n_filled=0,
+            wr_pct=np.nan,
+            pf=np.nan,
+            pnl_total=0.0,
+            dd_max=0.0,
+            sharpe_trade=np.nan,
+            avg_bars_held=np.nan,
+        )
 
     filled = trades[trades["result"].isin(["TP", "SL", "TE"])].copy()
     n_filled = len(filled)
     if n_filled == 0:
-        return dict(n_trades=len(trades), n_filled=0, wr_pct=np.nan, pf=np.nan,
-                    pnl_total=0.0, dd_max=0.0, sharpe_trade=np.nan,
-                    avg_bars_held=np.nan)
+        return dict(
+            n_trades=len(trades),
+            n_filled=0,
+            wr_pct=np.nan,
+            pf=np.nan,
+            pnl_total=0.0,
+            dd_max=0.0,
+            sharpe_trade=np.nan,
+            avg_bars_held=np.nan,
+        )
 
     wins = filled[filled["pnl"] > 0]
     losses = filled[filled["pnl"] < 0]
     gross_profit = wins["pnl"].sum()
     gross_loss = -losses["pnl"].sum()
-    pf = (gross_profit / gross_loss) if gross_loss > 0 else (
-        float("inf") if gross_profit > 0 else float("nan"))
+    pf = (
+        (gross_profit / gross_loss)
+        if gross_loss > 0
+        else (float("inf") if gross_profit > 0 else float("nan"))
+    )
 
     eq = filled["pnl"].cumsum()
     dd = eq - eq.cummax()
@@ -147,8 +167,7 @@ def run_cell(ticker: str, tf: str, fib_level: float) -> dict:
     """Exécute un backtest baseline pour une cellule (ticker, tf, fib_level)."""
     csv_path = DATA_DIR / f"{ticker}_data_{tf}.csv"
     if not csv_path.exists():
-        return dict(ticker=ticker, tf=tf, fib_level=fib_level,
-                    error=f"missing csv {csv_path.name}")
+        return dict(ticker=ticker, tf=tf, fib_level=fib_level, error=f"missing csv {csv_path.name}")
 
     df = load_csv(str(csv_path))
 
@@ -160,7 +179,8 @@ def run_cell(ticker: str, tf: str, fib_level: float) -> dict:
         raise ValueError(f"timeframe non géré : {tf}")
 
     trades = sf.run_fib_backtest(
-        df, ticker,
+        df,
+        ticker,
         fib_level=fib_level,
         sl_mult=FIB_SL_ATR_MULT_PER_TICKER[ticker],
         tp_mult=FIB_TP_ATR_MULT_PER_TICKER[ticker],
@@ -171,7 +191,9 @@ def run_cell(ticker: str, tf: str, fib_level: float) -> dict:
 
     metrics = compute_metrics(trades)
     return dict(
-        ticker=ticker, tf=tf, fib_level=fib_level,
+        ticker=ticker,
+        tf=tf,
+        fib_level=fib_level,
         period_start=str(df.index[0]),
         period_end=str(df.index[-1]),
         **metrics,
@@ -197,8 +219,7 @@ def main():
         for tf in TIMEFRAMES:
             for fib_level in FIB_LEVELS:
                 i += 1
-                print(f"  [{i:>2}/{total}] {ticker} {tf} fib={fib_level} ... ",
-                      end="", flush=True)
+                print(f"  [{i:>2}/{total}] {ticker} {tf} fib={fib_level} ... ", end="", flush=True)
                 row = run_cell(ticker, tf, fib_level)
                 rows.append(row)
                 n = row.get("n_filled", 0)
@@ -224,28 +245,39 @@ def main():
     for verdict in ["STRONG", "VIABLE", "REJECT", "MISSING"]:
         sub = df[df["verdict"] == verdict]
         print(f"  {verdict:>8}  {len(sub):>3} cellules")
-    print(f"\nCellules retenues pour data science (STRONG + VIABLE) :")
+    print("\nCellules retenues pour data science (STRONG + VIABLE) :")
     keep = df[df["verdict"].isin(["STRONG", "VIABLE"])].copy()
     if len(keep):
-        print(keep[["ticker", "tf", "fib_level", "n_filled", "pf", "pnl_total",
-                    "dd_max", "verdict"]].to_string(index=False))
+        print(
+            keep[
+                ["ticker", "tf", "fib_level", "n_filled", "pf", "pnl_total", "dd_max", "verdict"]
+            ].to_string(index=False)
+        )
 
 
 def write_markdown_report(df: pd.DataFrame, path: Path) -> None:
     lines = []
     lines.append("# Baseline fib-v4 — Phase 1\n")
-    lines.append("Backtest **sans filtre trigger** sur la grille croisée "
-                 "5 tickers × 2 TF × 3 niveaux Fibonacci.\n")
-    lines.append(f"**Frictions** : slippage (config.py) + commission "
-                 f"${COMMISSION_RT_PER_CONTRACT:.2f} RT par contrat appliqués au PnL.\n")
+    lines.append(
+        "Backtest **sans filtre trigger** sur la grille croisée "
+        "5 tickers × 2 TF × 3 niveaux Fibonacci.\n"
+    )
+    lines.append(
+        f"**Frictions** : slippage (config.py) + commission "
+        f"${COMMISSION_RT_PER_CONTRACT:.2f} RT par contrat appliqués au PnL.\n"
+    )
     lines.append("**Constantes M5** : valeurs M15 ×3 (équivalence temporelle).\n")
     lines.append("\n## Résultats par cellule\n")
-    lines.append("| Ticker | TF | Fib | n trades | n fill | WR% | PF | P&L | DD max | Sharpe/trade | Bars | Verdict |")
+    lines.append(
+        "| Ticker | TF | Fib | n trades | n fill | WR% | PF | P&L | DD max | Sharpe/trade | Bars | Verdict |"
+    )
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for _, r in df.iterrows():
         if r.get("error"):
-            lines.append(f"| {r['ticker']} | {r['tf']} | {r['fib_level']} "
-                         f"| — | — | — | — | — | — | — | — | MISSING ({r['error']}) |")
+            lines.append(
+                f"| {r['ticker']} | {r['tf']} | {r['fib_level']} "
+                f"| — | — | — | — | — | — | — | — | MISSING ({r['error']}) |"
+            )
             continue
         lines.append(
             f"| {r['ticker']} | {r['tf']} | {r['fib_level']:.3f} "
@@ -296,8 +328,7 @@ def write_markdown_report(df: pd.DataFrame, path: Path) -> None:
             lines.append(f"| {tf} | 0 | — | — |")
             continue
         lines.append(
-            f"| {tf} | {len(sub)} | {sub['pf'].mean():.2f} "
-            f"| ${sub['pnl_total'].sum():+,.0f} |"
+            f"| {tf} | {len(sub)} | {sub['pf'].mean():.2f} " f"| ${sub['pnl_total'].sum():+,.0f} |"
         )
 
     path.write_text("\n".join(lines))

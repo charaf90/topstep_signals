@@ -9,7 +9,6 @@ Docs     : https://gateway.docs.projectx.com/
 import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
 
 import requests
 
@@ -33,12 +32,11 @@ class ProjectXClient:
         accounts = client.get_accounts()
     """
 
-    def __init__(self, username: str, api_key: str,
-                 base_url: str = BASE_URL):
+    def __init__(self, username: str, api_key: str, base_url: str = BASE_URL):
         self.username = username
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
-        self._token: Optional[str] = None
+        self._token: str | None = None
         self._token_ts: float = 0.0
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
@@ -113,35 +111,35 @@ class ProjectXClient:
         try:
             data = r.json()
         except Exception:
-            _log.error("POST %s — réponse non-JSON (%d) : %.200s",
-                       path, r.status_code, r.text)
+            _log.error("POST %s — réponse non-JSON (%d) : %.200s", path, r.status_code, r.text)
             raise ValueError(f"Réponse non-JSON sur {path}")
 
         if not data.get("success", True):
-            _log.warning("POST %s — errorCode=%s : %s",
-                         path, data.get("errorCode", "?"),
-                         data.get("errorMessage", ""))
+            _log.warning(
+                "POST %s — errorCode=%s : %s",
+                path,
+                data.get("errorCode", "?"),
+                data.get("errorMessage", ""),
+            )
         return data
 
     # ─────────────────────────────────────────────────────────────────────
     # Compte
     # ─────────────────────────────────────────────────────────────────────
 
-    def get_accounts(self, only_active: bool = True) -> List[Dict]:
+    def get_accounts(self, only_active: bool = True) -> list[dict]:
         """
         Retourne les comptes du profil.
         Chaque compte : {id, name, balance, canTrade, isVisible}.
         """
-        data = self._post("/api/Account/search",
-                          {"onlyActiveAccounts": only_active})
+        data = self._post("/api/Account/search", {"onlyActiveAccounts": only_active})
         return data.get("accounts", [])
 
     # ─────────────────────────────────────────────────────────────────────
     # Contrats
     # ─────────────────────────────────────────────────────────────────────
 
-    def search_contract(self, symbol: str,
-                        live: bool = True) -> Optional[Dict]:
+    def search_contract(self, symbol: str, live: bool = True) -> dict | None:
         """
         Recherche le contrat front-month pour le symbole (ex. "MES", "MNQ").
 
@@ -151,16 +149,14 @@ class ProjectXClient:
 
         Exemple de réponse : {"id": "CON.F.US.MES.M26", "name": "MES", ...}
         """
-        data = self._post("/api/Contract/search",
-                          {"searchText": symbol, "live": live})
+        data = self._post("/api/Contract/search", {"searchText": symbol, "live": live})
         contracts = data.get("contracts", [])
         if not contracts:
             _log.warning("Aucun contrat trouvé pour '%s'", symbol)
             return None
         return contracts[0]
 
-    def search_contracts(self, symbol: str,
-                         live: bool = True) -> List[Dict]:
+    def search_contracts(self, symbol: str, live: bool = True) -> list[dict]:
         """
         Recherche TOUS les contrats matchant le texte (max 20 par l'API).
         Utile pour récupérer la liste des échéances d'un même sous-jacent
@@ -170,11 +166,10 @@ class ProjectXClient:
           {id, name, description, tickSize, tickValue,
            activeContract, symbolId}
         """
-        data = self._post("/api/Contract/search",
-                          {"searchText": symbol, "live": live})
+        data = self._post("/api/Contract/search", {"searchText": symbol, "live": live})
         return data.get("contracts", [])
 
-    def list_available_contracts(self, live: bool = False) -> List[Dict]:
+    def list_available_contracts(self, live: bool = False) -> list[dict]:
         """
         Liste tous les contrats disponibles à la souscription (sim ou live).
         Endpoint POST /api/Contract/available.
@@ -197,15 +192,15 @@ class ProjectXClient:
 
     def get_bars(
         self,
-        contract_id,            # str "CON.F.US.MES.M26" ou int selon l'API
+        contract_id,  # str "CON.F.US.MES.M26" ou int selon l'API
         start_dt: datetime,
         end_dt: datetime,
-        unit: int = 2,          # 2 = Minute
+        unit: int = 2,  # 2 = Minute
         unit_number: int = 15,  # 15 minutes
         limit: int = 2000,
         live: bool = True,
         include_partial: bool = False,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Fetch bougies OHLCV.
 
@@ -219,7 +214,7 @@ class ProjectXClient:
             "contractId": contract_id,
             "live": live,
             "startTime": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "endTime":   end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "endTime": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "unit": unit,
             "unitNumber": unit_number,
             "limit": limit,
@@ -237,41 +232,50 @@ class ProjectXClient:
         self,
         account_id: int,
         contract_id: str,
-        side: int,          # 0=Buy, 1=Sell
+        side: int,  # 0=Buy, 1=Sell
         size: int,
         limit_price: float,
         sl_ticks: int,
         tp_ticks: int,
-        custom_tag: Optional[str] = None,
-    ) -> Optional[int]:
+        custom_tag: str | None = None,
+    ) -> int | None:
         """
         Place un ordre LIMIT avec bracket SL (Stop) et TP (Limit).
 
         Les brackets SL/TP sont exprimés en ticks depuis le prix d'entrée.
         Retourne l'orderId si succès, None sinon.
         """
-        body: Dict = {
+        body: dict = {
             "accountId": account_id,
             "contractId": contract_id,
-            "type": 1,          # Limit
+            "type": 1,  # Limit
             "side": side,
             "size": size,
             "limitPrice": limit_price,
-            "stopLossBracket":   {"ticks": sl_ticks,  "type": 4},   # Stop
-            "takeProfitBracket": {"ticks": tp_ticks, "type": 1},    # Limit
+            "stopLossBracket": {"ticks": sl_ticks, "type": 4},  # Stop
+            "takeProfitBracket": {"ticks": tp_ticks, "type": 1},  # Limit
         }
         if custom_tag:
             body["customTag"] = custom_tag[:64]  # troncature sécurité
 
         data = self._post("/api/Order/place", body)
         if not data.get("success"):
-            _log.error("place_limit_order(%s, %s) : %s",
-                       contract_id, custom_tag, data.get("errorMessage", "?"))
+            _log.error(
+                "place_limit_order(%s, %s) : %s",
+                contract_id,
+                custom_tag,
+                data.get("errorMessage", "?"),
+            )
             return None
         order_id = data.get("orderId")
-        _log.info("Ordre placé : id=%s tag=%s %s×%d @ %.4f",
-                  order_id, custom_tag, "BUY" if side == 0 else "SELL",
-                  size, limit_price)
+        _log.info(
+            "Ordre placé : id=%s tag=%s %s×%d @ %.4f",
+            order_id,
+            custom_tag,
+            "BUY" if side == 0 else "SELL",
+            size,
+            limit_price,
+        )
         return order_id
 
     def place_market_order(
@@ -280,13 +284,13 @@ class ProjectXClient:
         contract_id: str,
         side: int,
         size: int,
-        custom_tag: Optional[str] = None,
-    ) -> Optional[int]:
+        custom_tag: str | None = None,
+    ) -> int | None:
         """Place un ordre Market (clôture de position). Retourne l'orderId."""
-        body: Dict = {
+        body: dict = {
             "accountId": account_id,
             "contractId": contract_id,
-            "type": 2,          # Market
+            "type": 2,  # Market
             "side": side,
             "size": size,
         }
@@ -294,36 +298,36 @@ class ProjectXClient:
             body["customTag"] = custom_tag[:64]
         data = self._post("/api/Order/place", body)
         if not data.get("success"):
-            _log.error("place_market_order(%s) : %s",
-                       contract_id, data.get("errorMessage", "?"))
+            _log.error("place_market_order(%s) : %s", contract_id, data.get("errorMessage", "?"))
             return None
         return data.get("orderId")
 
     def cancel_order(self, account_id: int, order_id: int) -> bool:
         """Annule un ordre ouvert. Retourne True si succès."""
-        data = self._post("/api/Order/cancel",
-                          {"accountId": account_id, "orderId": order_id})
+        data = self._post("/api/Order/cancel", {"accountId": account_id, "orderId": order_id})
         return bool(data.get("success"))
 
-    def get_open_orders(self, account_id: int) -> List[Dict]:
+    def get_open_orders(self, account_id: int) -> list[dict]:
         """Retourne les ordres ouverts (statut PENDING ou WORKING)."""
         data = self._post("/api/Order/searchOpen", {"accountId": account_id})
         return data.get("orders", [])
 
-    def get_orders_since(self, account_id: int,
-                         start_dt: datetime) -> List[Dict]:
+    def get_orders_since(self, account_id: int, start_dt: datetime) -> list[dict]:
         """Retourne les ordres (historique + ouverts) depuis start_dt."""
-        data = self._post("/api/Order/search", {
-            "accountId": account_id,
-            "startTimestamp": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        })
+        data = self._post(
+            "/api/Order/search",
+            {
+                "accountId": account_id,
+                "startTimestamp": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        )
         return data.get("orders", [])
 
     # ─────────────────────────────────────────────────────────────────────
     # Positions
     # ─────────────────────────────────────────────────────────────────────
 
-    def get_positions(self, account_id: int) -> List[Dict]:
+    def get_positions(self, account_id: int) -> list[dict]:
         """
         Retourne les positions ouvertes.
         Chaque position : {id, accountId, contractId, type, size, averagePrice}.
@@ -336,8 +340,7 @@ class ProjectXClient:
     # Trades (executions / fills)
     # ─────────────────────────────────────────────────────────────────────
 
-    def get_trades_since(self, account_id: int,
-                         start_dt: datetime) -> List[Dict]:
+    def get_trades_since(self, account_id: int, start_dt: datetime) -> list[dict]:
         """
         Retourne les exécutions depuis start_dt.
 
@@ -346,8 +349,11 @@ class ProjectXClient:
         profitAndLoss = None si c'est un aller (opening trade).
         profitAndLoss ≠ None si c'est un retour (closing trade, en dollars).
         """
-        data = self._post("/api/Trade/search", {
-            "accountId": account_id,
-            "startTimestamp": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        })
+        data = self._post(
+            "/api/Trade/search",
+            {
+                "accountId": account_id,
+                "startTimestamp": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        )
         return data.get("trades", [])

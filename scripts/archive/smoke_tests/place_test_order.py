@@ -12,19 +12,20 @@ Sécurité :
 Usage :
     python -m scripts.place_test_order
 """
+
 from __future__ import annotations
 
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from broker.projectx_client import ProjectXClient
 
 
 def _load_credentials() -> tuple:
     user = os.environ.get("PROJECTX_USERNAME")
-    key  = os.environ.get("PROJECTX_API_KEY")
+    key = os.environ.get("PROJECTX_API_KEY")
     if user and key:
         return user, key
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
@@ -46,7 +47,7 @@ def main():
     client = ProjectXClient(user, key)
     if not client.login():
         sys.exit("ERREUR : login refusé")
-    print(f"✓ Login OK")
+    print("✓ Login OK")
 
     accounts = client.get_accounts()
     if not accounts:
@@ -59,14 +60,13 @@ def main():
     if not contract:
         sys.exit("ERREUR : contrat MES introuvable")
     contract_id = contract.get("id") or contract.get("contractId")
-    tick_size   = float(contract.get("tickSize", 0.25))
+    tick_size = float(contract.get("tickSize", 0.25))
     print(f"✓ Contract : {contract_id}  tick_size={tick_size}")
 
     # ── Récup prix récent pour positionner le LIMIT loin du marché ───────
-    end = datetime.now(timezone.utc)
+    end = datetime.now(UTC)
     start = end - timedelta(hours=2)
-    bars = client.get_bars(contract_id, start, end, unit=2, unit_number=1,
-                            limit=50, live=False)
+    bars = client.get_bars(contract_id, start, end, unit=2, unit_number=1, limit=50, live=False)
     if not bars:
         sys.exit("ERREUR : pas de bars MES récents")
     last_low = float(bars[-1]["l"])
@@ -83,30 +83,30 @@ def main():
     # API ProjectX : SL ticks NÉGATIFS pour un long (SL sous l'entrée),
     # positifs pour un short. TP inverse. Erreur découverte au smoke v1.
     order_id = client.place_limit_order(
-        account_id  = account_id,
-        contract_id = contract_id,
-        side        = 0,         # 0 = Buy
-        size        = 1,
-        limit_price = limit_price,
-        sl_ticks    = -50,       # SL 50 ticks SOUS le LIMIT (long)
-        tp_ticks    = 50,        # TP 50 ticks AU-DESSUS du LIMIT
-        custom_tag  = custom_tag,
+        account_id=account_id,
+        contract_id=contract_id,
+        side=0,  # 0 = Buy
+        size=1,
+        limit_price=limit_price,
+        sl_ticks=-50,  # SL 50 ticks SOUS le LIMIT (long)
+        tp_ticks=50,  # TP 50 ticks AU-DESSUS du LIMIT
+        custom_tag=custom_tag,
     )
     if not order_id:
         sys.exit("ERREUR : place_limit_order a retourné None")
     print(f"✓ Order placé : id={order_id}")
 
-    print(f"\n→ Sleep 30s (events WS devraient arriver côté smoke)...")
+    print("\n→ Sleep 30s (events WS devraient arriver côté smoke)...")
     time.sleep(30)
 
     print(f"\n→ Cancel order {order_id}")
     ok = client.cancel_order(account_id, order_id)
     print(f"✓ Cancel : {ok}")
 
-    print(f"\n──────────────────────────────────────")
+    print("\n──────────────────────────────────────")
     print(f"Tag à chercher dans le smoke : {custom_tag}")
     print(f"Order ID à chercher          : {order_id}")
-    print(f"──────────────────────────────────────")
+    print("──────────────────────────────────────")
 
 
 if __name__ == "__main__":

@@ -13,22 +13,24 @@ Sortie :
 Usage :
   python scripts/stress_fib_v4.py
 """
+
 from __future__ import annotations
+
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
-import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import (
-    INSTRUMENTS,
-    SLIPPAGE_TICKS_PER_TICKER, COMMISSION_RT_PER_CONTRACT,
-    FIB_V4_LEVEL_PER_TICKER,
-    FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER,
+    COMMISSION_RT_PER_CONTRACT,
     FIB_V4_PIVOT_BREAK_BUFFER_ATR_PER_TICKER,
+    FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER,
+    INSTRUMENTS,
+    SLIPPAGE_TICKS_PER_TICKER,
 )
 from core.data import load_csv
 from core.strategy_fib_v4 import run_fib_v4_backtest
@@ -39,7 +41,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 # Cellules 🟢 retenues Phase 4
 PROD_CELLS = [
     ("MES1", "m15", 0.382),
-    ("NQ1",  "m15", 0.382),
+    ("NQ1", "m15", 0.382),
     ("MGC1", "m15", 0.500),
 ]
 
@@ -74,16 +76,22 @@ def metrics(trades: pd.DataFrame) -> dict:
     )
 
 
-def run_cell(ticker: str, tf: str, fib_level: float,
-              wick_max: float = None, pivot_buffer: float = None) -> pd.DataFrame:
+def run_cell(
+    ticker: str, tf: str, fib_level: float, wick_max: float = None, pivot_buffer: float = None
+) -> pd.DataFrame:
     df = load_csv(str(DATA_DIR / f"{ticker}_data_{tf}.csv"))
     trades = run_fib_v4_backtest(
-        df, ticker,
+        df,
+        ticker,
         fib_level=fib_level,
-        wick_max_atr=wick_max if wick_max is not None
-            else FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER[ticker],
-        pivot_break_buffer_atr=pivot_buffer if pivot_buffer is not None
-            else FIB_V4_PIVOT_BREAK_BUFFER_ATR_PER_TICKER[ticker],
+        wick_max_atr=(
+            wick_max if wick_max is not None else FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER[ticker]
+        ),
+        pivot_break_buffer_atr=(
+            pivot_buffer
+            if pivot_buffer is not None
+            else FIB_V4_PIVOT_BREAK_BUFFER_ATR_PER_TICKER[ticker]
+        ),
     )
     if len(trades) == 0:
         return trades
@@ -130,8 +138,7 @@ def regime_breakdown(trades: pd.DataFrame) -> dict:
     return out
 
 
-def monte_carlo_dd(trades: pd.DataFrame, n_iter: int = 1000,
-                    seed: int = 42) -> dict:
+def monte_carlo_dd(trades: pd.DataFrame, n_iter: int = 1000, seed: int = 42) -> dict:
     """Permutation random de l'ordre des trades → distribution du DD attendu."""
     if len(trades) < 10:
         return {}
@@ -143,8 +150,12 @@ def monte_carlo_dd(trades: pd.DataFrame, n_iter: int = 1000,
         eq = np.cumsum(perm)
         dds[k] = (eq - np.maximum.accumulate(eq)).min()
     return dict(
-        observed_dd=float((trades.sort_values("pending_time")["pnl"].cumsum() -
-                            trades.sort_values("pending_time")["pnl"].cumsum().cummax()).min()),
+        observed_dd=float(
+            (
+                trades.sort_values("pending_time")["pnl"].cumsum()
+                - trades.sort_values("pending_time")["pnl"].cumsum().cummax()
+            ).min()
+        ),
         mean_dd=float(dds.mean()),
         p5_dd=float(np.percentile(dds, 5)),
         p50_dd=float(np.percentile(dds, 50)),
@@ -159,8 +170,14 @@ def worst_case_profile(trades: pd.DataFrame, k: int = 20) -> dict:
         return {}
     worst = trades.nsmallest(k, "pnl")
     rest = trades[~trades.index.isin(worst.index)]
-    feats = ["wick_through_atr", "pivot_break_atr", "mae_pending_atr",
-             "bars_to_fill", "adx_at_arm", "bars_since_confirm"]
+    feats = [
+        "wick_through_atr",
+        "pivot_break_atr",
+        "mae_pending_atr",
+        "bars_to_fill",
+        "adx_at_arm",
+        "bars_since_confirm",
+    ]
     out = {}
     for f in feats:
         if f not in trades.columns:
@@ -184,11 +201,15 @@ def sensitivity_analysis(ticker: str, tf: str, fib_level: float) -> list:
         for pbuf in [0.0, 0.10, 0.20]:
             trades = run_cell(ticker, tf, fib_level, wick_max=wmax, pivot_buffer=pbuf)
             m = metrics(trades)
-            rows.append(dict(
-                ticker=ticker, wick_max=round(wmax, 4),
-                wick_delta_pct=delta_pct, pivot_buffer=pbuf,
-                **m,
-            ))
+            rows.append(
+                dict(
+                    ticker=ticker,
+                    wick_max=round(wmax, 4),
+                    wick_delta_pct=delta_pct,
+                    pivot_buffer=pbuf,
+                    **m,
+                )
+            )
     return rows
 
 
@@ -203,14 +224,20 @@ def main():
         print(f"\n  ── {ticker} {tf} fib={fib_level} ──")
         trades = run_cell(ticker, tf, fib_level)
         m = metrics(trades)
-        print(f"    Baseline : n={m['n']}, PF={m['pf']:.2f}, "
-              f"P&L=${m['pnl']:+,.0f}, DD=${m['dd']:+,.0f}")
+        print(
+            f"    Baseline : n={m['n']}, PF={m['pf']:.2f}, "
+            f"P&L=${m['pnl']:+,.0f}, DD=${m['dd']:+,.0f}"
+        )
 
-        lines.append(f"\n## {ticker} (m15 fib={fib_level}, wick_max="
-                     f"{FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER[ticker]})\n")
-        lines.append(f"\n**Baseline complet (toute l'historique)** : n={m['n']}, "
-                     f"PF={m['pf']:.2f}, P&L=${m['pnl']:+,.0f}, DD=${m['dd']:+,.0f}, "
-                     f"WR={m['wr']:.1%}\n")
+        lines.append(
+            f"\n## {ticker} (m15 fib={fib_level}, wick_max="
+            f"{FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER[ticker]})\n"
+        )
+        lines.append(
+            f"\n**Baseline complet (toute l'historique)** : n={m['n']}, "
+            f"PF={m['pf']:.2f}, P&L=${m['pnl']:+,.0f}, DD=${m['dd']:+,.0f}, "
+            f"WR={m['wr']:.1%}\n"
+        )
 
         # Régimes
         lines.append("\n### Décomposition par régime\n")
@@ -229,15 +256,19 @@ def main():
             lines.append("\n### Monte Carlo DD (1000 permutations de l'ordre)\n")
             lines.append(f"- DD observé : ${mc['observed_dd']:+,.0f}")
             lines.append(f"- DD attendu (mean) : ${mc['mean_dd']:+,.0f}")
-            lines.append(f"- P5 : ${mc['p5_dd']:+,.0f}  | P50 : "
-                         f"${mc['p50_dd']:+,.0f}  | P95 : ${mc['p95_dd']:+,.0f}  | "
-                         f"P99 : ${mc['p99_dd']:+,.0f}")
+            lines.append(
+                f"- P5 : ${mc['p5_dd']:+,.0f}  | P50 : "
+                f"${mc['p50_dd']:+,.0f}  | P95 : ${mc['p95_dd']:+,.0f}  | "
+                f"P99 : ${mc['p99_dd']:+,.0f}"
+            )
 
         # Worst case
         wc = worst_case_profile(trades)
         if wc:
             lines.append("\n### Profil des 20 pires trades vs reste\n")
-            lines.append("| Feature | Worst mean | Worst median | Rest mean | Rest median | Δ médiane |")
+            lines.append(
+                "| Feature | Worst mean | Worst median | Rest mean | Rest median | Δ médiane |"
+            )
             lines.append("|---|---|---|---|---|---|")
             for f, vals in wc.items():
                 delta = vals["worst_median"] - vals["rest_median"]
@@ -266,13 +297,14 @@ def main():
     df_sens = pd.DataFrame(sensitivity_all)
     df_sens.to_csv(OUTPUT_DIR / "fib_v4_sensitivity.csv", index=False)
     lines.append("\n\n## Annexe — Sensibilité globale\n")
-    lines.append(f"Données complètes : `output/fib_v4_sensitivity.csv` "
-                 f"({len(df_sens)} configs)")
+    lines.append(
+        f"Données complètes : `output/fib_v4_sensitivity.csv` " f"({len(df_sens)} configs)"
+    )
 
     out_path = OUTPUT_DIR / "stress_fib_v4.md"
     out_path.write_text("\n".join(lines))
     print(f"\n  ✅ Rapport : {out_path}")
-    print(f"  ✅ Sensibilité CSV : output/fib_v4_sensitivity.csv")
+    print("  ✅ Sensibilité CSV : output/fib_v4_sensitivity.csv")
 
 
 if __name__ == "__main__":

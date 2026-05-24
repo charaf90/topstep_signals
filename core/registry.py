@@ -24,8 +24,6 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-from typing import Dict, List
-
 
 _STRATEGIES_PACKAGE = "strategies"
 
@@ -38,7 +36,7 @@ def _has_min_contract(module) -> bool:
     )
 
 
-def discover_strategies() -> Dict[str, str]:
+def discover_strategies() -> dict[str, str]:
     """
     Scanne le package `strategies/` et retourne {nom_court: chemin_module}.
 
@@ -48,7 +46,7 @@ def discover_strategies() -> Dict[str, str]:
     Chargement tolérant aux erreurs : un module qui plante au chargement
     est ignoré avec un avertissement (pas de crash global).
     """
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     try:
         pkg = importlib.import_module(_STRATEGIES_PACKAGE)
     except ImportError:
@@ -68,7 +66,7 @@ def discover_strategies() -> Dict[str, str]:
     return out
 
 
-def list_strategy_names() -> List[str]:
+def list_strategy_names() -> list[str]:
     """Retourne la liste triée des noms de stratégie disponibles."""
     return sorted(discover_strategies().keys())
 
@@ -81,7 +79,5 @@ def load_strategy(name: str):
     reg = discover_strategies()
     if name not in reg:
         avail = ", ".join(reg) or "(aucune)"
-        raise ImportError(
-            f"Stratégie inconnue : '{name}'. Disponibles : {avail}"
-        )
+        raise ImportError(f"Stratégie inconnue : '{name}'. Disponibles : {avail}")
     return importlib.import_module(reg[name])

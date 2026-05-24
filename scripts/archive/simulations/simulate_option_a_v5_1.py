@@ -23,8 +23,9 @@ Ce script :
 
 Aucune écriture broker/, core/. Pure analyse de données.
 """
+
 from pathlib import Path
-import json
+
 import numpy as np
 import pandas as pd
 
@@ -32,10 +33,13 @@ np.random.seed(42)
 
 ROOT = Path(__file__).resolve().parent.parent
 import sys
+
 sys.path.insert(0, str(ROOT))
 
 from config import (
-    INSTRUMENTS, SLIPPAGE_TICKS_PER_TICKER, COMMISSION_RT_PER_CONTRACT,
+    COMMISSION_RT_PER_CONTRACT,
+    INSTRUMENTS,
+    SLIPPAGE_TICKS_PER_TICKER,
 )
 
 REPORT_PATH = ROOT / "output" / "option_a_v5_1.md"
@@ -239,9 +243,7 @@ is_v4_feat, oos_v4_feat = split_is_oos(df_v4_features)
 # ============================================================================
 print("\n=== Distribution des rejets dans v5.1 (full période) ===")
 reject_dist = (
-    df_v5_1.groupby(["ticker", "v5_reject_reason"], dropna=False)
-    .size()
-    .reset_index(name="count")
+    df_v5_1.groupby(["ticker", "v5_reject_reason"], dropna=False).size().reset_index(name="count")
 )
 print(reject_dist.to_string(index=False))
 
@@ -275,8 +277,9 @@ for ticker in ["MES1", "NQ1", "YM1"]:
 # ============================================================================
 rejects_oos_by_ticker = {}
 for ticker in ["MES1", "NQ1", "YM1"]:
-    sub = oos_v5_1[(oos_v5_1["ticker"] == ticker) &
-                    (oos_v5_1["v5_reject_reason"] == "F2_excursion_too_narrow")]
+    sub = oos_v5_1[
+        (oos_v5_1["ticker"] == ticker) & (oos_v5_1["v5_reject_reason"] == "F2_excursion_too_narrow")
+    ]
     n = len(sub)
     cost = frictions[ticker]["option_a_cancel_cost_per_trade"]
     rejects_oos_by_ticker[ticker] = {
@@ -290,20 +293,29 @@ for ticker in ["MES1", "NQ1", "YM1"]:
 # ============================================================================
 lines = []
 lines.append("# Option A — simulation du coût d'annulation post-fill (OPR v5.1)\n")
-lines.append("Hypothèse : ProjectX ne supporte pas les ordres conditionnels. "
-             "On place le LIMIT à opr_high → fill → close immédiat au market si F2 < f2_min_atr.\n")
-lines.append(f"Coût Option A par trade rejeté = 2×slippage_ticks×tick_size×dollar_per_point + commission_RT.\n")
+lines.append(
+    "Hypothèse : ProjectX ne supporte pas les ordres conditionnels. "
+    "On place le LIMIT à opr_high → fill → close immédiat au market si F2 < f2_min_atr.\n"
+)
+lines.append(
+    "Coût Option A par trade rejeté = 2×slippage_ticks×tick_size×dollar_per_point + commission_RT.\n"
+)
 lines.append(f"Walk-forward : IS ≤ {IS_END}, OOS ≥ {OOS_START}\n")
 lines.append("---\n")
 
 lines.append("## 1. Paramètres de coût par ticker\n")
-fric_df = pd.DataFrame({t: {
-    "tick_size": v["tick_size"],
-    "dollar_per_point": v["dpp"],
-    "slippage_ticks": v["slip_ticks"],
-    "standard_friction_$/trade": round(v["standard_friction_per_trade"], 2),
-    "option_a_cancel_$/trade": round(v["option_a_cancel_cost_per_trade"], 2),
-} for t, v in frictions.items()}).T
+fric_df = pd.DataFrame(
+    {
+        t: {
+            "tick_size": v["tick_size"],
+            "dollar_per_point": v["dpp"],
+            "slippage_ticks": v["slip_ticks"],
+            "standard_friction_$/trade": round(v["standard_friction_per_trade"], 2),
+            "option_a_cancel_$/trade": round(v["option_a_cancel_cost_per_trade"], 2),
+        }
+        for t, v in frictions.items()
+    }
+).T
 lines.append(fric_df.to_markdown())
 lines.append("")
 
@@ -319,31 +331,37 @@ lines.append(rej_df.to_markdown())
 lines.append("")
 
 lines.append("## 4. Portfolio OOS — comparaison nette des 3 scénarios\n")
-scen_df = pd.DataFrame({
-    "v4 (baseline net)": oos_v4,
-    "v5.1 pure (filtré, NET)": oos_v5_1_pure,
-    "v5.1 Option A (NET avec coût annulation)": oos_v5_1_optA,
-}).T
+scen_df = pd.DataFrame(
+    {
+        "v4 (baseline net)": oos_v4,
+        "v5.1 pure (filtré, NET)": oos_v5_1_pure,
+        "v5.1 Option A (NET avec coût annulation)": oos_v5_1_optA,
+    }
+).T
 lines.append(scen_df.to_markdown())
 lines.append("")
 
 lines.append("## 5. Par ticker OOS — net\n")
 for ticker in ["MES1", "NQ1", "YM1"]:
     lines.append(f"### {ticker}\n")
-    d = pd.DataFrame({
-        "v4 (net)": oos_per_ticker[ticker]["v4_net"],
-        "v5.1 pure (net)": oos_per_ticker[ticker]["v5_1_pure_net"],
-        "v5.1 Option A (net)": oos_per_ticker[ticker]["v5_1_optionA_net"],
-    }).T
+    d = pd.DataFrame(
+        {
+            "v4 (net)": oos_per_ticker[ticker]["v4_net"],
+            "v5.1 pure (net)": oos_per_ticker[ticker]["v5_1_pure_net"],
+            "v5.1 Option A (net)": oos_per_ticker[ticker]["v5_1_optionA_net"],
+        }
+    ).T
     lines.append(d.to_markdown())
     lines.append("")
 
 lines.append("## 6. Stabilité IS portfolio (sanity check)\n")
-is_scen = pd.DataFrame({
-    "v4 (baseline net)": is_v4,
-    "v5.1 pure (filtré, NET)": is_v5_1_pure,
-    "v5.1 Option A (NET avec coût annulation)": is_v5_1_optA,
-}).T
+is_scen = pd.DataFrame(
+    {
+        "v4 (baseline net)": is_v4,
+        "v5.1 pure (filtré, NET)": is_v5_1_pure,
+        "v5.1 Option A (NET avec coût annulation)": is_v5_1_optA,
+    }
+).T
 lines.append(is_scen.to_markdown())
 lines.append("")
 
@@ -352,14 +370,20 @@ lines.append("## 7. Verdict net Option A\n")
 delta_pnl_opta_vs_pure = oos_v5_1_optA["pnl_total"] - oos_v5_1_pure["pnl_total"]
 delta_pnl_opta_vs_v4 = oos_v5_1_optA["pnl_total"] - oos_v4["pnl_total"]
 delta_pf_vs_v4 = (oos_v5_1_optA["pf"] or 0) - oos_v4["pf"]
-lines.append(f"- **Δ PnL (Option A − v5.1 pure)** : ${delta_pnl_opta_vs_pure:+,.2f} (coût total des annulations OOS)")
+lines.append(
+    f"- **Δ PnL (Option A − v5.1 pure)** : ${delta_pnl_opta_vs_pure:+,.2f} (coût total des annulations OOS)"
+)
 lines.append(f"- **Δ PnL (Option A − v4)** : ${delta_pnl_opta_vs_v4:+,.2f}")
 lines.append(f"- **Δ PF (Option A − v4)** : {delta_pf_vs_v4:+.3f}")
-lines.append(f"- **DD réduit ?** v4 DD = ${oos_v4['max_dd']:,.0f}, Option A DD = ${oos_v5_1_optA['max_dd']:,.0f} (réduction {100*(1 - oos_v5_1_optA['max_dd']/oos_v4['max_dd']):+.1f}% si dd<0)")
+lines.append(
+    f"- **DD réduit ?** v4 DD = ${oos_v4['max_dd']:,.0f}, Option A DD = ${oos_v5_1_optA['max_dd']:,.0f} (réduction {100*(1 - oos_v5_1_optA['max_dd']/oos_v4['max_dd']):+.1f}% si dd<0)"
+)
 
 opta_pf = oos_v5_1_optA["pf"] or 0
 verdict_emoji = "🟢" if opta_pf >= 1.5 else "🟡" if opta_pf >= 1.2 else "🔴"
-lines.append(f"\n**Verdict statistique brut Option A net portfolio OOS : {verdict_emoji} PF={opta_pf:.2f}**\n")
+lines.append(
+    f"\n**Verdict statistique brut Option A net portfolio OOS : {verdict_emoji} PF={opta_pf:.2f}**\n"
+)
 lines.append("Critères SKILL.md :")
 lines.append(f"- OOS PF ≥ 1.5 (🟢) : {'✅' if opta_pf >= 1.5 else '❌'}")
 lines.append(f"- OOS PnL > 0 : {'✅' if oos_v5_1_optA['pnl_total'] > 0 else '❌'}")
@@ -369,7 +393,13 @@ lines.append("")
 # Save
 REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
 print(f"\nRapport sauvegardé : {REPORT_PATH}")
-print(f"\nOOS portfolio :")
-print(f"  v4 net          : PnL ${oos_v4['pnl_total']:,.0f}  PF {oos_v4['pf']}  DD ${oos_v4['max_dd']:,.0f}")
-print(f"  v5.1 pure net   : PnL ${oos_v5_1_pure['pnl_total']:,.0f}  PF {oos_v5_1_pure['pf']}  DD ${oos_v5_1_pure['max_dd']:,.0f}")
-print(f"  v5.1 OptionA net: PnL ${oos_v5_1_optA['pnl_total']:,.0f}  PF {oos_v5_1_optA['pf']}  DD ${oos_v5_1_optA['max_dd']:,.0f}")
+print("\nOOS portfolio :")
+print(
+    f"  v4 net          : PnL ${oos_v4['pnl_total']:,.0f}  PF {oos_v4['pf']}  DD ${oos_v4['max_dd']:,.0f}"
+)
+print(
+    f"  v5.1 pure net   : PnL ${oos_v5_1_pure['pnl_total']:,.0f}  PF {oos_v5_1_pure['pf']}  DD ${oos_v5_1_pure['max_dd']:,.0f}"
+)
+print(
+    f"  v5.1 OptionA net: PnL ${oos_v5_1_optA['pnl_total']:,.0f}  PF {oos_v5_1_optA['pf']}  DD ${oos_v5_1_optA['max_dd']:,.0f}"
+)

@@ -17,9 +17,9 @@ Seuls les événements significatifs sont enregistrés :
   CRITICAL → limite Topstep franchie
 """
 
-from datetime import datetime, timezone
-from pathlib import Path
 import logging
+from datetime import UTC, datetime
+from pathlib import Path
 
 _py_log = logging.getLogger("event_logger")
 
@@ -35,9 +35,9 @@ class EventLogger:
     # ─────────────────────────────────────────────────────────────────────
 
     def _write(self, level: str, event: str, **kwargs):
-        now     = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
         details = "  ".join(f"{k}={v}" for k, v in kwargs.items() if v is not None)
-        line    = f"{now}  [{level:<8}]  {event}"
+        line = f"{now}  [{level:<8}]  {event}"
         if details:
             line += f"  —  {details}"
         try:
@@ -50,16 +50,29 @@ class EventLogger:
     # Événements métier
     # ─────────────────────────────────────────────────────────────────────
 
-    def signal(self, ticker: str, strategy: str, direction: str,
-               entry: float, sl: float, tp: float, rr: float, n_ct: int):
-        self._write("SIGNAL",
-                    f"[{ticker}] {strategy} {direction.upper()} @ {entry}",
-                    sl=sl, tp=tp, rr=rr, n_ct=n_ct)
+    def signal(
+        self,
+        ticker: str,
+        strategy: str,
+        direction: str,
+        entry: float,
+        sl: float,
+        tp: float,
+        rr: float,
+        n_ct: int,
+    ):
+        self._write(
+            "SIGNAL",
+            f"[{ticker}] {strategy} {direction.upper()} @ {entry}",
+            sl=sl,
+            tp=tp,
+            rr=rr,
+            n_ct=n_ct,
+        )
 
     def order_placed(self, tag: str, order_id, dry_run: bool = False):
         mode = "DRY-RUN" if dry_run else "LIVE"
-        self._write("ORDRE", f"Placé  {tag}",
-                    order_id=order_id, mode=mode)
+        self._write("ORDRE", f"Placé  {tag}", order_id=order_id, mode=mode)
 
     def order_failed(self, tag: str, reason: str):
         self._write("ERROR", f"Placement échoué  {tag}", raison=reason)
@@ -67,19 +80,23 @@ class EventLogger:
     def order_cancelled(self, tag: str, reason: str = "fin de session"):
         self._write("ANNULÉ", tag, raison=reason)
 
-    def fill(self, tag: str, ticker: str, direction: str,
-             entry: float, fills_today: int, fills_max: int):
-        self._write("FILL",
-                    f"[{ticker}] {tag}  {direction.upper()} @ {entry}",
-                    fills=f"{fills_today}/{fills_max}")
+    def fill(
+        self, tag: str, ticker: str, direction: str, entry: float, fills_today: int, fills_max: int
+    ):
+        self._write(
+            "FILL",
+            f"[{ticker}] {tag}  {direction.upper()} @ {entry}",
+            fills=f"{fills_today}/{fills_max}",
+        )
 
-    def close(self, tag: str, ticker: str, pnl: float,
-              session_pnl: float, cum_pnl: float):
-        self._write("CLÔTURE",
-                    f"[{ticker}] {tag}",
-                    pnl=f"${pnl:+.0f}",
-                    session=f"${session_pnl:+.0f}",
-                    cum=f"${cum_pnl:+.0f}")
+    def close(self, tag: str, ticker: str, pnl: float, session_pnl: float, cum_pnl: float):
+        self._write(
+            "CLÔTURE",
+            f"[{ticker}] {tag}",
+            pnl=f"${pnl:+.0f}",
+            session=f"${session_pnl:+.0f}",
+            cum=f"${cum_pnl:+.0f}",
+        )
 
     def risk_blocked(self, ticker: str, tag: str, reason: str):
         self._write("BLOQUÉ", f"[{ticker}] {tag}", raison=reason)
@@ -88,22 +105,30 @@ class EventLogger:
         self._write("CRITICAL", "LIMITE TOPSTEP FRANCHIE", raison=reason)
 
     def daily_warning(self, day_pnl: float, limit: float):
-        self._write("WARN", "Limite journalière approchée",
-                    pnl=f"${day_pnl:.0f}",
-                    limite=f"${limit:.0f}",
-                    pct=f"{abs(day_pnl)/limit*100:.0f}%")
+        self._write(
+            "WARN",
+            "Limite journalière approchée",
+            pnl=f"${day_pnl:.0f}",
+            limite=f"${limit:.0f}",
+            pct=f"{abs(day_pnl)/limit*100:.0f}%",
+        )
 
     def consec_loss_pause(self, n_days: int):
-        self._write("WARN",
-                    f"Pause consec-loss activée ({n_days} jours perdants)")
+        self._write("WARN", f"Pause consec-loss activée ({n_days} jours perdants)")
 
     # ─────────────────────────────────────────────────────────────────────
     # Challenge — sizing adaptatif Topstep
     # ─────────────────────────────────────────────────────────────────────
 
-    def sizing_decision(self, strategy: str, ticker: str,
-                        risk_static: float, risk_adaptive,
-                        risk_applied: float, factors: dict = None):
+    def sizing_decision(
+        self,
+        strategy: str,
+        ticker: str,
+        risk_static: float,
+        risk_adaptive,
+        risk_applied: float,
+        factors: dict = None,
+    ):
         """
         Log d'une décision de sizing adaptatif. risk_adaptive peut être None
         (mode désactivé). factors est un dict des facteurs intermédiaires
@@ -116,41 +141,44 @@ class EventLogger:
         if risk_adaptive is not None:
             kw["adaptive"] = f"${risk_adaptive:.0f}"
         if factors:
-            for k in ("cum_pnl", "days_left", "distance_target",
-                      "dd_cap", "daily_cap", "lockin"):
+            for k in ("cum_pnl", "days_left", "distance_target", "dd_cap", "daily_cap", "lockin"):
                 v = factors.get(k)
                 if v is not None:
-                    kw[k] = (f"${v:.0f}" if k.endswith("_pnl") or k.endswith("_cap")
-                             or k in ("distance_target",) else f"{v:.2f}")
+                    kw[k] = (
+                        f"${v:.0f}"
+                        if k.endswith("_pnl") or k.endswith("_cap") or k in ("distance_target",)
+                        else f"{v:.2f}"
+                    )
         self._write("SIZING", f"[{ticker}] {strategy}", **kw)
 
-    def monthly_reset(self, when_iso: str, prev_cum_pnl: float,
-                      prev_peak_pnl: float):
+    def monthly_reset(self, when_iso: str, prev_cum_pnl: float, prev_peak_pnl: float):
         """Log du reset mensuel du challenge (réinit compte Topstep)."""
-        self._write("RESET",
-                    f"Reset mensuel challenge",
-                    when=when_iso,
-                    prev_cum=f"${prev_cum_pnl:+.0f}",
-                    prev_peak=f"${prev_peak_pnl:+.0f}")
+        self._write(
+            "RESET",
+            "Reset mensuel challenge",
+            when=when_iso,
+            prev_cum=f"${prev_cum_pnl:+.0f}",
+            prev_peak=f"${prev_peak_pnl:+.0f}",
+        )
 
-    def challenge_bypass(self, ticker: str, risk_applied: float,
-                         reason: str = "USER_DAILY_LOSS_MAX bypassé"):
+    def challenge_bypass(
+        self, ticker: str, risk_applied: float, reason: str = "USER_DAILY_LOSS_MAX bypassé"
+    ):
         """Notification du bypass de la limite utilisateur en mode challenge."""
-        self._write("WARN",
-                    f"[{ticker}] CHALLENGE bypass",
-                    risk=f"${risk_applied:.0f}",
-                    raison=reason)
+        self._write(
+            "WARN", f"[{ticker}] CHALLENGE bypass", risk=f"${risk_applied:.0f}", raison=reason
+        )
 
     def error(self, context: str, exc):
         self._write("ERROR", f"Erreur système  {context}", detail=str(exc))
 
     def session_start(self, date_str: str, tickers: list, mode: str):
-        self._write("SESSION", f"Démarrage  {date_str}",
-                    actifs=",".join(tickers), mode=mode)
+        self._write("SESSION", f"Démarrage  {date_str}", actifs=",".join(tickers), mode=mode)
 
     def session_end(self, date_str: str, session_pnl: float, n_fills: int):
-        self._write("SESSION", f"Fin  {date_str}",
-                    session_pnl=f"${session_pnl:+.0f}", fills=n_fills)
+        self._write(
+            "SESSION", f"Fin  {date_str}", session_pnl=f"${session_pnl:+.0f}", fills=n_fills
+        )
 
     # ─────────────────────────────────────────────────────────────────────
     # Realtime (SignalR User Hub) — lifecycle et santé connexion WS
