@@ -239,7 +239,7 @@ def main():
     print(f"  ✅ MD  : {md_path}")
 
     # Récap console
-    print(f"\n{'─'*70}")
+    print(f"\n{'─' * 70}")
     print("RÉCAPITULATIF VERDICT BASELINE")
     print("─" * 70)
     for verdict in ["STRONG", "VIABLE", "REJECT", "MISSING"]:
@@ -314,8 +314,7 @@ def write_markdown_report(df: pd.DataFrame, path: Path) -> None:
             lines.append(f"| {lvl:.3f} | 0 | — | — |")
             continue
         lines.append(
-            f"| {lvl:.3f} | {len(sub)} | {sub['pf'].mean():.2f} "
-            f"| ${sub['pnl_total'].sum():+,.0f} |"
+            f"| {lvl:.3f} | {len(sub)} | {sub['pf'].mean():.2f} | ${sub['pnl_total'].sum():+,.0f} |"
         )
 
     # Synthèse par timeframe
@@ -328,7 +327,7 @@ def write_markdown_report(df: pd.DataFrame, path: Path) -> None:
             lines.append(f"| {tf} | 0 | — | — |")
             continue
         lines.append(
-            f"| {tf} | {len(sub)} | {sub['pf'].mean():.2f} " f"| ${sub['pnl_total'].sum():+,.0f} |"
+            f"| {tf} | {len(sub)} | {sub['pf'].mean():.2f} | ${sub['pnl_total'].sum():+,.0f} |"
         )
 
     path.write_text("\n".join(lines))

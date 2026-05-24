@@ -632,9 +632,7 @@ def get_fib_v4_live_signal(
 
     atr_arm = pending.get("atr", float("nan"))
     impulse_key = (
-        f"{pending['direction']}"
-        f"_{pending.get('swing_low', 0)}"
-        f"_{pending.get('swing_high', 0)}"
+        f"{pending['direction']}_{pending.get('swing_low', 0)}_{pending.get('swing_high', 0)}"
     )
     bars_remaining = FIB_ORDER_TIMEOUT_BARS - ((n - 1) - pending["pending_idx"])
 
@@ -669,8 +667,7 @@ def get_fib_v4_live_signal(
                     "signal": pending,
                     "impulse_key": impulse_key,
                     "reason": (
-                        f"wick_through_atr={wick:.3f} > {wick_max_atr} "
-                        f"intra-bar (M1 reconstructed)"
+                        f"wick_through_atr={wick:.3f} > {wick_max_atr} intra-bar (M1 reconstructed)"
                     ),
                     "current_m15_low": current_low,
                     "current_m15_high": current_high,

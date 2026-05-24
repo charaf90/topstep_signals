@@ -376,7 +376,7 @@ lines.append(
 lines.append(f"- **Δ PnL (Option A − v4)** : ${delta_pnl_opta_vs_v4:+,.2f}")
 lines.append(f"- **Δ PF (Option A − v4)** : {delta_pf_vs_v4:+.3f}")
 lines.append(
-    f"- **DD réduit ?** v4 DD = ${oos_v4['max_dd']:,.0f}, Option A DD = ${oos_v5_1_optA['max_dd']:,.0f} (réduction {100*(1 - oos_v5_1_optA['max_dd']/oos_v4['max_dd']):+.1f}% si dd<0)"
+    f"- **DD réduit ?** v4 DD = ${oos_v4['max_dd']:,.0f}, Option A DD = ${oos_v5_1_optA['max_dd']:,.0f} (réduction {100 * (1 - oos_v5_1_optA['max_dd'] / oos_v4['max_dd']):+.1f}% si dd<0)"
 )
 
 opta_pf = oos_v5_1_optA["pf"] or 0

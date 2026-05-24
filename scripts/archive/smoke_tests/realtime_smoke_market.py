@@ -220,8 +220,7 @@ class MarketSmokeRunner:
                 if should_print:
                     ts = time.strftime("%H:%M:%S")
                     print(
-                        f"[{ts}] {kind:<14} #{count:<6} "
-                        f"raw={json.dumps(args, default=str)[:400]}"
+                        f"[{ts}] {kind:<14} #{count:<6} raw={json.dumps(args, default=str)[:400]}"
                     )
             except Exception as exc:
                 print(f"  ✗ Handler {kind} exception : {exc}")
@@ -260,7 +259,7 @@ def main():
         "--contract-id",
         type=str,
         default=None,
-        help="Contract ID explicite (bypass search). " "Ex: CON.F.US.MNQ.M26",
+        help="Contract ID explicite (bypass search). Ex: CON.F.US.MNQ.M26",
     )
     parser.add_argument(
         "--max-print-per-kind",

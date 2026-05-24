@@ -239,27 +239,27 @@ def augment_verdict(base_verdict: str, robustness: dict) -> tuple[str, list[str]
 
 def print_stats_report(stats: dict, ticker: str, strategy_id: str, instruments: dict = None):
     inst = (instruments or INSTRUMENTS).get(ticker, {})
-    print(f"\n  {'═'*55}")
+    print(f"\n  {'═' * 55}")
     print(f"  {ticker} — {inst.get('name', ticker)}  [{strategy_id}]")
-    print(f"  {'═'*55}")
+    print(f"  {'═' * 55}")
     print(f"  Trades  : {stats['n']} remplis / {stats['n_signals']} signaux")
-    print(f"  {'─'*55}")
-    print(f"  WR      : {stats['wr']*100:.0f}%")
+    print(f"  {'─' * 55}")
+    print(f"  WR      : {stats['wr'] * 100:.0f}%")
     if stats["avg_win"]:
         print(f"  Avg win : ${stats['avg_win']:+.0f}")
     if stats["avg_loss"]:
         print(f"  Avg loss: ${stats['avg_loss']:.0f}")
     print(f"  PF      : {stats['pf']:.2f}")
     print(f"  Sharpe  : {stats['sharpe']:.2f}")
-    print(f"  {'─'*55}")
+    print(f"  {'─' * 55}")
     print(f"  P&L     : ${stats['pnl']:+,.0f}")
     print(f"  Max DD  : ${stats['dd']:,.0f}")
 
 
 def print_topstep_report(ts: dict, ticker: str):
-    print(f"\n  {'─'*55}")
+    print(f"\n  {'─' * 55}")
     print(f"  TOPSTEP — Validation challenge 50K ({ticker})")
-    print(f"  {'─'*55}")
+    print(f"  {'─' * 55}")
     if ts.get("n_days", 0) == 0:
         print("  Aucun trade")
         return
@@ -267,17 +267,15 @@ def print_topstep_report(ts: dict, ticker: str):
     ft = "❌" if ts["violates_trailing"] else "✅"
     print(
         f"  Jours         : {ts['n_days']} ({ts['n_winning_days']} win, "
-        f"ratio {ts['winning_ratio']*100:.0f}%)"
+        f"ratio {ts['winning_ratio'] * 100:.0f}%)"
     )
     print(
         f"  Perte jour max: ${ts['max_daily_loss']:+,.0f}   "
         f"{fd} (limite -${TOPSTEP_DAILY_LOSS_MAX})"
     )
-    print(
-        f"  Trailing DD   : ${ts['trailing_dd']:+,.0f}   " f"{ft} (limite -${TOPSTEP_TRAILING_DD})"
-    )
+    print(f"  Trailing DD   : ${ts['trailing_dd']:+,.0f}   {ft} (limite -${TOPSTEP_TRAILING_DD})")
     print(f"  Consec. loss  : {ts['max_consec_loss']} jours")
-    print(f"  Bootstrap     : {ts['bootstrap_pass_rate']*100:.1f}%  (cible ≥ 80%)")
+    print(f"  Bootstrap     : {ts['bootstrap_pass_rate'] * 100:.1f}%  (cible ≥ 80%)")
 
 
 def print_portfolio_report(results_by_strategy: dict, n_bootstrap: int = 1000):
@@ -313,18 +311,16 @@ def print_portfolio_report(results_by_strategy: dict, n_bootstrap: int = 1000):
         n_win = int((days > 0).sum())
         bs = _bootstrap(days, n_bootstrap)
 
-        print(f"\n  {'#'*60}")
+        print(f"\n  {'#' * 60}")
         print(f"  PORTEFEUILLE — {strat_id.upper()}")
-        print(f"  {'#'*60}")
+        print(f"  {'#' * 60}")
         fd = "❌" if mdl <= -TOPSTEP_DAILY_LOSS_MAX else "✅"
         ft = "❌" if tdd <= -TOPSTEP_TRAILING_DD else "✅"
-        print(f"  Jours         : {len(days)} ({n_win} win, " f"ratio {n_win/len(days)*100:.0f}%)")
+        print(f"  Jours         : {len(days)} ({n_win} win, ratio {n_win / len(days) * 100:.0f}%)")
         print(f"  P&L total     : ${cum[-1]:+,.0f}")
         print(f"  Perte jour max: ${mdl:+,.0f}   {fd} (limite -${TOPSTEP_DAILY_LOSS_MAX})")
         print(f"  Trailing DD   : ${tdd:+,.0f}   {ft} (limite -${TOPSTEP_TRAILING_DD})")
-        print(
-            f"  Bootstrap     : {bs*100:.1f}%  " f"(cible ≥ 80%, target $+{TOPSTEP_PROFIT_TARGET})"
-        )
+        print(f"  Bootstrap     : {bs * 100:.1f}%  (cible ≥ 80%, target $+{TOPSTEP_PROFIT_TARGET})")
 
 
 def _bootstrap(days: np.ndarray, n: int = 1000) -> float:
@@ -360,9 +356,9 @@ def print_verdict_report(
 ):
     """Rapport de décision post-optimisation."""
     v_emoji, v_label = verdict(oos_stats, oos_topstep)
-    print(f"\n  {'═'*60}")
+    print(f"\n  {'═' * 60}")
     print(f"  RAPPORT — {strategy_id}")
-    print(f"  {'═'*60}")
+    print(f"  {'═' * 60}")
     if is_period:
         print(
             f"  IS  ({is_period}) : "
@@ -375,16 +371,16 @@ def print_verdict_report(
             f"PF={oos_stats['pf']:.2f}  P&L=${oos_stats['pnl']:+,.0f}  "
             f"n={oos_stats['n']}"
         )
-    print(f"  Bootstrap OOS  : {oos_topstep.get('bootstrap_pass_rate', 0)*100:.1f}%")
+    print(f"  Bootstrap OOS  : {oos_topstep.get('bootstrap_pass_rate', 0) * 100:.1f}%")
     print(f"  DD OOS         : ${oos_topstep.get('trailing_dd', 0):,.0f}")
-    print(f"  {'─'*60}")
+    print(f"  {'─' * 60}")
     print(f"  VERDICT : {v_emoji} {v_label}")
 
     if v_label == "PRODUCTION":
         print(
             f"  Tous les critères validés "
             f"(OOS PF ≥ {VERDICT_PRODUCTION['oos_pf']}, "
-            f"BS ≥ {VERDICT_PRODUCTION['bootstrap']*100:.0f}%, "
+            f"BS ≥ {VERDICT_PRODUCTION['bootstrap'] * 100:.0f}%, "
             f"n ≥ {VERDICT_PRODUCTION['oos_n']})"
         )
     elif v_label == "VEILLE":
@@ -392,15 +388,15 @@ def print_verdict_report(
     else:
         reasons = []
         if oos_stats.get("pf", 0) < VERDICT_VEILLE["oos_pf"]:
-            reasons.append(f"OOS PF={oos_stats.get('pf',0):.2f} < {VERDICT_VEILLE['oos_pf']}")
+            reasons.append(f"OOS PF={oos_stats.get('pf', 0):.2f} < {VERDICT_VEILLE['oos_pf']}")
         if oos_topstep.get("bootstrap_pass_rate", 0) < VERDICT_VEILLE["bootstrap"]:
             reasons.append(
-                f"BS={oos_topstep.get('bootstrap_pass_rate',0)*100:.0f}% < "
-                f"{VERDICT_VEILLE['bootstrap']*100:.0f}%"
+                f"BS={oos_topstep.get('bootstrap_pass_rate', 0) * 100:.0f}% < "
+                f"{VERDICT_VEILLE['bootstrap'] * 100:.0f}%"
             )
         if oos_stats.get("n", 0) < VERDICT_VEILLE["oos_n"]:
-            reasons.append(f"n={oos_stats.get('n',0)} < {VERDICT_VEILLE['oos_n']}")
+            reasons.append(f"n={oos_stats.get('n', 0)} < {VERDICT_VEILLE['oos_n']}")
         if oos_stats.get("pnl", 0) <= 0:
-            reasons.append(f"P&L OOS={oos_stats.get('pnl',0):+.0f} ≤ 0")
+            reasons.append(f"P&L OOS={oos_stats.get('pnl', 0):+.0f} ≤ 0")
         print(f"  Critères non atteints : {' | '.join(reasons)}")
-    print(f"  {'═'*60}")
+    print(f"  {'═' * 60}")

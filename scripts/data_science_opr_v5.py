@@ -113,7 +113,7 @@ def pf_safe(x):
 w("# Analyse data science — OPR v5 features (F1, F2, F3)")
 w()
 w(f"Dataset : `output/opr_v5_features.csv` — {len(df)} trades v4 enrichis.")
-w(f"Filled : {len(df_filled)} ({len(df_filled)/len(df):.1%}). Not filled : {len(df_unfilled)}.")
+w(f"Filled : {len(df_filled)} ({len(df_filled) / len(df):.1%}). Not filled : {len(df_unfilled)}.")
 w()
 w("**Approche** : aucun a priori sur les filtres. Laisser les données parler.")
 w()

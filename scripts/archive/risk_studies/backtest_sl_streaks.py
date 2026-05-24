@@ -298,11 +298,10 @@ def main():
             explanation = "aucun cutoff bénéfique"
         else:
             explanation = (
-                f"évite ${-best['blocked_losses_$']:,.0f}, " f"rate ${best['blocked_wins_$']:,.0f}"
+                f"évite ${-best['blocked_losses_$']:,.0f}, rate ${best['blocked_wins_$']:,.0f}"
             )
         lines.append(
-            f"| {name} | N={int(best['N'])} | "
-            f"${best['delta_vs_baseline']:+,.0f} | {explanation} |"
+            f"| {name} | N={int(best['N'])} | ${best['delta_vs_baseline']:+,.0f} | {explanation} |"
         )
 
     (OUTDIR / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

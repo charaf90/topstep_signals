@@ -226,7 +226,7 @@ def main():
     lines = [f"# Grid search combos — {ticker} order={ORDER}\n"]
     w = lines.append
     w(f"- Signaux baseline (seuil RF {thr_10:.3f}) : **{len(signals):,}**")
-    w(f"- Précision baseline : **{prec_baseline:.2%}**  (lift ×{prec_baseline/base_rate:.2f})")
+    w(f"- Précision baseline : **{prec_baseline:.2%}**  (lift ×{prec_baseline / base_rate:.2f})")
     w(f"- Contraintes : recall conservé ≥ {MIN_RECALL:.0%}, n_signaux ≥ {MIN_SIGNALS}")
     w("- Atomic filters testés :")
     for feat, conds in atomics.items():
@@ -240,7 +240,7 @@ def main():
         top["precision"] = top["precision"].map(lambda x: f"{x:.2%}")
         top["recall_kept"] = top["recall_kept"].map(lambda x: f"{x:.2%}")
         top["lift_vs_base"] = combos.head(15).apply(
-            lambda r: f"×{r['precision']/prec_baseline:.2f}", axis=1
+            lambda r: f"×{r['precision'] / prec_baseline:.2f}", axis=1
         )
         w(
             top[
@@ -299,7 +299,7 @@ def main():
         best = combos.iloc[0]
         print(f"\n🏆 Meilleur combo : {best['rule']}")
         print(
-            f"   → précision {best['precision']:.2%} (×{best['precision']/prec_baseline:.2f}), "
+            f"   → précision {best['precision']:.2%} (×{best['precision'] / prec_baseline:.2f}), "
             f"recall {best['recall_kept']:.2%}, n={best['n_signaux']}"
         )
 

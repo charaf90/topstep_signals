@@ -43,6 +43,25 @@ ignore = [
     "E501",   # ligne trop longue : géré par black
     "B008",   # appel de fonction comme valeur par défaut (commun avec dicts mutables)
     "SIM108", # ternaire forcé : parfois moins lisible
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Dette PHASE 0 — à durcir progressivement (TODO: re-activer une règle
+    # à la fois après cleanup ciblé, surtout sur core/ et broker/).
+    # Ces règles touchent les fichiers prod critiques (core/opr*, fib*,
+    # broker/live_runner) et ne sont pas auto-fixables sans risque.
+    # ─────────────────────────────────────────────────────────────────────
+    "E402",   # imports pas en tête de fichier (volontaire dans plusieurs scripts)
+    "E712",   # comparaison à True/False (cosmétique)
+    "E741",   # nom de variable ambigu (l, I, O)
+    "F841",   # variable assignée mais jamais utilisée (souvent intentionnel)
+    "B007",   # variable de boucle non utilisée
+    "B904",   # raise X dans except sans `from`
+    "B905",   # zip sans `strict=` (introduit en Python 3.10)
+    "SIM102", # if collapsibles
+    "SIM105", # contextlib.suppress
+    "SIM110", # any(...) au lieu de boucle
+    "SIM118", # in dict.keys()
+    "UP031",  # %-string vs f-string
 ]
 
 [tool.ruff.lint.per-file-ignores]

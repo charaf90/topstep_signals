@@ -162,9 +162,9 @@ def main():
             for k, p in paths.items():
                 print(f"    • {k:<12} → {p}")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  ✅ BACKTEST TERMINÉ")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

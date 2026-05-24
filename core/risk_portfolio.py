@@ -234,7 +234,7 @@ class PortfolioRiskManager:
         # 1. Cap positions actives (filées) simultanément
         n_active = len(self.active_positions)
         if self.user_max_open_positions > 0 and n_active >= self.user_max_open_positions:
-            return False, (f"max_active_positions_{n_active}" f"/{self.user_max_open_positions}")
+            return False, (f"max_active_positions_{n_active}/{self.user_max_open_positions}")
 
         # 2. Cap fills journaliers — inutile d'armer si la journée est pleine
         if (
@@ -242,7 +242,7 @@ class PortfolioRiskManager:
             and self.daily_fills_count >= self.user_max_trades_per_day
         ):
             return False, (
-                f"daily_fills_cap_{self.daily_fills_count}" f"/{self.user_max_trades_per_day}"
+                f"daily_fills_cap_{self.daily_fills_count}/{self.user_max_trades_per_day}"
             )
 
         # 3. Cap perte journalière sur P&L RÉALISÉ uniquement

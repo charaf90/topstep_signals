@@ -317,8 +317,8 @@ def print_report(results: dict, output_dir: str):
         f"{fmt_money(total_pnl_live_net - total_pnl_post_net)} |",
         f"| PF brut | {stats_post.get('pf', float('nan')):.2f} | {stats_live.get('pf', float('nan')):.2f} | "
         f"{stats_live.get('pf', 0) - stats_post.get('pf', 0):+.2f} |",
-        f"| WR | {stats_post.get('wr', 0)*100:.1f} % | {stats_live.get('wr', 0)*100:.1f} % | "
-        f"{(stats_live.get('wr', 0) - stats_post.get('wr', 0))*100:+.1f} pp |",
+        f"| WR | {stats_post.get('wr', 0) * 100:.1f} % | {stats_live.get('wr', 0) * 100:.1f} % | "
+        f"{(stats_live.get('wr', 0) - stats_post.get('wr', 0)) * 100:+.1f} pp |",
         f"| DD max | {fmt_money(stats_post.get('dd', 0))} | {fmt_money(stats_live.get('dd', 0))} | "
         f"{fmt_money(stats_live.get('dd', 0) - stats_post.get('dd', 0))} |",
     ]
@@ -386,8 +386,8 @@ def print_report(results: dict, output_dir: str):
             f"| min | {f2_post_dist['min']:.3f} | {f2_pre_dist['min']:.3f} |",
             f"| max | {f2_post_dist['max']:.3f} | {f2_pre_dist['max']:.3f} |",
             f"| % below seuil | "
-            f"{(filled_post['f2_excursion_atr'] < threshold).mean()*100:.1f} % | "
-            f"{(filled_post['f2_pre_fill_atr'] < threshold).mean()*100:.1f} % |",
+            f"{(filled_post['f2_excursion_atr'] < threshold).mean() * 100:.1f} % | "
+            f"{(filled_post['f2_pre_fill_atr'] < threshold).mean() * 100:.1f} % |",
             "",
         ]
 

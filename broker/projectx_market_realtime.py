@@ -365,7 +365,7 @@ class ProjectXMarketRealtimeClient:
                     if self._sub_trades:
                         self._connection.send("SubscribeContractTrades", [cid])
             _log.info(
-                "MarketRT: connecté & subscriptions envoyées " "(quotes=%s trades=%s contracts=%s)",
+                "MarketRT: connecté & subscriptions envoyées (quotes=%s trades=%s contracts=%s)",
                 self._sub_quotes,
                 self._sub_trades,
                 self._contract_ids,

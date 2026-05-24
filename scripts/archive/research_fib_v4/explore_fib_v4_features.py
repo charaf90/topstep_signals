@@ -197,7 +197,7 @@ def main():
     lines = []
     lines.append("# Phase 3a — Analyse univariée des features fib-v4\n")
     lines.append(
-        f"**Population** : {len(df_all)} trades cumulés sur " f"{len(viable)} cellules viables.\n"
+        f"**Population** : {len(df_all)} trades cumulés sur {len(viable)} cellules viables.\n"
     )
     lines.append(
         f"**Méthodologie** : déciles `pd.qcut`, buckets ≥ {MIN_BUCKET_N} "
@@ -258,7 +258,7 @@ def main():
             continue
         lines.append(
             f"\n### Cellule : `{cell_id}` ({len(sub)} trades, "
-            f"PF global = {(sub.loc[sub['pnl']>0,'pnl'].sum() / max(1, -sub.loc[sub['pnl']<0,'pnl'].sum())):.2f})\n"
+            f"PF global = {(sub.loc[sub['pnl'] > 0, 'pnl'].sum() / max(1, -sub.loc[sub['pnl'] < 0, 'pnl'].sum())):.2f})\n"
         )
         for feat in top_features:
             d = decile_analysis(sub, feat)
@@ -284,7 +284,7 @@ def main():
     # 4. Top hypothèses (auto-extraction des plus gros gaps PF)
     lines.append("\n\n## 4. Top hypothèses de filtres (extrêmes globaux)\n")
     lines.append(
-        "Filtres candidats où un bucket extrême a `n ≥ 30` et PF " "très éloigné de la médiane.\n"
+        "Filtres candidats où un bucket extrême a `n ≥ 30` et PF très éloigné de la médiane.\n"
     )
     lines.append("| Feature | Bucket | n | PF | Hypothèse |")
     lines.append("|---|---|---|---|---|")

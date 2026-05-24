@@ -67,10 +67,10 @@ def run_for_ticker(
     strategy_id = getattr(strategy, "STRATEGY_ID", "unknown")
 
     if verbose:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"  BACKTEST — {ticker}  [{strategy_id}]")
-        print(f"{'='*60}")
-        print(f"  {len(df_15m):,} bougies " f"[{df_15m.index.min()} → {df_15m.index.max()}]")
+        print(f"{'=' * 60}")
+        print(f"  {len(df_15m):,} bougies [{df_15m.index.min()} → {df_15m.index.max()}]")
 
     df_trades = strategy.run_backtest(
         df_15m, ticker, tf=tf, params=params, topstep_guard=topstep_guard
@@ -85,7 +85,7 @@ def run_for_ticker(
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        suffix = getattr(strategy, "CSV_SUFFIX", f"_{strategy_id.replace('-','_')}")
+        suffix = getattr(strategy, "CSV_SUFFIX", f"_{strategy_id.replace('-', '_')}")
         csv_path = output_dir / f"backtest_{ticker}{suffix}.csv"
         df_trades.to_csv(csv_path, index=False)
         if verbose:
@@ -145,7 +145,7 @@ def _generate_sample_charts(
     chart_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
-        print(f"\n  ▸ Génération de {len(sample_dates)} chart(s) " f"[{ticker}] → {chart_dir}")
+        print(f"\n  ▸ Génération de {len(sample_dates)} chart(s) [{ticker}] → {chart_dir}")
 
     for date_str in sample_dates:
         day_trades = df_trades[df_trades["date"] == date_str].to_dict("records")

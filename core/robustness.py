@@ -541,7 +541,7 @@ def format_summary_markdown(results: dict) -> str:
     # Monte Carlo DD
     mc = results.get("monte_carlo_dd", {})
     if "error" not in mc:
-        lines.append("**Monte Carlo permutation du DD** " f"({mc['n_iterations']} itérations)")
+        lines.append(f"**Monte Carlo permutation du DD** ({mc['n_iterations']} itérations)")
         lines.append("")
         lines.append("| Métrique | Valeur |")
         lines.append("|---|---|")
@@ -654,7 +654,7 @@ if __name__ == "__main__":
 
     print(
         f"\nGénéré : {n} trades, P&L total = ${df['pnl'].sum():+.0f}, "
-        f"WR = {(df['pnl'] > 0).mean()*100:.1f}%\n"
+        f"WR = {(df['pnl'] > 0).mean() * 100:.1f}%\n"
     )
 
     results = run_full_robustness(

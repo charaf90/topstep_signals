@@ -129,7 +129,7 @@ def plot_per_strategy(all_trades: dict[str, pd.DataFrame]) -> Path:
         ax.axhline(0, color="black", linewidth=0.5)
         ax.axvline(pd.Timestamp(OOS_START), color="grey", linestyle="--", linewidth=0.8, alpha=0.5)
     plt.suptitle(
-        "PnL cumulé par stratégie — sensibilité au risque " "(ligne pointillée = début OOS)",
+        "PnL cumulé par stratégie — sensibilité au risque (ligne pointillée = début OOS)",
         fontsize=13,
     )
     plt.tight_layout()
@@ -292,7 +292,7 @@ def main():
         "--exclude",
         action="append",
         default=[],
-        help="Nom exact de stratégie à exclure (répétable). " f"Choix : {list(ALL_FILES.keys())}",
+        help=f"Nom exact de stratégie à exclure (répétable). Choix : {list(ALL_FILES.keys())}",
     )
     ap.add_argument(
         "--outdir",

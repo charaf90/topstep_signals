@@ -189,7 +189,7 @@ def main():
         f"| **${mp3['pnl']:+,.0f}** | **${mp3['dd']:+,.0f}** "
         f"| **{mp4['n']}** | **{mp4['pf']:.2f}** "
         f"| **${mp4['pnl']:+,.0f}** | **${mp4['dd']:+,.0f}** "
-        f"| **{1.0 - mp4['n']/max(1, mp3['n']):.0%}** |"
+        f"| **{1.0 - mp4['n'] / max(1, mp3['n']):.0%}** |"
     )
 
     # ── OOS ──
@@ -221,8 +221,8 @@ def main():
         f"| **PORTEFEUILLE OOS** | **{mp3_oos['n']}** | "
         f"**{mp3_oos['pf']:.2f}** | **${mp3_oos['pnl']:+,.0f}** "
         f"| **{mp4_oos['n']}** | **{mp4_oos['pf']:.2f}** "
-        f"| **${mp4_oos['pnl']:+,.0f}** | **${mp4_oos['pnl']-mp3_oos['pnl']:+,.0f}** "
-        f"| **{1.0 - mp4_oos['n']/max(1, mp3_oos['n']):.0%}** |"
+        f"| **${mp4_oos['pnl']:+,.0f}** | **${mp4_oos['pnl'] - mp3_oos['pnl']:+,.0f}** "
+        f"| **{1.0 - mp4_oos['n'] / max(1, mp3_oos['n']):.0%}** |"
     )
 
     # ── Corrélation P&L daily ──
@@ -254,7 +254,7 @@ def main():
         "avoir un P&L cumulé majoritairement négatif (= on a éliminé les pertes).\n"
     )
     lines.append(
-        "| Ticker | Trades v3 OOS | Refusés par v4 | P&L cumulé refusés | " "PF des refusés |"
+        "| Ticker | Trades v3 OOS | Refusés par v4 | P&L cumulé refusés | PF des refusés |"
     )
     lines.append("|---|---|---|---|---|")
     for ticker, t3, t4 in zip([c[0] for c in PROD_CELLS], portfolio_v3_oos, portfolio_v4_oos):

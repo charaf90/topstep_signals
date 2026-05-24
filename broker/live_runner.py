@@ -1154,8 +1154,7 @@ class SessionRunner:
             _log.critical("Realtime: > 10 erreurs/h — auto-disable WS")
             self.tg.notify_system_error(
                 "realtime_auto_disabled",
-                f"WS désactivé après {self._rt_error_count_hour} erreurs/h. "
-                "Polling REST continue.",
+                f"WS désactivé après {self._rt_error_count_hour} erreurs/h. Polling REST continue.",
             )
             try:
                 self.rt.stop()
@@ -1615,8 +1614,7 @@ class SessionRunner:
                     self.state["opening_balance"] = opening
                     self.state["opening_balance_date"] = today_str
                     _log.info(
-                        "Solde d'ouverture recalculé : %.2f $ "
-                        "(balance=%.2f, pnl=%.2f, fees=%.2f)",
+                        "Solde d'ouverture recalculé : %.2f $ (balance=%.2f, pnl=%.2f, fees=%.2f)",
                         opening,
                         balance,
                         today_pnl,
@@ -1719,7 +1717,7 @@ class SessionRunner:
         # ── 10. Résumé risk manager ───────────────────────────────────────
         status = self.rm.status()
         _log.info(
-            "Risk : cum=%.0f$ | jour=%.0f$ | fills=%d/%d | " "slack daily=%.0f$ trail=%.0f$",
+            "Risk : cum=%.0f$ | jour=%.0f$ | fills=%d/%d | slack daily=%.0f$ trail=%.0f$",
             status["cum_pnl"],
             status["realized_day_pnl"],
             status["daily_fills_count"],

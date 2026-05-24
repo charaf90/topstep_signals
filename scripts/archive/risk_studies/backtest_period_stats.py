@@ -312,19 +312,19 @@ def main():
     lines.append("\n## Distribution mensuelle portfolio (résumé)\n")
     lines.append(f"- Mois testés : **{len(monthly_port)}**")
     lines.append(
-        f"- Mois positifs : **{(monthly_port > 0).sum()}** ({100*(monthly_port > 0).mean():.1f}%)"
+        f"- Mois positifs : **{(monthly_port > 0).sum()}** ({100 * (monthly_port > 0).mean():.1f}%)"
     )
     lines.append(
         f"- Mois ≥ +$3000 (challenge passé) : **{(monthly_port >= 3000).sum()}** "
-        f"({100*(monthly_port >= 3000).mean():.1f}%)"
+        f"({100 * (monthly_port >= 3000).mean():.1f}%)"
     )
     lines.append(
         f"- Mois ≤ -$2000 (bust trailing DD) : **{(monthly_port <= -2000).sum()}** "
-        f"({100*(monthly_port <= -2000).mean():.1f}%)"
+        f"({100 * (monthly_port <= -2000).mean():.1f}%)"
     )
     lines.append(
         f"- Mois ≤ -$1000 (risque daily loss) : **{(monthly_port <= -1000).sum()}** "
-        f"({100*(monthly_port <= -1000).mean():.1f}%)"
+        f"({100 * (monthly_port <= -1000).mean():.1f}%)"
     )
 
     (OUTDIR / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

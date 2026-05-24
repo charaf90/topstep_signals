@@ -262,7 +262,7 @@ def main():
         accepted = (
             high_match_1tick / common_count >= 0.95 and low_match_1tick / common_count >= 0.95
         )
-        print(f"\n  Critère ≥95% match ≤1 tick high/low : " f"{'✓ OK' if accepted else '✗ ÉCHEC'}")
+        print(f"\n  Critère ≥95% match ≤1 tick high/low : {'✓ OK' if accepted else '✗ ÉCHEC'}")
     else:
         print("  ⚠ Aucun bar en commun — vérifier la fenêtre temporelle")
 

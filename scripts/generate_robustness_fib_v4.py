@@ -96,9 +96,7 @@ def main():
         print(f"    {ticker}: {len(t)} trades OOS, P&L=${t['pnl'].sum():+,.0f}")
 
     portfolio = pd.concat(parts, ignore_index=True).sort_values("pending_dt")
-    print(
-        f"\n  Portefeuille OOS : {len(portfolio)} trades, " f"P&L=${portfolio['pnl'].sum():+,.0f}"
-    )
+    print(f"\n  Portefeuille OOS : {len(portfolio)} trades, P&L=${portfolio['pnl'].sum():+,.0f}")
 
     # n_tests Bonferroni : 5 seuils wick × 3 cellules = 15 tests environ ;
     # mais le test pertinent est la sélection par cellule = 5 par ticker, soit
@@ -186,7 +184,7 @@ def main():
             continue
         md.append(
             f"| {t} | {d['n']} | ${d['pnl']:+,.0f} "
-            f"| {per_ticker[t]['wr']*100:.1f}% "
+            f"| {per_ticker[t]['wr'] * 100:.1f}% "
             f"| {d['bootstrap_pf_p_above']:.1f}% "
             f"| {d['psr']:.1f}% "
             f"| ${d['mc_dd_p95']:+,.0f} | ${d['mc_dd_p99']:+,.0f} |"

@@ -101,7 +101,7 @@ def _analyze_feature(
 
     print(f"\n  {label}")
     print(f"  {'Bin':<14} {'n':>5} {'WR%':>7} {'PF':>7} {'P&L tot':>11} {'P&L moy':>9}")
-    print(f"  {'-'*14} {'-'*5} {'-'*7} {'-'*7} {'-'*11} {'-'*9}")
+    print(f"  {'-' * 14} {'-' * 5} {'-' * 7} {'-' * 7} {'-' * 11} {'-' * 9}")
 
     for i in range(len(bins) - 1):
         left, right = bins[i], bins[i + 1]
@@ -138,7 +138,7 @@ def _analyze_feature_per_ticker(
 
         print(f"\n  {label} — {ticker} (n={len(sub)})")
         print(f"  {'Bin':<14} {'n':>5} {'WR%':>7} {'PF':>7} {'P&L tot':>11} {'P&L moy':>9}")
-        print(f"  {'-'*14} {'-'*5} {'-'*7} {'-'*7} {'-'*11} {'-'*9}")
+        print(f"  {'-' * 14} {'-' * 5} {'-' * 7} {'-' * 7} {'-' * 11} {'-' * 9}")
 
         for i in range(len(bins) - 1):
             left, right = bins[i], bins[i + 1]
@@ -287,8 +287,7 @@ def main() -> int:
         pnl_total = float(sub["pnl"].sum())
         pnl_per_trade = pnl_total / len(filled) if len(filled) > 0 else 0.0
         output_lines.append(
-            f"| {ticker} | {len(sub)} | {len(filled)} | "
-            f"{pnl_total:+,.2f} | {pnl_per_trade:+,.2f} |"
+            f"| {ticker} | {len(sub)} | {len(filled)} | {pnl_total:+,.2f} | {pnl_per_trade:+,.2f} |"
         )
 
     # ── Analyses par feature ─────────────────────────────────────────────────

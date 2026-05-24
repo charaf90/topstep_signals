@@ -484,7 +484,7 @@ def main() -> int:
         "--ticker",
         type=str,
         default=None,
-        help="Nom de ticker à utiliser dans le CSV " "(défaut : --symbol majuscule)",
+        help="Nom de ticker à utiliser dans le CSV (défaut : --symbol majuscule)",
     )
     parser.add_argument("--output-dir", type=str, default="data")
     parser.add_argument(
@@ -550,7 +550,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"\n✓ {len(df):,} bougies récupérées  " f"[{df.index.min()} → {df.index.max()}]")
+    print(f"\n✓ {len(df):,} bougies récupérées  [{df.index.min()} → {df.index.max()}]")
     print(df.head(3).to_string())
     print("...")
     print(df.tail(3).to_string())

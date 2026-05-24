@@ -25,8 +25,7 @@ def _load_baseline(strategy_name: str) -> dict:
     path = GOLDEN_DIR / f"{strategy_name}_baseline.json"
     if not path.exists():
         pytest.skip(
-            f"Baseline manquant : {path}. Lance "
-            f"`python tests/golden/regenerate.py` pour le créer."
+            f"Baseline manquant : {path}. Lance `python tests/golden/regenerate.py` pour le créer."
         )
     return json.loads(path.read_text())
 
@@ -47,9 +46,9 @@ def test_golden_master(strategy_name: str) -> None:
         act = actual["tickers"][ticker]
 
         if "missing_data" in exp:
-            assert "missing_data" in act, (
-                f"[{strategy_name}/{ticker}] baseline marqué missing_data, " f"actual a des données"
-            )
+            assert (
+                "missing_data" in act
+            ), f"[{strategy_name}/{ticker}] baseline marqué missing_data, actual a des données"
             continue
 
         assert act["n_total"] == exp["n_total"], (

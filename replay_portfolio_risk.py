@@ -195,19 +195,19 @@ def apply_correlation_filter(trades: pd.DataFrame) -> pd.DataFrame:
 
 
 def _print_replay(label: str, res: dict, pnl_ref: float):
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"  {label}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"  Trades soumis       : {res['n_total']}")
     print(f"  Trades acceptés     : {res['n_accepted']}")
-    print(f"  Trades bloqués      : {res['n_blocked']}  " f"({res['block_rate_pct']:.1f} %)")
+    print(f"  Trades bloqués      : {res['n_blocked']}  ({res['block_rate_pct']:.1f} %)")
     print(f"  P&L réalisé         : ${res['realized_pnl']:+,.0f}")
     print(f"  P&L potentiel bloqué: ${res['blocked_pnl_potential']:+,.0f}")
     print(f"  Breaches limites    : {res['n_breaches']}")
     delta = res["realized_pnl"] - pnl_ref
     print(
         f"  Δ P&L vs référence  : ${delta:+,.0f}  "
-        f"({100*delta/abs(pnl_ref) if pnl_ref else 0:.1f} %)"
+        f"({100 * delta / abs(pnl_ref) if pnl_ref else 0:.1f} %)"
     )
     if res["top_block_reasons"]:
         print("  Top raisons blocage :")
@@ -238,13 +238,13 @@ def main():
     cum = daily.cumsum()
     rolling_max = cum.cummax()
     max_dd = float((cum - rolling_max).min())
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("  RÉFÉRENCE — backtest tel quel (garde-fous per-stratégie actuels)")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"  Trades       : {n_total}")
     print(f"  P&L total    : ${pnl_total:+,.0f}")
     print(f"  Max trailing DD : ${max_dd:+,.0f}")
-    print(f"  Daily P&L max : ${float(daily.max()):+,.0f}  " f"min : ${float(daily.min()):+,.0f}")
+    print(f"  Daily P&L max : ${float(daily.max()):+,.0f}  min : ${float(daily.min()):+,.0f}")
 
     # ── Scénario A : garde-fou global SANS sélection actif ──────────────
     res_a = replay(trades)
@@ -263,9 +263,9 @@ def main():
     )
 
     # ── Comparaison A vs B ───────────────────────────────────────────────
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("  COMPARAISON — impact de la sélection actif (A vs B)")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(
         f"  Trades soumis     : {res_a['n_total']:>6}  →  {res_b['n_total']:>6}  "
         f"(−{n_corr_removed} corrélés éliminés amont)"

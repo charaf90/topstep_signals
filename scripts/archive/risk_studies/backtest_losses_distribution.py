@@ -97,7 +97,7 @@ def plot_histogram(trades: pd.DataFrame) -> Path:
             ax.legend(fontsize=8)
         ax.set_title(
             f"{strat} — {len(losses)} jours perdants / "
-            f"{len(pnl)} jours actifs ({100*len(losses)/max(1,len(pnl)):.0f}%)",
+            f"{len(pnl)} jours actifs ({100 * len(losses) / max(1, len(pnl)):.0f}%)",
             fontsize=10,
             fontweight="bold",
         )
@@ -123,7 +123,7 @@ def plot_histogram(trades: pd.DataFrame) -> Path:
     ax.legend(fontsize=8)
     ax.set_title(
         f"PORTFOLIO — {len(losses_port)} jours perdants / "
-        f"{len(daily_port)} jours ({100*len(losses_port)/max(1,len(daily_port)):.0f}%)",
+        f"{len(daily_port)} jours ({100 * len(losses_port) / max(1, len(daily_port)):.0f}%)",
         fontsize=10,
         fontweight="bold",
     )
@@ -265,14 +265,14 @@ def main():
         pire = losses.min() if len(losses) > 0 else 0
         lines.append(
             f"| {strat} | {len(pnl)} | {len(losses)} | "
-            f"{100*len(losses)/len(pnl):.1f}% | ${pire:+,.0f} | "
+            f"{100 * len(losses) / len(pnl):.1f}% | ${pire:+,.0f} | "
             f"${med:+,.0f} | ${avg:+,.0f} |"
         )
     # Portfolio
     losses_port = daily_port[daily_port < 0]
     lines.append(
         f"| **PORTFOLIO** | **{len(daily_port)}** | **{len(losses_port)}** | "
-        f"**{100*len(losses_port)/len(daily_port):.1f}%** | "
+        f"**{100 * len(losses_port) / len(daily_port):.1f}%** | "
         f"**${losses_port.min():+,.0f}** | **${losses_port.median():+,.0f}** | "
         f"**${losses_port.mean():+,.0f}** |"
     )
@@ -333,11 +333,11 @@ def main():
     n_trail = (daily_port <= -2000).sum()
     lines.append(
         f"- Jours qui auraient touché ta limite **DLL -$950** : "
-        f"**{n_dll}** / {len(daily_port)} ({100*n_dll/len(daily_port):.1f}%)"
+        f"**{n_dll}** / {len(daily_port)} ({100 * n_dll / len(daily_port):.1f}%)"
     )
     lines.append(
         f"- Jours qui auraient touché **Trailing DD -$2000** : "
-        f"**{n_trail}** / {len(daily_port)} ({100*n_trail/len(daily_port):.1f}%)"
+        f"**{n_trail}** / {len(daily_port)} ({100 * n_trail / len(daily_port):.1f}%)"
     )
     if n_dll > 0:
         lines.append("\n**Jours concernés par DLL -$950** :")
@@ -352,7 +352,7 @@ def main():
     n_dll_150 = (daily_150 <= -950).sum()
     lines.append(f"- Pire jour : ${daily_150.min():+,.0f}")
     lines.append(
-        f"- Jours touchant DLL -$950 : **{n_dll_150}** ({100*n_dll_150/len(daily_150):.1f}%)"
+        f"- Jours touchant DLL -$950 : **{n_dll_150}** ({100 * n_dll_150 / len(daily_150):.1f}%)"
     )
     lines.append(f"- P95 des pertes : ${np.percentile(losses_150, 5):+,.0f}")
     lines.append(f"- P99 des pertes : ${np.percentile(losses_150, 1):+,.0f}")

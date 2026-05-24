@@ -25,7 +25,6 @@ _py_log = logging.getLogger("event_logger")
 
 
 class EventLogger:
-
     def __init__(self, path: str = "logs/trading_events.log"):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +109,7 @@ class EventLogger:
             "Limite journalière approchée",
             pnl=f"${day_pnl:.0f}",
             limite=f"${limit:.0f}",
-            pct=f"{abs(day_pnl)/limit*100:.0f}%",
+            pct=f"{abs(day_pnl) / limit * 100:.0f}%",
         )
 
     def consec_loss_pause(self, n_days: int):

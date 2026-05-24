@@ -162,7 +162,7 @@ def _parse_risk_reason(reason: str) -> str:
     m = re.match(r"daily_fills_cap_(\d+)/(\d+)", reason)
     if m:
         n, mx = m.group(1), m.group(2)
-        return f"<b>Cap fills journaliers atteint</b>\n" f"{n}/{mx} fills réalisés aujourd'hui."
+        return f"<b>Cap fills journaliers atteint</b>\n{n}/{mx} fills réalisés aujourd'hui."
 
     # Cap positions actives simultanées
     m = re.match(r"max_active_positions_(\d+)/(\d+)", reason)
@@ -196,9 +196,7 @@ def _parse_risk_reason(reason: str) -> str:
     m = re.match(r"user_daily_slack_(-?\d+)_below_(\d+)", reason)
     if m:
         slack, rsk = int(m.group(1)), int(m.group(2))
-        return (
-            f"<b>Marge utilisateur insuffisante</b>\n" f"Slack ${slack} &lt; risque trade ${rsk}."
-        )
+        return f"<b>Marge utilisateur insuffisante</b>\nSlack ${slack} &lt; risque trade ${rsk}."
 
     # Fallback : raison brute échappée (lisible mais cryptique)
     return f"<i>{_esc(reason)}</i>"
@@ -207,11 +205,7 @@ def _parse_risk_reason(reason: str) -> str:
 def fmt_risk_blocked(ticker: str, tag: str, reason: str) -> str:
     # Le premier segment du tag est la stratégie (OPR / FIB / etc.)
     strat = tag.split("_")[0] if tag else "?"
-    return (
-        f"⛔ <b>Ordre bloqué</b>\n"
-        f"{_esc(ticker)} — {_esc(strat)}\n"
-        f"{_parse_risk_reason(reason)}"
-    )
+    return f"⛔ <b>Ordre bloqué</b>\n{_esc(ticker)} — {_esc(strat)}\n{_parse_risk_reason(reason)}"
 
 
 def fmt_risk_breach(reason: str) -> str:
@@ -351,12 +345,12 @@ def fmt_session_report(date_str: str, placed_tags: dict, rm_status: dict) -> str
 
     return (
         f"📊 <b>Bilan session</b> — {_esc(date_str)}\n"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"Fills : {n_fills} | TP : {n_tp} | SL : {n_sl} | TE : {n_te}\n"
         f"P&amp;L session : {icon_d} <b>{sign_d}{pnl_day:.2f} $</b>\n"
         f"{fees_line}"
         f"{bal_line}"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"Cum challenge : <b>{sign_c}{cum:.2f} $</b>\n"
         f"Objectif restant : {target:.2f} $\n"
         f"Slack daily : {slack_d:.0f} $ | Trail : {slack_t:.0f} $"
@@ -398,7 +392,7 @@ def fmt_risk(
     last_reset = rm_status.get("last_monthly_reset_at")
     if bypass_active or last_reset:
         challenge_block = (
-            f"{'─'*24}\n"
+            f"{'─' * 24}\n"
             f"<b>Challenge adaptatif</b>\n"
             f"  Mode: {'🟢 ON' if bypass_active else 'OFF'} "
             f"(bypass USER_DAILY_LOSS_MAX: {'ACTIF' if bypass_active else 'inactif'})\n"
@@ -421,7 +415,7 @@ def fmt_risk(
         else:
             icon = "🟢"
         consistency_block = (
-            f"{'─'*24}\n"
+            f"{'─' * 24}\n"
             f"<b>Garde-fou cohérence 50%</b>\n"
             f"  {icon} Gain jour : {day_pnl:+.0f} $ / cap {cap_max:.0f} $\n"
             f"  Marge restante : <b>{cap_remaining:+.0f} $</b> ({pct_used:.0f}% utilisé)\n"
@@ -431,16 +425,16 @@ def fmt_risk(
     return (
         f"🛡 <b>Risk monitor</b>\n"
         f"<i>{_esc(now_ny)}</i>\n"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"P&amp;L jour : <b>{sign_d}{day_pnl:.2f} $</b> | Cum : {sign_c}{cum:.2f} $\n"
         f"Peak cum : {peak:+.2f} $ | Fills jour : {fills_d}\n"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"<b>Topstep</b>\n"
         f"  Daily slack : {slack_d:.0f} $ / {topstep_daily_loss_max:.0f} $\n"
         f"  Trailing slack : {slack_t:.0f} $ / {topstep_trailing_dd:.0f} $\n"
         f"  Trail floor : {trail_floor:+.0f} $ (distance {trail_distance:+.0f} $)\n"
         f"  Cible : {target:+.0f} $ / +{topstep_profit_target:.0f} $\n"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"<b>Plafonds utilisateur</b>\n"
         f"  Perte jour restante : {user_remaining:.0f} $ / {user_daily_loss_max:.0f} $\n"
         + (f"⚠️ Streak perdant : {streak} jour(s)\n" if streak > 0 else "")
@@ -503,7 +497,7 @@ def fmt_pause_resume(paused: bool) -> str:
             "Aucun nouvel ordre ne sera placé.\n"
             "Les positions existantes continuent normalement."
         )
-    return "▶️ <b>Bot repris</b>\n" "Les nouveaux ordres seront placés au prochain tick."
+    return "▶️ <b>Bot repris</b>\nLes nouveaux ordres seront placés au prochain tick."
 
 
 def fmt_status(placed_tags: dict, rm_status: dict, now_ny: str) -> str:
@@ -543,7 +537,7 @@ def fmt_status(placed_tags: dict, rm_status: dict, now_ny: str) -> str:
 
     sign_d = "+" if day_pnl >= 0 else ""
     sign_c = "+" if cum >= 0 else ""
-    s = f"📈 <b>État portefeuille</b>\n" f"<i>{_esc(now_ny)}</i>\n" f"{'─'*24}\n"
+    s = f"📈 <b>État portefeuille</b>\n<i>{_esc(now_ny)}</i>\n{'─' * 24}\n"
     if active:
         s += f"<b>Positions ({len(active)}) :</b>\n{pos_lines}"
     else:
@@ -552,7 +546,7 @@ def fmt_status(placed_tags: dict, rm_status: dict, now_ny: str) -> str:
         s += f"<b>Ordres en attente ({len(pending)}) :</b>\n{ord_lines}"
     else:
         s += "Ordres : aucun\n"
-    s += f"{'─'*24}\n"
+    s += f"{'─' * 24}\n"
 
     # Données broker réelles (source de vérité)
     if broker_pnl is not None:
@@ -568,7 +562,7 @@ def fmt_status(placed_tags: dict, rm_status: dict, now_ny: str) -> str:
             f"  P&amp;L net jour : <b>{b_sign}{broker_pnl:.2f} $</b>"
             f"  <i>(frais : -{broker_fees:.2f} $)</i>\n"
             f"  Trades fermés : {broker_fills} | Positions : {broker_open}\n"
-            f"{'─'*24}\n"
+            f"{'─' * 24}\n"
         )
 
     s += (

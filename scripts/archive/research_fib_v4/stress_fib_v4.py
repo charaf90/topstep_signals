@@ -297,9 +297,7 @@ def main():
     df_sens = pd.DataFrame(sensitivity_all)
     df_sens.to_csv(OUTPUT_DIR / "fib_v4_sensitivity.csv", index=False)
     lines.append("\n\n## Annexe — Sensibilité globale\n")
-    lines.append(
-        f"Données complètes : `output/fib_v4_sensitivity.csv` " f"({len(df_sens)} configs)"
-    )
+    lines.append(f"Données complètes : `output/fib_v4_sensitivity.csv` ({len(df_sens)} configs)")
 
     out_path = OUTPUT_DIR / "stress_fib_v4.md"
     out_path.write_text("\n".join(lines))

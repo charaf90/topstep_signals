@@ -31,7 +31,6 @@ from core.risk_portfolio import PortfolioRiskManager
 
 
 class TestTradingDaysUntil:
-
     def test_reset_in_current_month(self):
         # 1er du mois (jeudi 2026-01-01) → reset le 2 → 1 jour ouvré
         n = trading_days_until(date(2026, 1, 1), reset_day=2)
@@ -89,7 +88,6 @@ def _make_signal(strategy="OPR"):
 
 
 class TestBornes:
-
     def test_within_min_max(self):
         random.seed(42)
         today = datetime(2026, 6, 15)
@@ -117,7 +115,6 @@ class TestBornes:
 
 
 class TestMonotonie:
-
     def test_more_time_less_risk(self):
         # à cum_pnl fixe, plus days_left est grand, moins le risk est élevé
         signal = _make_signal()
@@ -156,7 +153,6 @@ class TestMonotonie:
 
 
 class TestCasDegeneres:
-
     def test_peak_3000_cum_1500(self):
         # peak=3000, cum=1500 → slack_trail = 1500 - (3000-2000) = 500
         # dd_cap = 500 / 1.5 ≈ 333
@@ -206,7 +202,6 @@ class TestCasDegeneres:
 
 
 class TestCoherenceRiskManager:
-
     def test_passes_can_open_in_normal_state(self):
         """Dans un état "normal" (compte vif, slacks confortables), le risk
         retourné doit passer le check can_open du RM (en mode challenge avec
@@ -239,7 +234,6 @@ class TestCoherenceRiskManager:
     strict=False,
 )
 class TestMonthlyReset:
-
     def test_reset_triggers_on_day_2(self):
         rm = PortfolioRiskManager()
         rm.cum_pnl = 1500

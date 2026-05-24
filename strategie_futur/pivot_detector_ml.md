@@ -81,7 +81,7 @@ is_pivot_any  = is_pivot_high OR is_pivot_low
 
 **Filtre** :
 ```
-proba_RF ≥ p10% (seuil dynamique) 
+proba_RF ≥ p10% (seuil dynamique)
 AND vol_rel ≥ 2.5
 AND range_atr_ratio ≥ 1.5
 AND hour_ny ≥ 6

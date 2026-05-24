@@ -170,7 +170,7 @@ def diagnose(ticker: str):
     fp = signals[signals["is_pivot_any"] == 0]
     print(f"  • Signaux totaux : {len(signals)}  (TP : {len(tp)} | FP : {len(fp)})")
     print(
-        f"  • Base rate global : {y.mean():.2%}  | Précision signaux : {len(tp)/max(1,len(signals)):.2%}"
+        f"  • Base rate global : {y.mean():.2%}  | Précision signaux : {len(tp) / max(1, len(signals)):.2%}"
     )
 
     # ────────── Analyse comparative TP vs FP ──────────

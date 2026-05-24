@@ -77,12 +77,12 @@ def optimize(
     combos = list(itertools.product(*param_grid.values()))
     total = len(combos)
 
-    print(f"\n{'='*62}")
+    print(f"\n{'=' * 62}")
     print(f"  OPTIMISATION — {strategy_id}")
     print(f"  IS  : {IS_LABEL}")
     print(f"  OOS : {OOS_LABEL}")
     print(f"  Grille : {total} combinaisons × {len(data)} actifs")
-    print(f"{'='*62}")
+    print(f"{'=' * 62}")
 
     best_per_ticker = {}
 
@@ -289,13 +289,13 @@ def _print_ticker_result(ticker, params, is_s, oos_s, oos_topstep):
     p_str = "  ".join(f"{k}={v}" for k, v in params.items())
     print(f"\n  Résultat {ticker} : {p_str}")
     print(
-        f"    IS  : n={is_s['n']:>4}  WR={is_s['wr']*100:.0f}%  "
+        f"    IS  : n={is_s['n']:>4}  WR={is_s['wr'] * 100:.0f}%  "
         f"PF={is_s['pf']:.2f}  P&L=${is_s['pnl']:>+,.0f}"
     )
     print(
-        f"    OOS : n={oos_s['n']:>4}  WR={oos_s['wr']*100:.0f}%  "
+        f"    OOS : n={oos_s['n']:>4}  WR={oos_s['wr'] * 100:.0f}%  "
         f"PF={oos_s['pf']:.2f}  P&L=${oos_s['pnl']:>+,.0f}  "
-        f"BS={oos_topstep['bootstrap_pass_rate']*100:.0f}%"
+        f"BS={oos_topstep['bootstrap_pass_rate'] * 100:.0f}%"
     )
 
 
@@ -303,9 +303,9 @@ def _print_global_report(strategy_id: str, best_per_ticker: dict):
     if not best_per_ticker:
         return
 
-    print(f"\n{'='*62}")
+    print(f"\n{'=' * 62}")
     print(f"  RAPPORT FINAL — {strategy_id}")
-    print(f"{'='*62}")
+    print(f"{'=' * 62}")
 
     # Agréger IS et OOS sur tous les tickers
     is_all = {"n": 0, "pnl": 0.0}

@@ -229,7 +229,7 @@ def plot_decile_pf(df: pd.DataFrame, features: list, out_path: Path) -> None:
         ax.bar(x, pf_by_bin.values, color="darkorange")
         ax.axhline(1.0, color="black", linestyle="--", lw=1)
         ax.set_xticks(x)
-        ax.set_xticklabels([f"D{i+1}" for i in range(len(pf_by_bin))], rotation=45)
+        ax.set_xticklabels([f"D{i + 1}" for i in range(len(pf_by_bin))], rotation=45)
         ax.set_title(f"{feat}\nn≈{int(n_by_bin.mean())} / décile")
         ax.set_ylabel("PF")
     plt.tight_layout()
@@ -307,9 +307,7 @@ def main():
     print(f"  Ajustement modèles globaux ({len(X)} échantillons)...")
     models = fit_models(X, y)
 
-    lines.append(
-        "\n### Decision Tree (depth=2)\n```\n" f"{models['decision_tree']['tree_text']}\n```"
-    )
+    lines.append(f"\n### Decision Tree (depth=2)\n```\n{models['decision_tree']['tree_text']}\n```")
 
     lines.append("\n### Random Forest — Top importances\n")
     rf_imp = sorted(models["random_forest"]["feature_importance"].items(), key=lambda x: -x[1])

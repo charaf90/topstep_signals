@@ -189,7 +189,7 @@ def run_simulation(
     rng = np.random.default_rng(seed)
     pool = load_bootstrap_pool(output_dir)
     print(
-        f"Pool OPR : {len(pool['OPR'])} trades | " f"Pool FIB : {len(pool['FIB'])} trades",
+        f"Pool OPR : {len(pool['OPR'])} trades | Pool FIB : {len(pool['FIB'])} trades",
         file=sys.stderr,
     )
     if len(pool["OPR"]) < 30 or len(pool["FIB"]) < 5:
@@ -222,10 +222,10 @@ def run_simulation(
 
 def print_result(r: dict):
     print(f"\n=== Résultat {r['sizing']} (n={r['n']}) ===")
-    print(f"  P(target)        : {r['P(target)']*100:5.1f}%")
-    print(f"  P(bust)          : {r['P(bust)']*100:5.1f}%")
-    print(f"    daily          : {r['P(bust_daily)']*100:5.1f}%")
-    print(f"    trailing DD    : {r['P(bust_trail)']*100:5.1f}%")
+    print(f"  P(target)        : {r['P(target)'] * 100:5.1f}%")
+    print(f"  P(bust)          : {r['P(bust)'] * 100:5.1f}%")
+    print(f"    daily          : {r['P(bust_daily)'] * 100:5.1f}%")
+    print(f"    trailing DD    : {r['P(bust_trail)'] * 100:5.1f}%")
     print(f"  EV PnL mean      : ${r['EV_pnl_mean']:+8.0f}")
     print(
         f"  EV PnL p25/p50/p75: ${r['EV_pnl_p25']:+.0f} / ${r['EV_pnl_p50']:+.0f} / ${r['EV_pnl_p75']:+.0f}"
@@ -250,10 +250,10 @@ def main():
 
     # Comparaison
     print("\n=== Comparaison adaptive vs static ===")
-    print(f"  Δ P(target)      : {(r_adapt['P(target)']-r_static['P(target)'])*100:+5.1f} pp")
-    print(f"  Δ P(bust)        : {(r_adapt['P(bust)']-r_static['P(bust)'])*100:+5.1f} pp")
+    print(f"  Δ P(target)      : {(r_adapt['P(target)'] - r_static['P(target)']) * 100:+5.1f} pp")
+    print(f"  Δ P(bust)        : {(r_adapt['P(bust)'] - r_static['P(bust)']) * 100:+5.1f} pp")
     print(
-        f"  Δ EV net         : ${(r_adapt['EV_net_after_sub']-r_static['EV_net_after_sub']):+8.0f}"
+        f"  Δ EV net         : ${(r_adapt['EV_net_after_sub'] - r_static['EV_net_after_sub']):+8.0f}"
     )
 
     # Critères de promotion

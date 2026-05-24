@@ -1,0 +1,36 @@
+# Pre-commit hooks pour topstep_signals.
+#
+# Installation locale (une seule fois) :
+#   pre-commit install
+#
+# Exécution manuelle sur l'ensemble du repo :
+#   pre-commit run --all-files
+#
+# Les hooks tournent automatiquement à chaque `git commit`. En cas d'échec,
+# le commit est bloqué — corriger les issues puis re-stage et re-commit.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]   # 1 MB max — refuse data CSV ou binaires lourds par mégarde
+        exclude: ^tests/golden/   # baselines JSON tolérés (~600 KB pour opr_v5_1)
+      - id: check-merge-conflict
+
+  # Ruff comme linter uniquement. Le formatage est confié à black ci-dessous
+  # (ne pas activer ruff-format en parallèle, sinon les deux outils se battent).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+
+  - repo: https://github.com/psf/black
+    rev: 26.5.1
+    hooks:
+      - id: black

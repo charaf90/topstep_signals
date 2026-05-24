@@ -250,7 +250,7 @@ def main() -> int:
         rows.append("| Ticker | n_worst | %_du_top20 |")
         rows.append("|---|---:|---:|")
         for tk, c in worst["ticker"].value_counts().items():
-            rows.append(f"| {tk} | {int(c)} | {100*c/20:.0f}% |")
+            rows.append(f"| {tk} | {int(c)} | {100 * c / 20:.0f}% |")
         # Concentration temps (jours uniques)
         rows.append("")
         rows.append(f"Jours distincts dans top 20 : {worst['date'].nunique()}")
