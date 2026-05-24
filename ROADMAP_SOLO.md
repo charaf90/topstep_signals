@@ -21,10 +21,10 @@ Transformer `topstep_signals` (déjà solide, ~14k lignes, 2 stratégies en prod
 ## 📍 ÉTAT ACTUEL — À METTRE À JOUR À CHAQUE SESSION
 
 ```
-Phase active     : PHASE 0 — Fondations
+Phase active     : PHASE 1 — Filet de sécurité (read-only)
 Étape en cours   : non démarrée
-Dernière session : (à remplir : YYYY-MM-DD)
-Prochaine action : créer le worktree git et la branche infra/foundation
+Dernière session : 2026-05-24 (PHASE 0 terminée + mergée sur main)
+Prochaine action : créer la branche infra/safety-net + scripts/reconcile_daily.py
 ```
 
 **Quand tu termines une étape** :
@@ -75,7 +75,7 @@ Puis répondre :
 
 ## 📐 PHASES DU CHANTIER
 
-### PHASE 0 — Fondations (3-4 jours) — RISQUE ZÉRO
+### PHASE 0 — Fondations (3-4 jours) — RISQUE ZÉRO — ✅ terminée le 2026-05-24
 
 **Objectif** : infrastructure de sécurité (tests local, golden master) **sans toucher au code métier**.
 
@@ -83,26 +83,26 @@ Puis répondre :
 
 **Étapes** :
 
-- [ ] **0.1 Créer la branche de dev**
+- [x] **0.1 Créer la branche de dev**
   ```bash
   cd /home/charaf/topstep_signals
   git checkout -b infra/foundation
   ```
   Travail dans cette branche. Le live tourne sur `main` (mais le daemon python charge ses fichiers depuis le disque — donc tant que la branche checkout est en cours, le live actuel ne voit pas les changements jusqu'à son prochain redémarrage). **Tu peux travailler en sécurité.**
 
-- [ ] **0.2 `pyproject.toml`** avec config ruff + black + pytest
+- [x] **0.2 `pyproject.toml`** avec config ruff + black + pytest
   - ruff : règles E, W, F, I, B, UP, SIM
   - black : line-length 100
   - **mypy en mode permissif** (pas strict — tu typeras au fur et à mesure des modifs)
   - pytest : `testpaths = ["tests"]`
 
-- [ ] **0.3 `.pre-commit-config.yaml`** : ruff + black + check trailing whitespace + check gros fichiers
+- [x] **0.3 `.pre-commit-config.yaml`** : ruff + black + check trailing whitespace + check gros fichiers
   ```bash
   pre-commit install
   pre-commit run --all-files  # première passe peut révéler des issues — corriger ou whitelister
   ```
 
-- [ ] **0.4 Script local `check.sh`** (à la place d'un CI GitHub Actions)
+- [x] **0.4 Script local `check.sh`** (à la place d'un CI GitHub Actions)
   ```bash
   #!/usr/bin/env bash
   set -e
@@ -113,7 +113,7 @@ Puis répondre :
   ```
   Lancé manuellement avant chaque merge sur `main` (et automatiquement par un hook git pre-push si tu veux).
 
-- [ ] **0.5 Capturer les golden masters**
+- [x] **0.5 Capturer les golden masters**
   - Créer `tests/golden/` (dossier versionné)
   - Script `tests/golden/regenerate.sh` qui produit :
     - `tests/golden/opr_baseline.json` (output déterministe de `backtest.py --strategy opr`)
@@ -121,13 +121,13 @@ Puis répondre :
   - Créer `tests/test_golden_master.py` : re-exécute les backtests et compare au cent près (PnL, nombre de trades, fills)
   - Lock des versions pandas/numpy dans `pyproject.toml` pour reproductibilité
 
-- [ ] **0.6 Mesurer coverage baseline** (informatif, non bloquant)
+- [x] **0.6 Mesurer coverage baseline** (informatif, non bloquant)
   ```bash
   pytest --cov=core --cov=broker --cov=strategies --cov-report=term-missing
   ```
   Documenter dans `docs/test_coverage_baseline.md`.
 
-- [ ] **0.7 Merge sur `main`**
+- [x] **0.7 Merge sur `main`**
   - `./check.sh` doit passer
   - Golden master doit passer
   - `git checkout main && git merge infra/foundation`
@@ -465,7 +465,7 @@ Notifier par Telegram + créer note rapide dans `docs/incidents/YYYY-MM-DD.md` (
 ## 📊 SUIVI GLOBAL
 
 ```
-PHASE 0 — Fondations         (3-4 jours) : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
+PHASE 0 — Fondations         (3-4 jours) : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-24
 PHASE 1 — Filet sécurité     (1 semaine) : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
 PHASE 2 — Backtest pro       (1.5 sem.)  : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
 PHASE 3 — Améliorations live (2 sem.)    : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
@@ -498,4 +498,4 @@ Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
 
 ---
 
-*Dernière mise à jour : 2026-05-24 (création — édition solo, intégration Tailscale dashboard).*
+*Dernière mise à jour : 2026-05-24 (PHASE 0 terminée et mergée sur main — commit 564df16).*
