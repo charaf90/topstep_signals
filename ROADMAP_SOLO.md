@@ -21,10 +21,11 @@ Transformer `topstep_signals` (déjà solide, ~14k lignes, 2 stratégies en prod
 ## 📍 ÉTAT ACTUEL — À METTRE À JOUR À CHAQUE SESSION
 
 ```
-Phase active     : PHASE 1 — Filet de sécurité (read-only)
-Étape en cours   : non démarrée
-Dernière session : 2026-05-24 (PHASE 0 terminée + mergée sur main)
-Prochaine action : créer la branche infra/safety-net + scripts/reconcile_daily.py
+Phase active     : PHASE 1 — Filet de sécurité (read-only) — partielle
+Étape en cours   : 1.4 (Dashboard Tailscale) — différée, demande install user
+Dernière session : 2026-05-24 (1.1-1.3, 1.5, 1.6 mergées sur main)
+Prochaine action : session dédiée pour 1.4 (install Tailscale + auth + iPhone)
+                   OU lancer 1.8 (observation 1 semaine reconcile_daily) en parallèle
 ```
 
 **Quand tu termines une étape** :
@@ -152,13 +153,13 @@ Puis répondre :
 
 **Étapes** :
 
-- [ ] **1.1 Branche `infra/safety-net`**
+- [x] **1.1 Branche `infra/safety-net`**
   ```bash
   git checkout main && git pull
   git checkout -b infra/safety-net
   ```
 
-- [ ] **1.2 `scripts/reconcile_daily.py`** — réconciliation broker
+- [x] **1.2 `scripts/reconcile_daily.py`** — réconciliation broker
   - Lit `state/live_state.json` (positions, P&L journalier)
   - Appelle l'API ProjectX en mode read-only (via `broker/projectx_client.py`)
   - Compare positions, P&L, ordres
@@ -167,7 +168,7 @@ Puis répondre :
   - **Tests** : mocker l'API, vérifier détection mismatch + état conforme passe
   - **Activation** : cron quotidien 19h30 UTC post-session
 
-- [ ] **1.3 `docs/runbook.md`** — playbook d'incident (8 scénarios)
+- [x] **1.3 `docs/runbook.md`** — playbook d'incident (8 scénarios)
   1. Bot poste ordres en boucle
   2. WebSocket déconnecté > 5 min
   3. État interne désynchronisé du broker
@@ -180,7 +181,7 @@ Puis répondre :
 
   Format : pour chaque scénario, "Symptômes → Action exacte (commandes copier-collables) → Vérification → Récupération".
 
-- [ ] **1.4 Dashboard Streamlit + accès iPhone via Tailscale**
+- [ ] **1.4 Dashboard Streamlit + accès iPhone via Tailscale**  *(différée — demande intervention user)*
 
   **Sous-étape 1.4.a — Installer Tailscale** (10 min)
   ```bash
@@ -263,17 +264,17 @@ Puis répondre :
   ```
   Appelé en début de `SessionRunner.run()`. **Ce check est l'invariant #8 de cette roadmap.**
 
-- [ ] **1.5 Tests Hypothesis sur les garde-fous**
+- [x] **1.5 Tests Hypothesis sur les garde-fous**
   - `tests/test_risk_topstep_properties.py` : property-based tests sur les invariants de `core/risk_topstep.py`
   - `tests/test_risk_portfolio_properties.py` : idem pour `core/risk_portfolio.py`
   - Coverage cible : 90%+ sur ces deux fichiers
   - **Important** : ces tests ne modifient pas `risk_topstep.py` ni `risk_portfolio.py`. Si un test révèle un bug, isoler pour traitement séparé avec validation utilisateur.
 
-- [ ] **1.6 Snapshot SHA256 datasets dans `summary.json`**
+- [x] **1.6 Snapshot SHA256 datasets dans `summary.json`**
   - Modifier le générateur de `summary.json` (probablement dans `core/optimizer.py` ou `core/metrics.py`)
   - Format : `"datasets": {"NQ1": "sha256:abc...", "MES1": "sha256:def..."}`
 
-- [ ] **1.7 Merge sur `main`**
+- [~] **1.7 Merge sur `main`** *(partiel — 1.4 différée)*
   - `./check.sh` + golden master verts
   - `git checkout main && git merge infra/safety-net`
 
@@ -498,4 +499,4 @@ Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
 
 ---
 
-*Dernière mise à jour : 2026-05-24 (PHASE 0 terminée et mergée sur main — commit 564df16).*
+*Dernière mise à jour : 2026-05-24 (PHASE 1 partielle mergée — commit 88c1af9 ; 1.4 et 1.8 restantes).*
