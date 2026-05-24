@@ -8,7 +8,7 @@ GatewayUserTrade (avec profitAndLoss) arrivent dans le WS et que mon parsing
 de RealtimeEvent.size et .pnl est correct.
 
 Sécurité :
-  • Compte 50K SIM (PROJECTX_LIVE_MODE=False) → aucun risque financier réel
+  • Compte 50K SIM (account.simulated=True via API) → aucun risque financier réel
   • Brackets SL=-10 ticks ($12.50 max), TP=+10 ticks
   • Hold 3s → exposition minimale
   • Cleanup : cancel des brackets résiduels si présents

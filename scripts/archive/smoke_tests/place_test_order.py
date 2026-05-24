@@ -6,7 +6,7 @@ events GatewayUserOrder/Position/Trade arrivent côté WebSocket (User Hub).
 Sécurité :
   • LIMIT BUY 1 MES à low_récent - 100 ticks (≈ -25 pts) → ne fillera pas
   • Sleep 30s, puis cancel
-  • Compte : SIM (PROJECTX_LIVE_MODE=False) → zéro risque financier réel
+  • Compte : SIM (account.simulated=True via API) → zéro risque financier réel
   • custom_tag = "SMOKE_TEST_<timestamp>" pour cross-référence avec le smoke
 
 Usage :
