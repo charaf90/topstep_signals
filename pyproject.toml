@@ -1,0 +1,103 @@
+[project]
+name = "topstep-signals"
+version = "0.1.0"
+description = "Backtest et live trading intraday — Topstep challenge (MES1, NQ1, YM1, MGC1)"
+requires-python = ">=3.11"
+dependencies = [
+    # Versions serrées pour reproductibilité golden master (PHASE 0.5).
+    # Ne pas élargir sans régénérer les golden masters.
+    "pandas>=3.0,<3.1",
+    "numpy>=2.4,<2.5",
+    "matplotlib>=3.7",
+    "requests>=2.28",
+    "signalrcore==0.9.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "black>=24.0",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pre-commit>=3.7",
+    "mypy>=1.10",
+    "hypothesis>=6.100",
+]
+
+# ------------------------------------------------------------------------------
+# Ruff — linter
+# ------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "output/",
+    "data/",
+    "logs/",
+    "state/",
+]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = [
+    "E501",   # ligne trop longue : géré par black
+    "B008",   # appel de fonction comme valeur par défaut (commun avec dicts mutables)
+    "SIM108", # ternaire forcé : parfois moins lisible
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # assert False toléré dans les tests
+
+# ------------------------------------------------------------------------------
+# Black — formatter
+# ------------------------------------------------------------------------------
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+extend-exclude = '''
+/(
+    output
+  | data
+  | logs
+  | state
+)/
+'''
+
+# ------------------------------------------------------------------------------
+# Pytest
+# ------------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+# ------------------------------------------------------------------------------
+# Mypy — mode permissif (on type au fur et à mesure des modifs)
+# ------------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = false
+warn_return_any = false
+warn_unreachable = true
+no_implicit_optional = false
+check_untyped_defs = false
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
+# ------------------------------------------------------------------------------
+# Coverage
+# ------------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["core", "broker", "strategies"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
