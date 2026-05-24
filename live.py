@@ -96,6 +96,7 @@ if _env_file.exists():
 from broker.live_runner import SessionRunner
 from broker.projectx_client import ProjectXClient
 from broker.telegram_bot import TelegramBot
+from broker.vpn_check import check_no_vpn_on_topstep
 from config import (
     LIVE_STATE_FILE,
     TELEGRAM_ENABLED,
@@ -229,6 +230,11 @@ def main():
     args = _parse_args()
     _setup_logging(args.log_level)
     log = logging.getLogger("live")
+
+    # Garde-fou anti-VPN sur le trafic Topstep (ROADMAP_SOLO invariant #8).
+    # Refuse de démarrer si Tailscale est configuré en exit-node (IP publique
+    # dans la plage 100.64.0.0/10). Best-effort si pas de réseau.
+    check_no_vpn_on_topstep()
 
     if args.daemon:
         _acquire_pid_lock()

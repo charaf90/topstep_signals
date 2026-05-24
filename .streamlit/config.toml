@@ -1,0 +1,24 @@
+# Streamlit — config dashboard Topstep Live (mobile-first).
+# Thème dark forcé, lecture seule, prêt pour iPhone via Tailscale.
+
+[theme]
+base = "dark"
+primaryColor = "#3ddc84"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a1d24"
+textColor = "#fafafa"
+
+[server]
+# `0.0.0.0` permet l'accès depuis le réseau local + Tailscale.
+# Ne PAS exposer publiquement (firewall + Tailscale only).
+headless = true
+port = 8501
+address = "0.0.0.0"
+
+[browser]
+# Désactive la collecte de stats anonymes pour rester local.
+gatherUsageStats = false
+
+[client]
+showErrorDetails = "stacktrace"
+toolbarMode = "minimal"
