@@ -19,14 +19,30 @@ Vérifier que le concept formalisé par `@researcher` est implémenté **exactem
 
 ## Inputs attendus
 
-1. La **formalisation** produite par `@researcher` (concept attendu).
-2. Le **rapport** produit par `@new-strategy` (verdict revendiqué).
+**Lecture prioritaire (nouveau format `output/<strategy_id>/`)** :
+
+1. **`output/<strategy_id>/summary.json`** ← **input principal** (verdict + métriques structurées).
+   Tu lis ce fichier en priorité. Si toutes les vérifications passent, tu n'as
+   pas besoin de zoomer plus loin sauf doute spécifique.
+2. **`output/<strategy_id>/rapport.md`** (~80 lignes) si tu veux le contexte qualitatif.
 3. Le **code** dans `strategies/<strategy_id>.py` et la section correspondante de `config.py`.
-4. Le **rapport long** dans `output/rapport_<strategy_id>.md`.
-5. Les **artefacts** dans `output/robustness_<strategy_id>.json` si présents.
-6. **Optionnel** : le **rapport d'audit visuel** dans `output/audit_visuel_<strategy_id>.md`
-   produit par `@chartist` en PHASE 6.5. Si présent, intégrer ses warnings
-   dans l'arbitrage du verdict (voir section "Audit visuel" ci-dessous).
+4. **`output/<strategy_id>/full/robustness.json`** — détail bootstrap/Bonferroni/PSR/MC (zoom si doute).
+5. La **formalisation** produite par `@researcher` (concept attendu — fournie par l'orchestrateur).
+6. **Optionnel** : `output/<strategy_id>/full/audit_visuel.md` produit par `@chartist`
+   en PHASE 6.5 (si non skippé). Si présent, intégrer warnings dans l'arbitrage
+   (voir section "Audit visuel" ci-dessous).
+7. **Si `summary.json.quant_used == true`** : audit ligne par ligne obligatoire
+   de `output/<strategy_id>/quant_patch.py` + `output/<strategy_id>/quant_report.md`
+   (voir section "Audit du patch quant" ci-dessous).
+
+**Compatibilité ascendante** : si `summary.json` n'existe pas (stratégie pré-refonte
+type `opr-v5`, `fib-v3`, etc.), fallback sur l'ancien format :
+- `output/rapport_<strategy_id>.md` (rapport long historique)
+- `output/robustness_<strategy_id>.json`
+- `output/audit_visuel_<strategy_id>.md` si présent
+
+Dans ce cas, signale dans le rapport d'audit que le format est legacy
+("⚠️ Format pré-refonte : lecture rapport_<id>.md complet").
 
 ## Checklist d'audit (par ordre de priorité)
 
@@ -42,6 +58,43 @@ Pour chaque ligne où `df.iloc[i]` ou équivalent est utilisé :
 - [ ] L'ATR/ADX/indicateurs sont calculés sur `df.iloc[:i]` ou shiftés explicitement (`.shift(1)`)
 - [ ] Le fill conservateur est appliqué : si SL et TP dans le range d'une barre M15, **SL prioritaire**
 - [ ] Pas de leak de target/label dans les features (si stratégie ML)
+
+#### 2-bis. Features mesurées sur la bougie de fill — Live-equivalence (BLOCANT)
+
+Si la stratégie utilise des features dérivées de la **barre de fill** (ex : `wick_through_atr`,
+`mae_pending_atr`, `pivot_break_atr` mesuré au fill, profondeur de mèche, range
+intra-bar, MFE intra-bar), elles sont **intrinsèquement non-observables intra-bar**
+en live tel quel. Vérifier dans cet ordre :
+
+- [ ] **Inventaire** : lister toutes les features du DataFrame trades qui dépendent
+      de `bar` au moment du fill (pas seulement des barres précédentes)
+- [ ] **Pour chaque feature ainsi identifiée**, l'une des conditions suivantes
+      doit être satisfaite :
+  - **(a) Infrastructure live disponible** : vérifier dans `broker/m1_buffer.py`
+        (`M1Buffer.get_current_forming_bar`, `get_recent_bars`) et
+        `broker/projectx_market_realtime.py` que le streaming tick/M1 est actif.
+        Si oui, la fonction live (`get_<id>_live_signal`) **DOIT** consommer ce
+        buffer pour évaluer la feature intra-bar avec granularité M1 (~1 min).
+        Pattern de référence : `core/opr.py` + `live_runner.py:470-481`.
+  - **(b) Live-equivalent backtest fourni** : un script
+        `scripts/live_eq_<strategy_id>.py` doit exister, qui re-simule la
+        décision SANS la bougie de fill (équivalent OPR v5.1 :
+        `scripts/live_eq_v5_1.py`). Les métriques OOS rapportées doivent être
+        celles du **live-eq**, pas du backtest naïf.
+- [ ] **Si ni (a) ni (b)** : le PF backtest est un upper bound non-atteignable.
+      **Rétrograder 🟢→🟡 minimum**, et flagger comme BLOCANT à corriger avant
+      `@forge`. Demander explicitement au user lequel des deux paths est retenu.
+- [ ] **Pour la fonction `get_<id>_live_signal`** (si elle existe) : vérifier
+      que la signature accepte `m1_buffer` et `contract_id` quand le ticker
+      en a besoin, et qu'elle est cohérente avec le backtest. Sinon : flagger
+      l'absence comme BLOCANT à la promotion.
+
+> **Cas d'école fib-v4 (2026-05-19)** : le verdict initial 🟢 était basé sur
+> un PF backtest naïf (wick_through_atr lu sur la bougie M15 close du fill).
+> Sans live-equivalence ni wirage `M1Buffer`, le PF live aurait été
+> significativement dégradé. La rétrogradation 🟢→🟡 a permis de demander
+> l'implémentation `M1Buffer`-aware avant promotion. Référence canonique pour
+> les futurs audits.
 
 ### 3. Frictions correctement intégrées (BLOCANT)
 - [ ] `SLIPPAGE_TICKS_PER_TICKER` appliqué à l'entrée ET à la sortie
@@ -102,6 +155,39 @@ Si `output/audit_visuel_<strategy_id>.md` existe :
 > ce coût en live"). Le chartist informe ; tu décides ; ta décision doit
 > être défendable.
 
+### 10. Audit du patch @quant (BLOCANT si quant_used=true)
+
+Si `summary.json.quant_used == true`, tu DOIS auditer `output/<strategy_id>/quant_patch.py`
+en plus du code de stratégie standard :
+
+- [ ] **No look-ahead dans les features** : chaque feature calculée par le patch
+      doit utiliser strictement `df.iloc[:i]` ou `.shift(1)` sur indicateurs.
+      Vérifier chaque appel `df[col].iloc[...]` ou équivalent.
+- [ ] **No leak de target** : aucune feature ne doit dépendre de `result`, `pnl`,
+      `fill_time`, `exit_time` ou de toute info post-trade. Vérifier les imports
+      et les noms de colonnes utilisés dans le calcul.
+- [ ] **Multiple-testing correction documentée** : le `quant_report.md` doit indiquer
+      `N_features_tested` et la p-value Bonferroni-corrected du/des seuils retenus.
+      Si manquant → **rétrogradation automatique** (suspicion de p-hacking).
+- [ ] **Seuils retenus passent Bonferroni** : pour chaque filtre dans
+      `summary.json.quant_filters_applied`, vérifier `p < 0.05 / N_features_tested`.
+- [ ] **Validation walk-forward du seuil** : l'impact PF OOS du filtre doit avoir été
+      mesuré séparément IS/OOS (pas un re-fit sur OOS). Vérifier dans `quant_report.md`.
+- [ ] **TimeSeriesSplit utilisé** (pas KFold) : grep `TimeSeriesSplit` ou
+      `time_series_split` dans `quant_patch.py` ou dans le `# CHANGELOG`.
+
+**Règles d'arbitrage quant → verdict :**
+
+| Configuration | Action sur le verdict |
+|---|---|
+| `quant_used=true` + tous les checks OK | Confirmer verdict statistique |
+| `quant_used=true` + 1 check ⚠️ (Bonferroni borderline) | Mentionner dans rapport, pas de downgrade |
+| `quant_used=true` + check ❌ (look-ahead suspect, leak de target, multiple-testing absent) | **Rétrograder 🟢→🟡 minimum, possiblement 🔴** |
+| `quant_used=true` + seuil non documenté avec p-value | **Rétrograder** (suspicion p-hacking) |
+
+> Le patch @quant ajoute du pouvoir prédictif statistique — mais il **augmente
+> aussi le risque d'overfitting et de leak**. Audit ligne par ligne obligatoire.
+
 ## Format de sortie
 
 ```
@@ -140,11 +226,20 @@ DÉCISION                              : confirmé / rétrogradé / promu (rare)
   MC P95 DD         : -$XXX (limite Topstep restante : -$XXX)
 
 ══ AUDIT VISUEL (chartist, si fourni) ══
-  Rapport chartist  : <chemin / non fourni>
+  Rapport chartist  : <chemin / non fourni / skip 🟢 clair>
   Warnings ⚠️       : <N warnings>
   Warnings ❌       : <N warnings>
   Convergence avec métriques : <oui / partielle / non>
   Arbitrage         : <verdict maintenu / rétrogradé X→Y, justification>
+
+══ AUDIT QUANT (si quant_used=true) ══
+  Patch audité       : output/<id>/quant_patch.py
+  No look-ahead      : [✅/❌] <observation file:line si suspect>
+  No leak target     : [✅/❌] <observation>
+  Multiple-testing   : [✅/⚠️/❌] N_features=<N>, seuil Bonferroni=<p>
+  TimeSeriesSplit    : [✅/❌] <vu / non vu dans le code>
+  Filtres validés    : [<liste avec p-value>]
+  Arbitrage          : <verdict maintenu / rétrogradé X→Y, justification>
 
 ══ ALERTES BLOQUANTES ══
   • <si verdict rétrogradé, raison principale ici>

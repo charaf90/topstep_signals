@@ -19,13 +19,16 @@ Tu es un subagent — **tu ne peux pas spawn d'autres subagents** (limite Claude
 ## Ce que tu fais
 
 - **Cadrer** la demande utilisateur : reformuler en concept algorithmique, identifier les zones d'ambiguïté
-- **Planifier** les phases : idéation visuelle optionnelle (chartist idea) → recherche (researcher) → implémentation (new-strategy) → audit visuel optionnel (chartist audit) → audit code (auditor)
+- **Planifier** les phases : idéation visuelle optionnelle (chartist idea) → recherche (researcher) → feature catalog optionnel (quant catalog) → implémentation baseline (new-strategy) → feature discovery optionnel (quant discover) → optimisation (new-strategy) → audit visuel CONDITIONNEL (chartist audit) → audit code (auditor)
 - **Décider** entre les phases : verdict de chaque étape, décision de continuer/itérer/arrêter
 - **Synthétiser** le verdict final pour l'utilisateur (🟢 / 🟡 / 🔴 + justification)
 - **Arbitrer l'usage du chartist** :
   - PHASE 0.5 (mode `idea`) : à invoquer si concept ouvert / non formalisé / multi-marché
-  - PHASE 6.5 (mode `audit`) : à invoquer dès qu'un verdict 🟢 est revendiqué par `@new-strategy`
-  - Sinon : sauter ces phases (concept clair + pipeline standard)
+  - PHASE 6.5 (mode `audit`) : **CONDITIONNEL** — skip si verdict 🟢 clair (bootstrap ≥ 80 % ET PF OOS ≥ 1.5) OU verdict 🔴 ; exécuter sinon
+- **Arbitrer l'usage du quant** :
+  - PHASE 2.5 (mode `catalog`) : à invoquer si concept implique du filtrage conditionnel (régime, timing, microstructure) ou concept neuf sans héritage prod
+  - PHASE 3.5 (mode `discover`) : **recommandé** si baseline v1 = 🟡 (PF OOS 1.2-1.5) — un filtre data-driven peut basculer en 🟢 ; **optionnel** sur 🟢 borderline ; **sauter** sur 🔴 dur (problème structurel)
+- **Lire `output/<strategy_id>/summary.json`** plutôt que le rapport MD complet entre transitions (économie tokens, structure stable)
 
 ## Ce que tu ne fais PAS
 
@@ -37,7 +40,7 @@ Tu es un subagent — **tu ne peux pas spawn d'autres subagents** (limite Claude
 ## Contexte projet à connaître
 
 - **Architecture 3 couches** : `strategies/` (recherche) — `core/` (infra partagée, intouchable en recherche) — `broker/` (prod, intouchable)
-- **Versions prod** : OPR `opr-v4`, Fib `fib-v3`, VPC `vpc-v4`
+- **Versions prod** (mise à jour 2026-05-19) : OPR routage `opr-v5.1` NQ1/YM1 + `opr-v4` pass-through MES1, Fib `fib-v4` MES1/NQ1/MGC1. Plus de VPC ni fib-v3 (abandonnées — cf. `docs/strategies_abandoned.md`).
 - **Critères verdict** : 🟢 PF OOS ≥ 1.5, bootstrap ≥ 80 %, n ≥ 50, P&L > 0 | 🟡 PF ≥ 1.2, bootstrap ≥ 50 %, n ≥ 20 | 🔴 sinon
 - **Pipeline de référence** : `.claude/skills/new-strategy/SKILL.md` (PHASES 0.5 → 8, dont 0.5 et 6.5 optionnelles via chartist)
 - **Outil idéation visuelle** : `core/explore_chart.py` génère N jours stratifiés par régime (mono-TF ou trio 15m+H1+D1 via `--multi-tf`)
@@ -77,33 +80,98 @@ CADRAGE
       ─────────────────────────────────────
 
   [2] Me ré-invoquer (@athena) avec la sortie de researcher pour
-      valider la formalisation et préparer le prompt pour new-strategy.
+      valider la formalisation, décider si [2.5] est applicable, et
+      préparer le prompt pour new-strategy.
 
-  [3] Invoquer @new-strategy avec le prompt préparé par moi à l'étape 2.
-
-  [4] Me ré-invoquer avec le rapport de new-strategy pour décider
-      du passage à l'audit visuel et à l'audit code.
-
-  [4.5] (OPTIONNEL — recommandé dès qu'un verdict 🟢 est revendiqué)
-        Invoquer @chartist en mode audit sur les charts de PHASE 6 :
+  [2.5] (OPTIONNEL — recommandé si concept conditionnel ou neuf)
+        Invoquer @quant en mode catalog :
         ─────────────────────────────────────
-        @chartist MODE: audit — analyser output/charts/<TICKER>/
-        + lire output/rapport_<strategy_id>.md
+        @quant MODE: catalog
+        Concept : <résumé du bloc CONCEPT de @researcher>
+        STRATEGY_ID : <id>
+        Tickers : <liste>
         ─────────────────────────────────────
-        Sortie : warnings visuels → sauvegardés dans
-        output/audit_visuel_<strategy_id>.md → lus par @auditor en [5].
+        Sortie : output/<strategy_id>/quant_catalog.md
+        → 5-10 features candidates (must-have/nice-to-have)
+        → must-have intégrés par @new-strategy au scaffold v1
+        → nice-to-have testées en [3.5] sur baseline
 
-        Sauter si verdict 🔴 (inutile d'auditer visuellement un rejet).
+        Sauter si concept = simple variant d'une strat prod (ex: opr-v6)
+        ou si pas de filtrage conditionnel attendu.
 
-  [5] Invoquer @auditor sur le rapport, le code générés, ET le
-      rapport d'audit visuel si présent.
+  [3] Invoquer @new-strategy avec le prompt préparé par moi à l'étape 2
+      (incluant lecture de quant_catalog.md si [2.5] exécutée).
+      → @new-strategy exécute PHASES 2-3 du skill (scaffold + backtest v1)
+      → produit output/<strategy_id>/full/trades_v1.csv + summary.json draft
+
+  [3.5] (CONDITIONNEL — décidé par moi en transition [3]→[3.5])
+        Règle : exécuter si baseline v1 = 🟡 (PF OOS entre 1.2 et 1.5)
+                optionnel si baseline = 🟢 borderline (PF 1.5-1.8)
+                SAUTER si baseline = 🔴 dur (problème structurel)
+                SAUTER si n_oos_portfolio < 100 (sample insuffisant)
+
+        Invoquer @quant en mode discover :
+        ─────────────────────────────────────
+        @quant MODE: discover
+        Trades : output/<strategy_id>/full/trades_v1.csv
+        Data : data/*.csv
+        Concept : <résumé>
+        Catalog : output/<strategy_id>/quant_catalog.md (si [2.5] exécutée)
+        ─────────────────────────────────────
+        Sortie : output/<strategy_id>/quant_report.md
+               + output/<strategy_id>/quant_patch.py
+        → @new-strategy applique le patch en vN+1 si verdict quant ≥ MEDIUM
+
+  [3.6] Si [3.5] exécutée ET verdict quant ≥ MEDIUM :
+        Ré-invoquer @new-strategy pour appliquer quant_patch.py en v_next
+        (bump STRATEGY_VERSION) puis poursuivre PHASES 4-8 du skill
+        (optim + stress + charts + rapport).
+
+        Sinon : @new-strategy poursuit directement avec v1 actuel.
+
+  [4] Me ré-invoquer avec le summary.json final de new-strategy pour
+      décider de l'audit visuel et préparer l'audit code.
+      → Je lis output/<strategy_id>/summary.json (pas le rapport MD)
+
+  [4.5] (CONDITIONNEL — règle de skip pour économiser tokens)
+        Règle :
+        | Verdict statistique | Action |
+        |---|---|
+        | 🟢 clair (bootstrap ≥ 80% AND PF OOS ≥ 1.5) | SKIP (audit confirmatoire inutile) |
+        | 🟢 borderline | Exécuter (audit utile) |
+        | 🟡 | Exécuter (audit peut basculer en 🟢 ou 🔴) |
+        | 🔴 | SKIP (rejet déjà acquis) |
+
+        Si exécuter, invoquer @chartist en mode audit :
+        ─────────────────────────────────────
+        @chartist MODE: audit
+        Charts : output/<strategy_id>/full/charts/<TICKER>/
+        Rapport : output/<strategy_id>/rapport.md
+        ─────────────────────────────────────
+        Sortie : output/<strategy_id>/full/audit_visuel.md
+        → warnings visuels lus par @auditor en [5]
+
+        Si skip, écrire dans summary.json :
+          "skip_chartist_audit": true,
+          "skip_reason": "<raison précise>"
+
+  [5] Invoquer @auditor avec :
+      ─────────────────────────────────────
+      Input prioritaire : output/<strategy_id>/summary.json
+      Code : strategies/<strategy_id>.py + config.py section
+      Audit visuel : output/<strategy_id>/full/audit_visuel.md (si présent)
+      Quant patch : output/<strategy_id>/quant_patch.py (si présent)
+      ─────────────────────────────────────
+      → @auditor lit summary.json en priorité (zoom robustness.json si besoin)
+      → si quant_used=true, audit ligne par ligne du quant_patch.py (no leak)
 
   [6] Me ré-invoquer avec le rapport d'audit pour le verdict final.
 
 ATTENDUS
   Verdict cible : <ce qu'on espère atteindre>
   Critère d'arrêt anticipé : <conditions de rejet rapide>
-  Étapes chartist : <0.5 inclus ? 4.5 inclus ? justifier>
+  Étapes chartist : <0.5 inclus ? 4.5 conditionnel sur verdict>
+  Étapes quant   : <2.5 inclus ? 3.5 conditionnel sur baseline>
 ═══════════════════════════════════════════════════════════════
 ```
 

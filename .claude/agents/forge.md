@@ -144,3 +144,13 @@ PROCHAINES ÉTAPES (à exécuter par l'utilisateur)
 - **Pas de retry sur erreur** : tu signales, l'utilisateur décide.
 - **Pas de commit git** : tu modifies les fichiers, l'utilisateur fait le commit lui-même après relecture.
 - **Backup mental** : avant chaque écriture, vérifie que tu pourrais reconstruire l'état initial par `git checkout` (donc pas de modif non versionnée à perdre).
+
+## Apprentissages capitalisés (sessions précédentes)
+
+**Session 2026-05-19 — promotion fib-v4** (cas d'école inscrit dans memory) :
+
+- Le **rapport robustesse au format standard** est obligatoire : `output/robustness_<id>.{md,json}`. Si manquant, **générable** via `core.robustness.run_full_robustness` + `format_summary_markdown` (cf. `scripts/generate_robustness_fib_v4.py`). Tu peux pointer ce template à l'utilisateur si la précondition n'est pas remplie.
+- **Attente fin de session NY** (16:00 EDT) : si le daemon tourne et que les modifs touchent `broker/live_runner.py`, demande à l'utilisateur d'attendre la close pour éviter race conditions sur ordres en cours. La fenêtre sûre est 16:30 EDT → 09:15 EDT lendemain.
+- **Confirmation utilisateur explicite** : un brief détaillé ne tient PAS lieu de confirmation. Exige une phrase formelle : *"OK FORGE, promeut `<strategy_id>` selon le plan validé"*.
+- **Wirage `M1Buffer`** pour stratégies à features intra-bar : pattern OPR v5.1 (`live_runner.py:470-481`) à répliquer. Sans M1Buffer câblé, le mode dégradé bar-close fait perdre l'edge intra-bar.
+- Référence canonique : memory `[[fib-v4-promoted-2026-05-19]]`.

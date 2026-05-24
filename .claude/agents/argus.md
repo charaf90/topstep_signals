@@ -35,7 +35,7 @@ tmux ls 2>/dev/null
 cat state/live_state.json 2>/dev/null | python -m json.tool
 
 # 3. Versions actives
-grep -E "(OPR|FIB|VPC)_STRATEGY_VERSION" config.py
+grep -E "(OPR|FIB_V4)_STRATEGY_VERSION|FIB_V4_ENABLED|OPR_V5_1" config.py
 
 # 4. Derniers événements (50 lignes max)
 tail -n 50 logs/trading_events.log 2>/dev/null
@@ -84,8 +84,9 @@ ps aux | grep -E "(live_runner|telegram_bot)" | grep -v grep
   Distance DD    : -$XXX restant avant blocage (limite -$2000 trailing)
 
 🟢/🟡/🔴 STRATÉGIES ACTIVES
-  OPR  <opr-v4>  : <N> trades aujourd'hui, <résultats>
-  Fib  <fib-v3>  : <N> trades aujourd'hui, <résultats>
+  OPR v5.1 (NQ1, YM1)   : <N> trades aujourd'hui, <résultats>  ← tags OPR_*
+  OPR v4   (MES1 fallback) : <N> trades aujourd'hui, <résultats>
+  Fib v4   (MES1, NQ1, MGC1) : <N> trades aujourd'hui, <résultats>  ← tags FIBV4_*
 
 🟢/🟡/🔴 LOGS (dernières 50 lignes scannées)
   Erreurs API ProjectX : <0 / N>

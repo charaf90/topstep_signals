@@ -26,7 +26,6 @@
       "Write(/state/**)",
       "Edit(/logs/**)",
       "Write(/logs/**)"
-    ],
-    "defaultMode": "bypassPermissions"
+    ]
   }
 }

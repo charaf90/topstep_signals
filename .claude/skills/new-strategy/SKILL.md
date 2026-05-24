@@ -16,7 +16,7 @@ ultrathink
 ## Contexte projet
 
 Versions en production :
-!`grep -E "(OPR|FIB|VPC)_STRATEGY_VERSION" config.py`
+!`grep -E "(OPR|FIB_V4)_STRATEGY_VERSION|FIB_V4_ENABLED|OPR_V5_1_LIVE_TICKERS" config.py`
 
 Données CSV (TradingView, historique long) :
 !`ls data/`
@@ -27,16 +27,19 @@ Stratégies découvertes (plug-and-play) :
 État live :
 !`cat state/live_state.json 2>/dev/null | head -30 || echo "Pas de session live active"`
 
-## Benchmark production
+## Benchmark production (mise à jour 2026-05-19)
 
-| Stratégie  | P&L OOS    | DD    | Bootstrap | Actifs        |
-|------------|------------|-------|-----------|---------------|
-| OPR opr-v4 | +$22 574   | -$822 | 100 %     | MES1·NQ1·YM1  |
-| Fib fib-v3 | +$10 805   | -$672 | 100 %     | MES1·NQ1·YM1  |
-| VPC vpc-v4 | +$2 183    | -$1 376 (MC P95) | 99.5 % (stationnaire) | MES1·NQ1 |
+| Stratégie       | PF OOS | n_oos | Bootstrap | Actifs                |
+|-----------------|--------|-------|-----------|-----------------------|
+| OPR opr-v5.1    | élevé  | ~95+  | 100 %     | NQ1·YM1               |
+| OPR opr-v4      | 1.36   | 121   | (legacy)  | MES1 (pass-through)   |
+| Fib fib-v4      | **5.06** (portfolio) | 70 | **100 %** | MES1·NQ1·MGC1 |
+
+Toute nouvelle stratégie doit battre **PF OOS ≥ 1.5** ET bootstrap stationnaire ≥ 80 %
+avec n_oos ≥ 20 pour passer en 🟢 (cf. critères verdict).
 
 **Contraintes Topstep :** daily loss −$1 000 · trailing DD −$2 000 · target +$3 000
-**Walk-forward sur actifs standards (dates fixes) :** IS = déc 2024 → 2025-09-30 | OOS = 2025-10-01 → mars 2026
+**Walk-forward sur actifs standards (dates fixes) :** IS = sept 2024 → 2025-09-30 | OOS = 2025-10-01 → mai 2026
 **Walk-forward sur nouveaux actifs (data_fetcher) :** voir PHASE 1.5 — adapté à la fenêtre disponible.
 **Frictions à modéliser :** `SLIPPAGE_TICKS_PER_TICKER` + `COMMISSION_RT_PER_CONTRACT` depuis `config.py` (déjà calibrés).
 
@@ -69,9 +72,9 @@ PRODUCTION (NE PAS TOUCHER)                    →  core/opr.py, core/strategy_f
 
 | Cas | Source | Pourquoi |
 |---|---|---|
-| Stratégie sur MES1/NQ1/YM1 uniquement | CSV existants `data/{TICKER}_data_m15.csv` (TradingView, déc 2024 → mars 2026) | Historique long (~16 mois) → walk-forward IS/OOS aux dates fixes |
-| Stratégie sur **autre actif** (MGC, MCLE, MBT, M2K…) | `python -m core.data_fetcher --symbol <ALIAS> --timeframe m15 --days <N> --save --ticker <NEW_TICKER>` | API ProjectX limitée à 20 000 bars/req + un contrat = une échéance (~2-3 mois d'historique max) |
-| Stratégie nécessitant un autre timeframe (m5, h1, h4) sur actifs standards | `python -m core.data_fetcher --symbol MES --timeframe h1 --days 365 --save --ticker MES1` (écrit `data/MES1_data_h1.csv`) | CSV TradingView sont m15 seulement |
+| Stratégie sur MES1/NQ1/YM1/MGC1/MCL1/M6E1 | CSV dans `data/{TICKER}_data_m15.csv` (DATA_BACKTEST, sept 2024 → mai 2026) | Historique long (~20 mois) → walk-forward IS/OOS aux dates fixes ; m5 aussi disponible (oct 2025 →) |
+| Stratégie sur **autre actif** (MBT, M2K…) | `python -m core.data_fetcher --symbol <ALIAS> --timeframe m15 --days <N> --save --ticker <NEW_TICKER>` | API ProjectX limitée à 20 000 bars/req + un contrat = une échéance (~2-3 mois d'historique max) |
+| Stratégie nécessitant h1/h4/d1 sur actifs standards | `build_timeframes(df_15m)` — resample automatique en mémoire | Nativement disponible via `core/data.py`, pas besoin de fetch séparé |
 | Découvrir le catalogue ProjectX disponible | `python -m core.data_fetcher --available` | Affiche les 40+ contrats actifs |
 | Lister les alias raccourcis du data_fetcher | `python -m core.data_fetcher --list` | MES, MNQ, MYM, M2K, MGC, MCLE, MBT, MET, etc. |
 
@@ -241,7 +244,7 @@ H<N> prioritaire : <résumé 1 ligne>
 2. **Énonce l'edge théorique** : pourquoi cet edge existe-t-il ? Qui paie ce P&L ? (sans réponse claire → drapeau rouge)
 3. **Énonce une hypothèse falsifiable** : quelle observation invaliderait la stratégie en live ?
 4. Identifie les risques : look-ahead, overfitting, volume de trades, régime-dépendance
-5. Évalue la **complémentarité** avec OPR / Fib / VPC (heures, actifs, type de signal). Quantification en PHASE 6.
+5. Évalue la **complémentarité** avec OPR (v4/v5.1) / Fib v4 (heures, actifs, type de signal). Quantification en PHASE 6.
 6. Décide de chaque indicateur — justifie période et pertinence
 7. Propose tes **améliorations** par rapport à l'idée initiale
 8. Fixe : `STRATEGY_ID` (format `concept-v1`) · tickers · fenêtre NY · `PARAM_GRID` initial (≤ 4 dimensions, granularité justifiée)
@@ -284,12 +287,12 @@ H<N> prioritaire : <résumé 1 ligne>
      À passer en CLI : `python optimize.py --strategy <id> --csv-dir ./data --is-end <IS_END> --oos-start <OOS_START>`.
 4. **Documenter** dans le rapport final (PHASE 8 § 3) que :
    - Les données ont été fetchées via `core/data_fetcher.py` (préciser la date du fetch).
-   - L'historique est plus court que celui de OPR/Fib/VPC → robustesse statistique réduite.
+   - L'historique est plus court que celui de OPR/Fib v4 → robustesse statistique réduite.
    - Le verdict 🟢 nécessite alors `n_OOS ≥ 30` (plus exigeant que le défaut 20) pour compenser le sample size faible.
 
 **→ Si fetch fait, mentionne-le explicitement dans le bloc `📋 ANALYSE INITIALE` :**
 ```
-Données : <TICKER1> (CSV existant, déc 2024 → mars 2026)
+Données : <TICKER1> (CSV existant, sept 2024 → mai 2026)
          + <TICKER2> (fetché via data_fetcher le YYYY-MM-DD, fenêtre 2026-MM-DD → 2026-MM-DD, N bars)
 Walk-forward adapté : IS=YYYY-MM-DD à YYYY-MM-DD | OOS=YYYY-MM-DD à YYYY-MM-DD
 ```
@@ -324,6 +327,48 @@ Autres exigences :
 
 ---
 
+## PHASE 2.5 · Feature catalog par @quant (optionnel, recommandé)
+
+> Phase d'enrichissement proactif. À invoquer **avant** que le scaffold de
+> stratégie soit finalisé, pour que `@quant` propose des features candidates
+> alignées sur le concept (regime, timing, microstructure, cross-asset).
+> Phase **optionnelle** par défaut, **recommandée** dès que le concept
+> repose sur des conditions de marché conditionnelles (filtre de régime,
+> heure, volatilité, microstructure).
+
+### Quand l'invoquer
+- Concept impliquant du filtrage conditionnel (ex: "uniquement quand ADX > 25")
+- Stratégie qui pourrait bénéficier de features pas évidentes (timing, cross-asset)
+- Concept neuf sans héritage de stratégie prod (pas un simple variant de OPR/Fib)
+
+### Workflow
+
+1. **Invoquer `@quant` en mode `catalog`** avec :
+   - Le concept formalisé par `@researcher` (bloc CONCEPT complet)
+   - Le `STRATEGY_ID` cible et les tickers visés
+
+2. **Le @quant propose 5-10 features candidates** classées en :
+   - **Must-have** : à intégrer dès le scaffold v1 dans `strategies/<id>.py` (max 3)
+   - **Nice-to-have** : à tester en PHASE 3.5 sur trades baseline
+
+3. **Sortie sauvegardée** dans `output/<strategy_id>/quant_catalog.md`.
+
+4. **Le scaffold (PHASE 2)** intègre les features must-have. Les nice-to-have
+   restent disponibles pour la PHASE 3.5 (discovery).
+
+### Garde-fous
+
+- Le @quant **propose** ; @new-strategy **applique**. Pas d'écriture autonome.
+- Features must-have : maximum 3 pour ne pas alourdir le scaffold v1.
+- Si data insuffisante (NYSE TICK, options) : marquer "DATA UNAVAILABLE",
+  ne pas tenter.
+- Chaque feature doit être calculable sans look-ahead par construction
+  (`df.iloc[:i]` ou `.shift(1)`).
+
+> Cf. `.claude/agents/quant.md` section "Mode `catalog`" pour le détail.
+
+---
+
 ## PHASE 3 · Backtest initial (sans charts)
 
 ```bash
@@ -347,6 +392,75 @@ IS Portfolio :
 • Trades : XXX  |  DD : -$XXX  |  Sharpe : X.X
 
 → Lancement optimisation...
+```
+
+---
+
+## PHASE 3.5 · Feature discovery par @quant (optionnel, recommandé si baseline 🟡)
+
+> Phase d'analyse data-driven post-baseline. À invoquer **après le backtest
+> initial v1** pour découvrir des filtres significatifs (sklearn RF importance,
+> permutation tests, grid univarié) qui auraient échappé à l'œil humain.
+> **Particulièrement utile si baseline = 🟡 borderline** — un filtre data-driven
+> peut faire basculer en 🟢.
+
+### Quand l'invoquer
+
+- **Recommandé** : baseline v1 = 🟡 (PF OOS entre 1.2 et 1.5)
+- **Optionnel** : baseline v1 = 🟢 mais avec amélioration possible (PF entre 1.5 et 1.8)
+- **Sauter** : baseline v1 = 🔴 dur (PF < 1.0) — le problème est structurel, pas un filtre
+
+### Pré-requis
+
+- `n_oos_portfolio ≥ 100` trades (sinon @quant refusera)
+- Trades baseline sauvegardés dans `output/<strategy_id>/full/trades_v1.csv`
+
+### Workflow
+
+1. **Invoquer `@quant` en mode `discover`** avec :
+   - Le chemin `output/<strategy_id>/full/trades_v1.csv`
+   - Les CSV data `data/<TICKER>_data_m15.csv`
+   - Le résumé du concept (issu de PHASE 1)
+   - Optionnel : `output/<strategy_id>/quant_catalog.md` si PHASE 2.5 exécutée
+
+2. **Le @quant exécute** :
+   - Feature engineering (no look-ahead vérifié)
+   - Analyse univariée par quantile sur chaque feature continue
+   - RandomForest + LogisticRegression avec **TimeSeriesSplit** (jamais KFold)
+   - Permutation test 1000 itérations sur top-5 features
+   - **Correction Bonferroni** sur N features testées (seuil `p < 0.05/N`)
+   - Validation walk-forward du seuil retenu (impact PF OOS séparé IS/OOS)
+
+3. **Output** :
+   - `output/<strategy_id>/quant_report.md` (max 80 lignes, 1 page)
+   - `output/<strategy_id>/quant_patch.py` (patch Python prêt-à-coller, avec `# ANCHOR`)
+
+4. **Application du patch** :
+   - `@new-strategy` lit `quant_patch.py` et l'intègre dans v_next
+     (`strategies/<strategy_id>.py` → bumper `STRATEGY_VERSION` à `vN+1`)
+   - Le filtre ajouté doit avoir passé Bonferroni ET amélioré PF OOS ≥ +0.2
+
+### Garde-fous
+
+- @quant **propose** un patch ; @new-strategy **applique**. Pas d'écriture
+  autonome de `strategies/<id>_vN+1.py` par @quant.
+- Multiple-testing : tout seuil retenu doit passer `p < 0.05 / N_features_tested`.
+- No look-ahead : `@auditor` en PHASE post-8 vérifiera ligne par ligne le patch
+  (`output/<strategy_id>/quant_patch.py`).
+- Si verdict @quant = **LOW** (aucun filtre ne passe Bonferroni) : ne pas
+  appliquer le patch, documenter dans le rapport final, considérer arrêt.
+
+> Cf. `.claude/agents/quant.md` section "Mode `discover`" pour le détail.
+
+Telegram (optionnel) :
+```
+🔬 <b>Quant discover <STRATEGY_ID></b>
+
+Features testées : N  |  Bonferroni : p &lt; X.XXX
+Filtres retenus  : N (impact PF OOS +X.XX)
+
+Verdict quant : HIGH / MEDIUM / LOW
+<i>Patch : output/&lt;strategy_id&gt;/quant_patch.py</i>
 ```
 
 ---
@@ -422,6 +536,87 @@ Concentration = signal de régime-dépendance non capturé.
 
 ---
 
+## PHASE 5.5 · Live-equivalent backtest (CONDITIONNELLE — BLOCANTE si applicable)
+
+> Phase déclenchée **automatiquement** si la stratégie produit des features
+> dérivées de la barre de fill (mèche, MAE intra-bar, MFE intra-bar, range
+> de la bougie de fill, etc.). Skip si toutes les features dépendent uniquement
+> des barres antérieures au fill.
+
+### Pourquoi cette phase ?
+
+Toute feature lue sur la bougie où le fill se produit est **non-observable en
+live à l'instant où l'ordre limite est exécuté broker-side**. Le PF backtest
+naïf qui utilise cette feature comme filtre est un **upper bound théorique**,
+pas un PF live atteignable.
+
+**Cas d'école projet** :
+- OPR v5.1 — feature `F2` (excursion durant pending) → `scripts/live_eq_v5_1.py`
+- fib-v4 (2026-05-19) — feature `wick_through_atr` → ce qui a déclenché l'écriture de cette phase
+
+### Inventaire des features à risque
+
+Pour chaque feature du DataFrame de trades, te poser la question :
+> "Au moment précis où le broker fille mon ordre limite intra-bar M15, est-ce
+> que je connais déjà la valeur de cette feature ?"
+
+Si la réponse est **non** (la feature dépend du low/high/close FINAL de la
+bougie de fill ou de toute barre future), la feature est à risque.
+
+### Path A — Wirage `M1Buffer` (préféré)
+
+Si `broker/m1_buffer.py` et `broker/projectx_market_realtime.py` sont disponibles
+(Phase C broker, commit ≥ 2026-05-18) :
+
+1. **Vérifier que `M1Buffer` est consommé par le live runner pour ce ticker**
+   (cf. `live_runner.py:1050-1102` pour activation, `live_runner.py:470-481`
+   pour pattern OPR).
+2. **Écrire `get_<strategy_id>_live_signal(df_15m, ticker, m1_buffer, contract_id)`** qui :
+   - Détecte les pendings et positions sur les bars M15 closes
+   - Pour la barre M15 EN COURS, consulte `m1_buffer.get_current_forming_bar`
+     + les M1 closes appartenant à cette M15 pour reconstruire le
+     low/high COURANT
+   - Évalue les features à risque en utilisant ce low/high courant
+   - Retourne CANCEL si la feature franchit le seuil pendant pending
+3. **Tester la cohérence backtest ↔ live signal** : sur un ticker, sur 1
+   mois de données, faire tourner les deux et vérifier que les décisions
+   convergent à ±2 barres M15 près.
+
+Latence attendue : ~1 minute (granularité M1Buffer). Acceptable.
+
+### Path B — Live-equivalent backtest (fallback si pas de M1Buffer)
+
+Si l'infrastructure tick n'est pas disponible pour ce ticker :
+
+1. **Créer `scripts/live_eq_<strategy_id>.py`** sur le modèle
+   `scripts/live_eq_v5_1.py`.
+2. La logique : décaler la décision de filtre à la barre M15 SUIVANTE
+   (n'utilise pas la bougie de fill elle-même).
+3. **Re-mesurer les métriques OOS avec ce mode dégradé.** Le PF live-eq est
+   typiquement 50-90 % du PF backtest naïf selon la feature.
+4. **Le verdict 🟢/🟡/🔴 doit être recalculé sur les métriques live-eq**,
+   pas sur les métriques backtest naïves.
+
+### Sortie obligatoire
+
+Inclure dans `output/<id>/summary.json` :
+```json
+"live_equivalence": {
+  "applicable": true,
+  "path": "M1Buffer" | "live_eq_script" | "n/a",
+  "live_eq_pf_oos": <float ou null>,
+  "live_eq_pnl_oos": <float ou null>,
+  "live_eq_n_oos": <int ou null>,
+  "expected_degradation_pct": <float ou null>,
+  "live_signal_function": "core/strategy_<id>.py::get_<id>_live_signal" | null
+}
+```
+
+Sans ce bloc renseigné quand `applicable=true`, l'auditor **rétrograde
+systématiquement** le verdict 🟢→🟡 (cf. `.claude/agents/auditor.md` §2-bis).
+
+---
+
 ## PHASE 6 · Génération des charts
 
 ```bash
@@ -441,25 +636,44 @@ Si `plot_day()` est incomplet, corrige-le avant de continuer.
 
 ---
 
-## PHASE 6.5 · Audit visuel des charts (optionnel, recommandé)
+## PHASE 6.5 · Audit visuel des charts (conditionnel)
 
 > Phase qualitative complémentaire au verdict statistique. Le chartist
 > alimente `@auditor` en warnings visuels — il ne décide PAS du verdict.
-> Phase **optionnelle** par défaut, **recommandée** dès qu'un verdict
-> 🟢 est revendiqué (l'audit visuel peut révéler des biais invisibles
-> aux métriques : TP sur wick, entrées chasing, J+1 macro non filtré).
+
+### Règle de skip (économie ~80-100k tokens sur cycles 🟢 clairs)
+
+| Configuration verdict statistique | Action PHASE 6.5 |
+|---|---|
+| **🟢 clair** : bootstrap OOS ≥ 80 % **ET** PF OOS ≥ 1.5 | **SAUTER** — verdict statistique suffisant |
+| **🟢 borderline** : bootstrap 80-85 % **ou** PF OOS 1.5-1.6 | Exécuter (audit confirmatoire utile) |
+| **🟡** : tout verdict 🟡 | Exécuter (audit visuel peut basculer en 🟢 ou rejeter 🟡 → 🔴) |
+| **🔴** | **SAUTER** — inutile d'auditer un rejet |
+
+En cas de skip, écrire dans `output/<strategy_id>/summary.json` :
+```json
+"skip_chartist_audit": true,
+"skip_reason": "verdict 🟢 clair : bootstrap=XX% PF_oos=X.XX"
+```
+
+### Quand exécuter
+
+L'audit visuel reste utile pour révéler des biais invisibles aux métriques :
+TP sur wick, entrées chasing, J+1 macro non filtré. Mais ces biais sont rares
+en pratique quand le bootstrap est solide et le PF élevé — c'est pourquoi
+on skip sur les 🟢 clairs.
 
 1. **Vérifier les artefacts** générés en PHASE 6 :
-   - `output/charts/<TICKER>/YYYY-MM-DD.png` (5 winners + 5 losers idéalement)
-   - `output/equity_curve_<strategy_id>.png` (si fourni)
-   - `output/monthly_heatmap_<strategy_id>.png` (si fourni)
+   - `output/<strategy_id>/full/charts/<TICKER>/YYYY-MM-DD.png` (5 winners + 5 losers idéalement)
+   - `output/<strategy_id>/full/charts/equity_curve.png` (si fourni)
+   - `output/<strategy_id>/full/charts/monthly_heatmap.png` (si fourni)
 
 2. **Invoquer `@chartist`** en mode audit visuel, lui fournir :
    - La liste des PNG charts à analyser (10 max recommandé pour éviter dilution)
-   - Le chemin du rapport long `output/rapport_<strategy_id>.md` (contexte stratégie)
+   - Le chemin du rapport compact `output/<strategy_id>/rapport.md` (contexte stratégie)
    - L'`STRATEGY_ID` et la période couverte
 
-3. **Sauvegarder le rapport chartist** dans `output/audit_visuel_<strategy_id>.md`
+3. **Sauvegarder le rapport chartist** dans `output/<strategy_id>/full/audit_visuel.md`
    pour qu'`@auditor` puisse le lire en PHASE post-8.
 
 4. **Le chartist ne décide PAS du verdict.** Ses warnings sont transmis à
@@ -481,7 +695,7 @@ Warnings :
 • <warning 2 court>
 
 Réalisme fills : X/5  |  Edge visible : X/5
-<i>Rapport : output/audit_visuel_<strategy_id>.md</i>
+<i>Rapport : output/&lt;strategy_id&gt;/full/audit_visuel.md</i>
 ```
 
 ---
@@ -501,8 +715,58 @@ Critère d'arrêt anticipé : si après v3, PF OOS reste < 1.2 ou bootstrap < 50
 
 ## PHASE 8 · Rapport final
 
-Consulte [templates/rapport_template.md](templates/rapport_template.md) pour le format.
-Crée `output/rapport_<strategy_id>.md`.
+Nouveau format à 3 niveaux sous `output/<strategy_id>/` :
+
+```
+output/<strategy_id>/
+  summary.json          ← lu par Athena/Auditor — verdict + métriques structurées
+  rapport.md            ← résumé 1 page (max 80 lignes) — archivable humain
+  quant_report.md       ← (si PHASE 3.5 exécutée) rapport @quant
+  quant_patch.py        ← (si PHASE 3.5 exécutée) patch appliqué à vN+1
+  full/
+    robustness.json     ← détail bootstrap, Bonferroni, PSR, MC, stress
+    audit_visuel.md     ← (si PHASE 6.5 exécutée) warnings chartist
+    charts/             ← 122 PNG (lus uniquement par @chartist si invoqué)
+    trades_v1.csv       ← trades baseline (input @quant)
+    trades_final.csv    ← trades version retenue
+    features_v1.csv     ← (si PHASE 3.5) features calculées par @quant
+```
+
+### Schéma `summary.json` (obligatoire)
+
+```json
+{
+  "strategy_id": "<id>",
+  "version": "<vN>",
+  "iterations": <int>,
+  "verdict": "🟢" | "🟡" | "🔴",
+  "skip_chartist_audit": <bool>,
+  "skip_reason": "<text si skip>",
+  "oos": {"pf": <float>, "pl_net": <int>, "n": <int>, "bootstrap": <pct>, "dd": <float>, "wr_pct": <float>},
+  "is": {"pf": <float>, "pl_net": <int>, "n": <int>},
+  "degradation_is_oos_pct": <float>,
+  "stress": {"trending": <pf>, "ranging": <pf>, "macro": <pf>, "vol_h": <pf>, "vol_b": <pf>},
+  "robustness": {"bonferroni_ok": <bool>, "psr_0": <float>, "mc_dd_p95": <float>},
+  "quant_used": <bool>,
+  "quant_verdict": "HIGH" | "MEDIUM" | "LOW" | null,
+  "quant_filters_applied": [<list de strings>],
+  "audit_warnings_count": <int>,
+  "next_step": "<promotion | itération | rejet>"
+}
+```
+
+### Rapport `rapport.md` (~80 lignes max)
+
+Consulte [templates/rapport_template.md](templates/rapport_template.md) pour le format compact.
+Doit tenir en 1 page de lecture humaine. Verdict, top métriques OOS, top 3 filtres
+quant (si utilisé), 3 lignes par bloc majeur. Détails complets dans `full/`.
+
+### Compatibilité ascendante
+
+Les rapports existants (`output/rapport_opr-v5.md`, etc.) **ne sont pas migrés**.
+Seules les futures stratégies utilisent ce nouveau format `output/<id>/`. Auditor
+et Athena gèrent les deux formats pendant la transition (lecture prioritaire
+`summary.json` si présent, sinon fallback sur ancien `rapport_<id>.md`).
 
 ### Workflow de promotion (si 🟢 — DEMANDER CONFIRMATION avant exécution)
 
@@ -521,5 +785,5 @@ Telegram final :
 OOS · PF X.XX · P&amp;L net +$X XXX · Bootstrap XX%
 Stress : trending X.XX | ranging X.XX | macro X.XX
 MC P95 DD : -$XXX  |  Corr OPR/Fib : 0.XX
-<i>Rapport : output/rapport_<strategy_id>.md</i>
+<i>Rapport : output/&lt;strategy_id&gt;/rapport.md</i>
 ```
