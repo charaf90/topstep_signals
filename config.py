@@ -78,6 +78,33 @@ SLIPPAGE_TICKS_PER_TICKER = {
 # Commission round-trip par contrat (entrée + sortie) — Topstep TopstepX micro
 COMMISSION_RT_PER_CONTRACT = 1.40  # $/contrat aller-retour
 
+# ── Slippage stochastique (PHASE 2.4 ROADMAP_SOLO) ────────────────────────────
+# Feature flag — OFF par défaut. Si ON, core/slippage.apply_slippage_to_trades
+# appliquera un slippage stochastique aux PnL des backtests, calibré sur
+# SLIPPAGE_TICKS_PER_TICKER (base) + un extra ATR-dépendant.
+#
+# IMPORTANT : avec flag OFF, les pipelines de backtest restent strictement
+# identiques au baseline figé en golden master. Activer ce flag rend les
+# backtests "réalistes" mais NON COMPARABLES aux rapports historiques (PF/PnL
+# OOS systématiquement plus faibles).
+BACKTEST_REALISTIC_SLIPPAGE = False
+
+# Échelle de la composante stochastique (exponentielle) appliquée en facteur
+# multiplicatif × atr_ratio. Valeur conservatrice par défaut :
+#   slip_extra = base_slip × Exp(λ=REALISTIC_SLIPPAGE_ATR_SCALE) × atr_ratio
+# où atr_ratio = max(0, atr_actuel / atr_median - 1).
+REALISTIC_SLIPPAGE_ATR_SCALE = 0.5
+
+# Seed pour reproductibilité des tirages stochastiques (modifier pour Monte-Carlo).
+REALISTIC_SLIPPAGE_SEED = 42
+
+# ── Parallélisation walk-forward (PHASE 2.5 ROADMAP_SOLO) ─────────────────────
+# Nombre de workers joblib pour core/optimizer.optimize.
+#   -1 = tous les CPU disponibles (recommandé en local)
+#    1 = séquentiel (utile pour debug / reproductibilité stricte trace par trace)
+#    N = N workers (ex: 4 pour ne pas saturer la machine pendant le live)
+OPTIMIZER_PARALLEL_N_JOBS = -1
+
 # ==============================================================================
 # CALENDRIER MACRO (jours sensibles : FOMC, CPI, NFP, JOLTS, PCE)
 # ==============================================================================

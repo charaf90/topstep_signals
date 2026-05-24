@@ -8,6 +8,8 @@ Fonctions exposées :
 - block_bootstrap          : stationary bootstrap (Politis & Romano) sur P&L / PF / Sharpe
 - monte_carlo_drawdown     : distribution du DD via permutation des trades
 - probabilistic_sharpe_ratio : PSR (Bailey & López de Prado, 2012) corrigé skew+kurt
+- deflated_sharpe_ratio    : DSR (Bailey & López de Prado, 2014) — PSR avec sr_target ajusté
+                             pour data snooping (extreme value theory sur N tests)
 - bonferroni_threshold     : seuil de bootstrap corrigé pour N tests
 - reality_check            : test de White (2000) simplifié, comparaison N stratégies
 - regime_stress_test       : performance par régime (trending/ranging/vol/macro)
@@ -234,6 +236,100 @@ def probabilistic_sharpe_ratio(
         "sr_target": float(sr_target),
         "psr": psr,
         "psr_pct": float(psr * 100),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3-bis. DEFLATED SHARPE RATIO (Bailey & López de Prado 2014)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Constante d'Euler-Mascheroni γ ≈ 0.5772156649
+_EULER_MASCHERONI = 0.5772156649015329
+
+
+def _expected_max_sharpe(n_tests: int, variance_of_sr_estimates: float) -> float:
+    """E[max_n SR_n] sous l'approximation extreme value theory (Bailey-López 2014).
+
+    Formule :
+        E[max_n SR_n] ≈ √V · ((1 - γ)·Φ⁻¹(1 - 1/N) + γ·Φ⁻¹(1 - 1/(N·e)))
+
+    où γ est la constante d'Euler-Mascheroni, V la variance des SR estimés sur N
+    configurations testées, et Φ⁻¹ la fonction quantile normale standard.
+    """
+    if n_tests <= 1 or variance_of_sr_estimates <= 0:
+        return 0.0
+    sqrt_v = math.sqrt(variance_of_sr_estimates)
+    q1 = stats.norm.ppf(1.0 - 1.0 / n_tests)
+    q2 = stats.norm.ppf(1.0 - 1.0 / (n_tests * math.e))
+    return float(sqrt_v * ((1.0 - _EULER_MASCHERONI) * q1 + _EULER_MASCHERONI * q2))
+
+
+def deflated_sharpe_ratio(
+    pnls: np.ndarray | pd.Series,
+    n_tests: int = 1,
+    variance_of_sr_estimates: float | None = None,
+    annualization_factor: int = 252,
+) -> dict:
+    """DSR — PSR avec sr_target ajusté pour data snooping.
+
+    Bailey & López de Prado (2014). Cas particulier :
+      - n_tests=1 → DSR ≡ PSR(0)
+      - n_tests>1 → DSR < PSR(0), pénalité d'autant plus forte que N est grand
+
+    Args:
+        pnls                     : série des P&L par trade (USD ou unité cohérente)
+        n_tests                  : nombre de configurations testées (taille du grid)
+        variance_of_sr_estimates : variance des SR observés sur les N configs.
+                                   Si None, on utilise la variance asymptotique
+                                   théorique du SR sous H₀:SR=0, soit 1/(n-1).
+        annualization_factor     : pour reporter le SR annualisé (default 252j).
+
+    Returns:
+        dict avec : sharpe_per_trade, sharpe_annualized, skew, kurt, n_tests,
+                    sr_target_deflated, dsr, dsr_pct.
+    """
+    arr = np.asarray(pnls, dtype=np.float64)
+    n = len(arr)
+    if n < 30:
+        return {"error": f"Trop peu d'observations pour DSR fiable ({n} < 30)"}
+
+    mu = arr.mean()
+    sigma = arr.std(ddof=1)
+    if sigma == 0:
+        return {"error": "Écart-type nul"}
+
+    sr = mu / sigma
+    sr_ann = sr * math.sqrt(annualization_factor)
+
+    skew = float(stats.skew(arr, bias=False))
+    kurt = float(stats.kurtosis(arr, fisher=False, bias=False))
+
+    # Variance des SR estimés sur N configs. Si non fournie, utilise la borne
+    # asymptotique théorique sous H₀ : Var(SR̂) ≈ 1/(n-1) (Lo, 2002).
+    if variance_of_sr_estimates is None:
+        variance_of_sr_estimates = 1.0 / max(n - 1, 1)
+
+    sr_target = _expected_max_sharpe(n_tests, variance_of_sr_estimates)
+
+    # PSR avec sr_target ajusté
+    denom_sq = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr**2
+    if denom_sq <= 0 or not np.isfinite(denom_sq):
+        return {"error": "Dénominateur invalide pour DSR"}
+
+    dsr_score = (sr - sr_target) * math.sqrt(n - 1) / math.sqrt(denom_sq)
+    dsr = float(stats.norm.cdf(dsr_score))
+
+    return {
+        "n": int(n),
+        "n_tests": int(n_tests),
+        "sharpe_per_trade": float(sr),
+        "sharpe_annualized": float(sr_ann),
+        "skewness": skew,
+        "kurtosis": kurt,
+        "variance_of_sr_estimates": float(variance_of_sr_estimates),
+        "sr_target_deflated": float(sr_target),
+        "dsr": dsr,
+        "dsr_pct": float(dsr * 100),
     }
 
 
@@ -480,6 +576,7 @@ def run_full_robustness(
         ),
         "bonferroni": bonferroni_threshold(alpha=0.05, n_tests=n_strategies_tested),
         "psr": probabilistic_sharpe_ratio(pnls, sr_target=0.0),
+        "dsr": deflated_sharpe_ratio(pnls, n_tests=n_strategies_tested),
         "regime_stress": regime_stress_test(trades).to_dict("records"),
         "worst_clustering": worst_case_clustering(trades, n_worst=20),
     }
@@ -535,6 +632,18 @@ def format_summary_markdown(results: dict) -> str:
             f"Sharpe ann. = {psr['sharpe_annualized']:.2f} · "
             f"PSR(0) = **{psr['psr_pct']:.1f} %** "
             f"(skew={psr['skewness']:.2f}, kurt={psr['kurtosis']:.2f})"
+        )
+        lines.append("")
+
+    # DSR — Deflated Sharpe Ratio (correction data snooping multi-tests)
+    dsr = results.get("dsr", {})
+    if "error" not in dsr:
+        lines.append(
+            f"**Deflated Sharpe Ratio (DSR)** : "
+            f"N_tests = {dsr['n_tests']} · "
+            f"sr_target_deflated = {dsr['sr_target_deflated']:.3f} · "
+            f"DSR = **{dsr['dsr_pct']:.1f} %**  "
+            f"_(PSR ajusté pour le snooping multi-tests, Bailey-López 2014)_"
         )
         lines.append("")
 

@@ -217,6 +217,12 @@ def augment_verdict(base_verdict: str, robustness: dict) -> tuple[str, list[str]
     if "error" not in psr and psr.get("psr_pct", 100.0) < 80.0:
         flags.append(f"PSR(0) {psr['psr_pct']:.1f}% < 80%")
 
+    # DSR — informationnel (rétrograde si < 95% car le seuil est plus strict
+    # que PSR : on cherche à dépasser le MAX des N configs testées, pas zéro).
+    dsr = robustness.get("dsr", {})
+    if "error" not in dsr and dsr.get("dsr_pct", 100.0) < 95.0:
+        flags.append(f"DSR {dsr['dsr_pct']:.1f}% < 95%")
+
     mc = robustness.get("monte_carlo_dd", {})
     if "error" not in mc and mc.get("dd_topstep_breach_pct", 0.0) > 5.0:
         flags.append(f"P(DD > Topstep) {mc['dd_topstep_breach_pct']:.1f}% > 5%")
