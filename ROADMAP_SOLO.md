@@ -21,12 +21,14 @@ Transformer `topstep_signals` (déjà solide, ~14k lignes, 2 stratégies en prod
 ## 📍 ÉTAT ACTUEL — À METTRE À JOUR À CHAQUE SESSION
 
 ```
-Phase active     : PHASE 2 — Backtest pro — TERMINÉE
-Étape en cours   : 1.8 observation 7j (en parallèle) + PHASE 3 prête à démarrer
-Dernière session : 2026-05-25 (PHASE 2 mergée sur main — commit 85dcc76)
-Prochaine action : (a) configurer cron reconcile_daily + observer 7j
-                   (b) attaquer PHASE 3 — Améliorations live (shadow mode,
-                       vol-targeting) en parallèle de l'observation
+Phase active     : PHASE 3 — Améliorations live — code seul mergé
+Étape en cours   : 1.8 (obs 7j) + 3.3 réactivation différée + 3.4 optionnelle
+Dernière session : 2026-05-25 (PHASE 3 code mergé sur main — shadow framework
+                   + audit adaptive_sizing en lecture seule)
+Prochaine action : (a) cron reconcile_daily + obs 7j
+                   (b) lancer shadow daemon en parallèle (./tools/launch_shadow.sh start)
+                       pour valider le framework 1-2 jours avant fix adaptive_sizing
+                   (c) PHASE 4 release coordonnée quand tout est stable
 ```
 
 **Quand tu termines une étape** :
@@ -348,9 +350,9 @@ Puis répondre :
 
 **Étapes** :
 
-- [ ] **3.1 Branche `feat/live-upgrades`**
+- [x] **3.1 Branche `feat/live-upgrades`**
 
-- [ ] **3.2 Framework Shadow Mode** (`broker/shadow_runner.py`)
+- [x] **3.2 Framework Shadow Mode** (`broker/shadow_runner.py`)
   - Tourne en parallèle du `live_runner.py` (process séparé, tmux dédié)
   - Écoute le même WebSocket sans poster d'ordres
   - Applique la logique de décision (incluant nouvelles features candidates)
@@ -358,7 +360,7 @@ Puis répondre :
   - Script `tools/shadow_vs_live.py` : rapport quotidien "shadow vs live"
   - **Isolé** du live : process, fichier d'état, logs séparés
 
-- [ ] **3.3 Vol-targeting** (réactivation `core/adaptive_sizing.py`)
+- [~] **3.3 Vol-targeting** (réactivation `core/adaptive_sizing.py`) *(audit fait, réactivation différée — cf. docs/adaptive_sizing_audit.md)*
   - Auditer le code existant (désactivé depuis 2026-05-21 — voir mémoire `project_challenge_mode`)
   - Tourner en shadow mode **2 semaines minimum**
   - Critère Go : PF shadow ≥ PF prod ET DD shadow ≤ DD prod
@@ -369,7 +371,7 @@ Puis répondre :
   - Shadow 4 semaines avant promotion
   - **Reporté** si tu préfères d'abord stabiliser
 
-- [ ] **3.5 Merge sur `main`** avec **flags OFF par défaut**
+- [x] **3.5 Merge sur `main`** avec **flags OFF par défaut** *(partiel — code 3.1/3.2 + audit 3.3 mergés)*
   - L'activation est l'objet de la PHASE 4
 
 **Critères de validation PHASE 3** :
@@ -470,7 +472,7 @@ Notifier par Telegram + créer note rapide dans `docs/incidents/YYYY-MM-DD.md` (
 PHASE 0 — Fondations         (3-4 jours) : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-24
 PHASE 1 — Filet sécurité     (1 semaine) : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
 PHASE 2 — Backtest pro       (1.5 sem.)  : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-25
-PHASE 3 — Améliorations live (2 sem.)    : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
+PHASE 3 — Améliorations live (2 sem.)    : [ ] non démarrée  / [x] en cours  / [ ] terminée le YYYY-MM-DD  (3.1/3.2/3.5 ✓ ; 3.3 réactivation et 3.4 différées)
 PHASE 4 — Release            (1 jour)    : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
 
 Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
@@ -500,4 +502,4 @@ Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
 
 ---
 
-*Dernière mise à jour : 2026-05-25 (PHASE 2 mergée — commit 85dcc76 ; PHASE 3 à démarrer).*
+*Dernière mise à jour : 2026-05-25 (PHASE 3 code seul mergé — shadow framework + audit adaptive_sizing ; activation différée).*
