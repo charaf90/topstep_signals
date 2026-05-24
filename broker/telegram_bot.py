@@ -19,9 +19,6 @@ par une panne Telegram.
 """
 
 import logging
-import time
-from datetime import datetime
-from typing import Dict, List, Optional
 
 import requests
 
@@ -33,26 +30,24 @@ _API = "https://api.telegram.org/bot{token}/{method}"
 # Formatters (fonctions pures — faciles à tester / surcharger)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _esc(text: str) -> str:
     """Échappe les caractères spéciaux HTML Telegram."""
-    return (str(text)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;"))
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def fmt_signal(signal: Dict) -> str:
+def fmt_signal(signal: dict) -> str:
     strat = _esc(signal.get("strategy", "?").upper())
     ticker = _esc(signal.get("ticker", "?"))
     direction = "LONG 🔼" if signal.get("direction") == "long" else "SHORT 🔽"
-    entry  = signal.get("entry", 0)
-    sl     = signal.get("sl", 0)
-    tp     = signal.get("tp", 0)
-    sl_d   = signal.get("sl_dist", 0)
-    tp_d   = signal.get("tp_dist", 0)
-    rr     = signal.get("rr", 0)
-    n_ct   = signal.get("n_ct", 0)
-    risk   = signal.get("risk", 0)
+    entry = signal.get("entry", 0)
+    sl = signal.get("sl", 0)
+    tp = signal.get("tp", 0)
+    sl_d = signal.get("sl_dist", 0)
+    tp_d = signal.get("tp_dist", 0)
+    rr = signal.get("rr", 0)
+    n_ct = signal.get("n_ct", 0)
+    risk = signal.get("risk", 0)
     return (
         f"⚡ <b>Signal détecté</b>\n"
         f"<b>{strat} {direction} {ticker}</b>\n"
@@ -63,16 +58,15 @@ def fmt_signal(signal: Dict) -> str:
     )
 
 
-def fmt_order_placed(tag: str, signal: Dict, order_id: int,
-                     dry_run: bool = False) -> str:
-    strat  = _esc(signal.get("strategy", "?").upper())
+def fmt_order_placed(tag: str, signal: dict, order_id: int, dry_run: bool = False) -> str:
+    strat = _esc(signal.get("strategy", "?").upper())
     ticker = _esc(signal.get("ticker", "?"))
     direct = "LONG 🔼" if signal.get("direction") == "long" else "SHORT 🔽"
-    entry  = signal.get("entry", 0)
-    sl_t   = signal.get("_sl_ticks", "?")
-    tp_t   = signal.get("_tp_ticks", "?")
-    n_ct   = signal.get("n_ct", 0)
-    sim    = " <i>[DRY-RUN]</i>" if dry_run else ""
+    entry = signal.get("entry", 0)
+    sl_t = signal.get("_sl_ticks", "?")
+    tp_t = signal.get("_tp_ticks", "?")
+    n_ct = signal.get("n_ct", 0)
+    sim = " <i>[DRY-RUN]</i>" if dry_run else ""
     return (
         f"📋 <b>Ordre placé</b>{sim}\n"
         f"<b>{strat} {direct} {ticker}</b>\n"
@@ -82,11 +76,11 @@ def fmt_order_placed(tag: str, signal: Dict, order_id: int,
     )
 
 
-def fmt_fill(tag: str, info: Dict, fills_today: int, fills_max: int) -> str:
-    strat  = _esc(info.get("strategy", "?").upper())
+def fmt_fill(tag: str, info: dict, fills_today: int, fills_max: int) -> str:
+    strat = _esc(info.get("strategy", "?").upper())
     ticker = _esc(info.get("ticker", "?"))
     direct = "LONG 🔼" if info.get("direction") == "long" else "SHORT 🔽"
-    entry  = info.get("entry", 0)
+    entry = info.get("entry", 0)
     return (
         f"🟢 <b>FILL confirmé</b>\n"
         f"<b>{strat} {direct} {ticker}</b>\n"
@@ -95,10 +89,9 @@ def fmt_fill(tag: str, info: Dict, fills_today: int, fills_max: int) -> str:
     )
 
 
-def fmt_close(tag: str, info: Dict, pnl: float,
-              session_pnl: float, cum_pnl: float) -> str:
+def fmt_close(tag: str, info: dict, pnl: float, session_pnl: float, cum_pnl: float) -> str:
     ticker = _esc(info.get("ticker", "?"))
-    strat  = _esc(info.get("strategy", "?").upper())
+    strat = _esc(info.get("strategy", "?").upper())
     direct = "LONG" if info.get("direction") == "long" else "SHORT"
     result = info.get("status", "CLOSED")
     # Icône selon le résultat (déduit du P&L car on n'a pas le result explicite ici)
@@ -108,7 +101,7 @@ def fmt_close(tag: str, info: Dict, pnl: float,
         icon = "❌ SL"
     else:
         icon = "⏱ TE"
-    sign  = "+" if pnl >= 0 else ""
+    sign = "+" if pnl >= 0 else ""
     s_sign = "+" if session_pnl >= 0 else ""
     c_sign = "+" if cum_pnl >= 0 else ""
     return (
@@ -155,10 +148,10 @@ def _parse_risk_reason(reason: str) -> str:
     )
     if m:
         slack = int(m.group(1))
-        thr   = int(m.group(2))
+        thr = int(m.group(2))
         daily = int(m.group(3))
         trail = int(m.group(4))
-        rsv   = int(m.group(5))
+        rsv = int(m.group(5))
         return (
             f"<b>Slack Topstep insuffisant</b>\n"
             f"Slack effectif : <b>${slack}</b> (seuil ${thr})\n"
@@ -169,10 +162,7 @@ def _parse_risk_reason(reason: str) -> str:
     m = re.match(r"daily_fills_cap_(\d+)/(\d+)", reason)
     if m:
         n, mx = m.group(1), m.group(2)
-        return (
-            f"<b>Cap fills journaliers atteint</b>\n"
-            f"{n}/{mx} fills réalisés aujourd'hui."
-        )
+        return f"<b>Cap fills journaliers atteint</b>\n{n}/{mx} fills réalisés aujourd'hui."
 
     # Cap positions actives simultanées
     m = re.match(r"max_active_positions_(\d+)/(\d+)", reason)
@@ -206,10 +196,7 @@ def _parse_risk_reason(reason: str) -> str:
     m = re.match(r"user_daily_slack_(-?\d+)_below_(\d+)", reason)
     if m:
         slack, rsk = int(m.group(1)), int(m.group(2))
-        return (
-            f"<b>Marge utilisateur insuffisante</b>\n"
-            f"Slack ${slack} &lt; risque trade ${rsk}."
-        )
+        return f"<b>Marge utilisateur insuffisante</b>\nSlack ${slack} &lt; risque trade ${rsk}."
 
     # Fallback : raison brute échappée (lisible mais cryptique)
     return f"<i>{_esc(reason)}</i>"
@@ -218,11 +205,7 @@ def _parse_risk_reason(reason: str) -> str:
 def fmt_risk_blocked(ticker: str, tag: str, reason: str) -> str:
     # Le premier segment du tag est la stratégie (OPR / FIB / etc.)
     strat = tag.split("_")[0] if tag else "?"
-    return (
-        f"⛔ <b>Ordre bloqué</b>\n"
-        f"{_esc(ticker)} — {_esc(strat)}\n"
-        f"{_parse_risk_reason(reason)}"
-    )
+    return f"⛔ <b>Ordre bloqué</b>\n{_esc(ticker)} — {_esc(strat)}\n{_parse_risk_reason(reason)}"
 
 
 def fmt_risk_breach(reason: str) -> str:
@@ -233,8 +216,7 @@ def fmt_risk_breach(reason: str) -> str:
     )
 
 
-def fmt_daily_limit_warning(realized: float, limit: float,
-                             fills_remaining: int) -> str:
+def fmt_daily_limit_warning(realized: float, limit: float, fills_remaining: int) -> str:
     pct = abs(realized) / limit * 100
     return (
         f"⚠️ <b>Limite journalière approchante</b>\n"
@@ -251,8 +233,9 @@ def fmt_consec_loss_pause(days: int) -> str:
     )
 
 
-def fmt_day_damping_active(rdp: float, soft_cap: float, hard_cap: float,
-                            day_progress: float) -> str:
+def fmt_day_damping_active(
+    rdp: float, soft_cap: float, hard_cap: float, day_progress: float
+) -> str:
     """Première fois du jour que le damping day_progress passe < 1.0."""
     pct = day_progress * 100
     return (
@@ -283,14 +266,13 @@ def fmt_system_error(context: str, error: str) -> str:
     )
 
 
-def fmt_session_start(date_str: str, tickers: List[str],
-                      rm_status: Dict) -> str:
-    cum   = rm_status.get("cum_pnl", 0.0)
-    target= rm_status.get("target_remaining", 0.0)
+def fmt_session_start(date_str: str, tickers: list[str], rm_status: dict) -> str:
+    cum = rm_status.get("cum_pnl", 0.0)
+    target = rm_status.get("target_remaining", 0.0)
     slack_d = rm_status.get("slack_daily", 0.0)
     slack_t = rm_status.get("slack_trail", 0.0)
-    streak  = rm_status.get("consec_loss_days", 0)
-    sign  = "+" if cum >= 0 else ""
+    streak = rm_status.get("consec_loss_days", 0)
+    sign = "+" if cum >= 0 else ""
     ticker_str = " | ".join(tickers)
 
     # Récap caps actifs (challenge adaptatif + cohérence 50%)
@@ -300,11 +282,12 @@ def fmt_session_start(date_str: str, tickers: List[str],
     if bypass_active or in_combine:
         # Imports tardifs pour éviter cycle au load du module
         from config import (
-            CHALLENGE_DAY_PROFIT_SOFT_CAP_USD,
-            CHALLENGE_DAY_PROFIT_HARD_CAP_USD,
-            CHALLENGE_LOCKIN_START_USD,
             CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+            CHALLENGE_DAY_PROFIT_HARD_CAP_USD,
+            CHALLENGE_DAY_PROFIT_SOFT_CAP_USD,
+            CHALLENGE_LOCKIN_START_USD,
         )
+
         caps_line = (
             f"\n<i>Caps actifs — soft ${CHALLENGE_DAY_PROFIT_SOFT_CAP_USD:.0f} | "
             f"hard ${CHALLENGE_DAY_PROFIT_HARD_CAP_USD:.0f} | "
@@ -322,29 +305,33 @@ def fmt_session_start(date_str: str, tickers: List[str],
     )
 
 
-def fmt_session_report(date_str: str, placed_tags: Dict,
-                       rm_status: Dict) -> str:
+def fmt_session_report(date_str: str, placed_tags: dict, rm_status: dict) -> str:
     # Statistiques des trades du jour (depuis placed_tags — best effort)
-    closed = [v for v in placed_tags.values()
-              if v.get("status") in ("CLOSED",) and
-              _is_today(v.get("placed_at", ""), date_str)]
-    n_fills_rm = sum(1 for v in placed_tags.values()
-                     if v.get("fill_time") and _is_today(v.get("fill_time", ""), date_str))
-    n_tp     = sum(1 for v in closed if (v.get("close_pnl") or 0) > 0)
-    n_sl     = sum(1 for v in closed if (v.get("close_pnl") or 0) < 0)
-    n_te     = sum(1 for v in closed if (v.get("close_pnl") or 0) == 0)
+    closed = [
+        v
+        for v in placed_tags.values()
+        if v.get("status") in ("CLOSED",) and _is_today(v.get("placed_at", ""), date_str)
+    ]
+    n_fills_rm = sum(
+        1
+        for v in placed_tags.values()
+        if v.get("fill_time") and _is_today(v.get("fill_time", ""), date_str)
+    )
+    n_tp = sum(1 for v in closed if (v.get("close_pnl") or 0) > 0)
+    n_sl = sum(1 for v in closed if (v.get("close_pnl") or 0) < 0)
+    n_te = sum(1 for v in closed if (v.get("close_pnl") or 0) == 0)
 
     # Données broker réelles (prioritaires sur le RM interne)
-    broker_pnl  = rm_status.get("broker_day_pnl")
+    broker_pnl = rm_status.get("broker_day_pnl")
     broker_fees = rm_status.get("broker_day_fees")
-    broker_bal  = rm_status.get("broker_balance")
+    broker_bal = rm_status.get("broker_balance")
     broker_fill = rm_status.get("broker_fills")
 
-    pnl_day = broker_pnl  if broker_pnl  is not None else rm_status.get("realized_day_pnl", 0.0)
+    pnl_day = broker_pnl if broker_pnl is not None else rm_status.get("realized_day_pnl", 0.0)
     n_fills = broker_fill if broker_fill is not None else n_fills_rm
 
-    cum     = rm_status.get("cum_pnl", 0.0)
-    target  = rm_status.get("target_remaining", 0.0)
+    cum = rm_status.get("cum_pnl", 0.0)
+    target = rm_status.get("target_remaining", 0.0)
     slack_d = rm_status.get("slack_daily", 0.0)
     slack_t = rm_status.get("slack_trail", 0.0)
 
@@ -353,37 +340,40 @@ def fmt_session_report(date_str: str, placed_tags: Dict,
     icon_d = "✅" if pnl_day >= 0 else "🔴"
 
     # Ligne frais broker si disponible
-    fees_line = (f"  (frais : -{broker_fees:.2f} $)\n" if broker_fees is not None else "")
-    bal_line  = (f"Solde compte : {broker_bal:,.2f} $\n" if broker_bal is not None else "")
+    fees_line = f"  (frais : -{broker_fees:.2f} $)\n" if broker_fees is not None else ""
+    bal_line = f"Solde compte : {broker_bal:,.2f} $\n" if broker_bal is not None else ""
 
     return (
         f"📊 <b>Bilan session</b> — {_esc(date_str)}\n"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"Fills : {n_fills} | TP : {n_tp} | SL : {n_sl} | TE : {n_te}\n"
         f"P&amp;L session : {icon_d} <b>{sign_d}{pnl_day:.2f} $</b>\n"
         f"{fees_line}"
         f"{bal_line}"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"Cum challenge : <b>{sign_c}{cum:.2f} $</b>\n"
         f"Objectif restant : {target:.2f} $\n"
         f"Slack daily : {slack_d:.0f} $ | Trail : {slack_t:.0f} $"
     )
 
 
-def fmt_risk(rm_status: Dict, now_ny: str,
-             user_daily_loss_max: float = 200.0,
-             topstep_daily_loss_max: float = 1000.0,
-             topstep_trailing_dd: float = 2000.0,
-             topstep_profit_target: float = 3000.0,
-             paused: bool = False) -> str:
+def fmt_risk(
+    rm_status: dict,
+    now_ny: str,
+    user_daily_loss_max: float = 200.0,
+    topstep_daily_loss_max: float = 1000.0,
+    topstep_trailing_dd: float = 2000.0,
+    topstep_profit_target: float = 3000.0,
+    paused: bool = False,
+) -> str:
     """Détails des limites Topstep et utilisateur, slacks restants."""
-    cum     = rm_status.get("cum_pnl", 0.0)
-    peak    = rm_status.get("peak_pnl", 0.0)
+    cum = rm_status.get("cum_pnl", 0.0)
+    peak = rm_status.get("peak_pnl", 0.0)
     day_pnl = rm_status.get("realized_day_pnl", 0.0)
     slack_d = rm_status.get("slack_daily", 0.0)
     slack_t = rm_status.get("slack_trail", 0.0)
-    target  = rm_status.get("target_remaining", topstep_profit_target)
-    streak  = rm_status.get("consec_loss_days", 0)
+    target = rm_status.get("target_remaining", topstep_profit_target)
+    streak = rm_status.get("consec_loss_days", 0)
     fills_d = rm_status.get("daily_fills_count", 0)
     user_remaining = rm_status.get("user_daily_loss_remaining", user_daily_loss_max)
 
@@ -394,8 +384,7 @@ def fmt_risk(rm_status: Dict, now_ny: str,
     sign_d = "+" if day_pnl >= 0 else ""
     sign_c = "+" if cum >= 0 else ""
 
-    pause_line = ("\n⏸ <b>Bot en pause</b>"
-                  if paused else "")
+    pause_line = "\n⏸ <b>Bot en pause</b>" if paused else ""
 
     # Bloc challenge — affiché si mode adaptatif actif
     challenge_block = ""
@@ -403,7 +392,7 @@ def fmt_risk(rm_status: Dict, now_ny: str,
     last_reset = rm_status.get("last_monthly_reset_at")
     if bypass_active or last_reset:
         challenge_block = (
-            f"{'─'*24}\n"
+            f"{'─' * 24}\n"
             f"<b>Challenge adaptatif</b>\n"
             f"  Mode: {'🟢 ON' if bypass_active else 'OFF'} "
             f"(bypass USER_DAILY_LOSS_MAX: {'ACTIF' if bypass_active else 'inactif'})\n"
@@ -426,7 +415,7 @@ def fmt_risk(rm_status: Dict, now_ny: str,
         else:
             icon = "🟢"
         consistency_block = (
-            f"{'─'*24}\n"
+            f"{'─' * 24}\n"
             f"<b>Garde-fou cohérence 50%</b>\n"
             f"  {icon} Gain jour : {day_pnl:+.0f} $ / cap {cap_max:.0f} $\n"
             f"  Marge restante : <b>{cap_remaining:+.0f} $</b> ({pct_used:.0f}% utilisé)\n"
@@ -436,16 +425,16 @@ def fmt_risk(rm_status: Dict, now_ny: str,
     return (
         f"🛡 <b>Risk monitor</b>\n"
         f"<i>{_esc(now_ny)}</i>\n"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"P&amp;L jour : <b>{sign_d}{day_pnl:.2f} $</b> | Cum : {sign_c}{cum:.2f} $\n"
         f"Peak cum : {peak:+.2f} $ | Fills jour : {fills_d}\n"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"<b>Topstep</b>\n"
         f"  Daily slack : {slack_d:.0f} $ / {topstep_daily_loss_max:.0f} $\n"
         f"  Trailing slack : {slack_t:.0f} $ / {topstep_trailing_dd:.0f} $\n"
         f"  Trail floor : {trail_floor:+.0f} $ (distance {trail_distance:+.0f} $)\n"
         f"  Cible : {target:+.0f} $ / +{topstep_profit_target:.0f} $\n"
-        f"{'─'*24}\n"
+        f"{'─' * 24}\n"
         f"<b>Plafonds utilisateur</b>\n"
         f"  Perte jour restante : {user_remaining:.0f} $ / {user_daily_loss_max:.0f} $\n"
         + (f"⚠️ Streak perdant : {streak} jour(s)\n" if streak > 0 else "")
@@ -455,10 +444,9 @@ def fmt_risk(rm_status: Dict, now_ny: str,
     )
 
 
-def fmt_trades(placed_tags: Dict, date_str: str, n_max: int = 10) -> str:
+def fmt_trades(placed_tags: dict, date_str: str, n_max: int = 10) -> str:
     """Liste les N derniers trades du jour avec leur statut."""
-    today = [(t, v) for t, v in placed_tags.items()
-             if _is_today(v.get("placed_at", ""), date_str)]
+    today = [(t, v) for t, v in placed_tags.items() if _is_today(v.get("placed_at", ""), date_str)]
     if not today:
         return f"📜 <b>Trades du {_esc(date_str)}</b>\n\nAucun trade aujourd'hui."
 
@@ -484,9 +472,7 @@ def fmt_trades(placed_tags: Dict, date_str: str, n_max: int = 10) -> str:
             tail = "⏳ pending"
         else:
             tail = f"<i>{_esc(st)}</i>"
-        lines.append(
-            f"  {d} {_esc(strat)} {_esc(ticker)} @ {entry:.2f} — {tail}"
-        )
+        lines.append(f"  {d} {_esc(strat)} {_esc(ticker)} @ {entry:.2f} — {tail}")
     return "\n".join(lines)
 
 
@@ -506,57 +492,52 @@ def fmt_help() -> str:
 
 def fmt_pause_resume(paused: bool) -> str:
     if paused:
-        return ("⏸ <b>Bot en pause</b>\n"
-                "Aucun nouvel ordre ne sera placé.\n"
-                "Les positions existantes continuent normalement.")
-    return ("▶️ <b>Bot repris</b>\n"
-            "Les nouveaux ordres seront placés au prochain tick.")
+        return (
+            "⏸ <b>Bot en pause</b>\n"
+            "Aucun nouvel ordre ne sera placé.\n"
+            "Les positions existantes continuent normalement."
+        )
+    return "▶️ <b>Bot repris</b>\nLes nouveaux ordres seront placés au prochain tick."
 
 
-def fmt_status(placed_tags: Dict, rm_status: Dict, now_ny: str) -> str:
-    pending  = [(t, v) for t, v in placed_tags.items()
-                if v.get("status") == "PENDING"]
-    active   = [(t, v) for t, v in placed_tags.items()
-                if v.get("status") == "ACTIVE"]
-    cum      = rm_status.get("cum_pnl", 0.0)
-    day_pnl  = rm_status.get("realized_day_pnl", 0.0)
-    fills_d  = rm_status.get("daily_fills_count", 0)
-    fills_max= rm_status.get("user_max_trades_per_day", 3)
-    fills_r  = rm_status.get("daily_fills_remaining", fills_max - fills_d)
-    slack_d  = rm_status.get("slack_daily", 0.0)
-    slack_t  = rm_status.get("slack_trail", 0.0)
-    target   = rm_status.get("target_remaining", 0.0)
-    streak   = rm_status.get("consec_loss_days", 0)
+def fmt_status(placed_tags: dict, rm_status: dict, now_ny: str) -> str:
+    pending = [(t, v) for t, v in placed_tags.items() if v.get("status") == "PENDING"]
+    active = [(t, v) for t, v in placed_tags.items() if v.get("status") == "ACTIVE"]
+    cum = rm_status.get("cum_pnl", 0.0)
+    day_pnl = rm_status.get("realized_day_pnl", 0.0)
+    fills_d = rm_status.get("daily_fills_count", 0)
+    fills_max = rm_status.get("user_max_trades_per_day", 3)
+    fills_r = rm_status.get("daily_fills_remaining", fills_max - fills_d)
+    slack_d = rm_status.get("slack_daily", 0.0)
+    slack_t = rm_status.get("slack_trail", 0.0)
+    target = rm_status.get("target_remaining", 0.0)
+    streak = rm_status.get("consec_loss_days", 0)
 
     pos_lines = ""
     for tag, v in active:
         ticker = v.get("ticker", "?")
-        d      = "LONG 🔼" if v.get("direction") == "long" else "SHORT 🔽"
-        strat  = v.get("strategy", "?")
-        entry  = v.get("entry", 0)
+        d = "LONG 🔼" if v.get("direction") == "long" else "SHORT 🔽"
+        strat = v.get("strategy", "?")
+        entry = v.get("entry", 0)
         pos_lines += f"  • {_esc(strat)} {_esc(ticker)} {d} @ {entry:.2f}\n"
 
     ord_lines = ""
     for tag, v in pending:
         ticker = v.get("ticker", "?")
-        d      = "LONG 🔼" if v.get("direction") == "long" else "SHORT 🔽"
-        strat  = v.get("strategy", "?")
-        entry  = v.get("entry", 0)
+        d = "LONG 🔼" if v.get("direction") == "long" else "SHORT 🔽"
+        strat = v.get("strategy", "?")
+        entry = v.get("entry", 0)
         ord_lines += f"  • {_esc(strat)} {_esc(ticker)} {d} @ {entry:.2f}\n"
 
     broker_balance = rm_status.get("broker_balance")
-    broker_pnl     = rm_status.get("broker_day_pnl")
-    broker_fees    = rm_status.get("broker_day_fees")
-    broker_fills   = rm_status.get("broker_fills")
-    broker_open    = rm_status.get("broker_n_open")
+    broker_pnl = rm_status.get("broker_day_pnl")
+    broker_fees = rm_status.get("broker_day_fees")
+    broker_fills = rm_status.get("broker_fills")
+    broker_open = rm_status.get("broker_n_open")
 
     sign_d = "+" if day_pnl >= 0 else ""
     sign_c = "+" if cum >= 0 else ""
-    s = (
-        f"📈 <b>État portefeuille</b>\n"
-        f"<i>{_esc(now_ny)}</i>\n"
-        f"{'─'*24}\n"
-    )
+    s = f"📈 <b>État portefeuille</b>\n<i>{_esc(now_ny)}</i>\n{'─' * 24}\n"
     if active:
         s += f"<b>Positions ({len(active)}) :</b>\n{pos_lines}"
     else:
@@ -565,20 +546,23 @@ def fmt_status(placed_tags: Dict, rm_status: Dict, now_ny: str) -> str:
         s += f"<b>Ordres en attente ({len(pending)}) :</b>\n{ord_lines}"
     else:
         s += "Ordres : aucun\n"
-    s += f"{'─'*24}\n"
+    s += f"{'─' * 24}\n"
 
     # Données broker réelles (source de vérité)
     if broker_pnl is not None:
         b_sign = "+" if broker_pnl >= 0 else ""
-        bal_line = (f"  Solde compte : <b>{broker_balance:,.2f} $</b>\n"
-                    if broker_balance is not None else "")
+        bal_line = (
+            f"  Solde compte : <b>{broker_balance:,.2f} $</b>\n"
+            if broker_balance is not None
+            else ""
+        )
         s += (
             f"📊 <b>Broker (réel) :</b>\n"
             f"{bal_line}"
             f"  P&amp;L net jour : <b>{b_sign}{broker_pnl:.2f} $</b>"
             f"  <i>(frais : -{broker_fees:.2f} $)</i>\n"
             f"  Trades fermés : {broker_fills} | Positions : {broker_open}\n"
-            f"{'─'*24}\n"
+            f"{'─' * 24}\n"
         )
 
     s += (
@@ -600,6 +584,7 @@ def _is_today(iso_str: str, date_str: str) -> bool:
 # Client Telegram
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TelegramBot:
     """
     Client Telegram léger (synchrone, pas de dépendance python-telegram-bot).
@@ -608,23 +593,27 @@ class TelegramBot:
     et les loggent — le trading loop n'est jamais interrompu par Telegram.
     """
 
-    def __init__(self, token: str, chat_id: str,
-                 enabled: bool = True,
-                 level_trades:  bool = True,
-                 level_risk:    bool = True,
-                 level_system:  bool = True,
-                 level_report:  bool = True,
-                 level_commands:bool = True):
-        self.token          = token
-        self.chat_id        = str(chat_id)
-        self.enabled        = enabled and bool(token) and bool(chat_id)
-        self.level_trades   = level_trades
-        self.level_risk     = level_risk
-        self.level_system   = level_system
-        self.level_report   = level_report
+    def __init__(
+        self,
+        token: str,
+        chat_id: str,
+        enabled: bool = True,
+        level_trades: bool = True,
+        level_risk: bool = True,
+        level_system: bool = True,
+        level_report: bool = True,
+        level_commands: bool = True,
+    ):
+        self.token = token
+        self.chat_id = str(chat_id)
+        self.enabled = enabled and bool(token) and bool(chat_id)
+        self.level_trades = level_trades
+        self.level_risk = level_risk
+        self.level_system = level_system
+        self.level_report = level_report
         self.level_commands = level_commands
-        self._session       = requests.Session()
-        self._last_update_id: int = -1   # pour getUpdates polling
+        self._session = requests.Session()
+        self._last_update_id: int = -1  # pour getUpdates polling
         if self.enabled:
             _log.info("TelegramBot actif (chat_id=%s)", self.chat_id)
         else:
@@ -648,8 +637,8 @@ class TelegramBot:
             r = self._session.post(
                 self._url("sendMessage"),
                 json={
-                    "chat_id":    self.chat_id,
-                    "text":       text,
+                    "chat_id": self.chat_id,
+                    "text": text,
                     "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 },
@@ -664,18 +653,17 @@ class TelegramBot:
             _log.warning("Telegram sendMessage échoué : %s", exc)
             return False
 
-    def _get_updates(self) -> List[Dict]:
+    def _get_updates(self) -> list[dict]:
         """Poll getUpdates (non-bloquant, timeout=0). Retourne [] en cas d'erreur."""
         if not self.enabled or not self.level_commands:
             return []
         try:
             params = {
-                "offset":  self._last_update_id + 1,
-                "limit":   10,
+                "offset": self._last_update_id + 1,
+                "limit": 10,
                 "timeout": 0,
             }
-            r = self._session.get(self._url("getUpdates"),
-                                  params=params, timeout=5)
+            r = self._session.get(self._url("getUpdates"), params=params, timeout=5)
             data = r.json()
             if not data.get("ok"):
                 return []
@@ -691,22 +679,19 @@ class TelegramBot:
     # Niveau 1 — Alertes trades
     # ─────────────────────────────────────────────────────────────────────
 
-    def notify_signal(self, signal: Dict):
+    def notify_signal(self, signal: dict):
         if self.enabled and self.level_trades:
             self.send(fmt_signal(signal))
 
-    def notify_order_placed(self, tag: str, signal: Dict, order_id: int,
-                            dry_run: bool = False):
+    def notify_order_placed(self, tag: str, signal: dict, order_id: int, dry_run: bool = False):
         if self.enabled and self.level_trades:
             self.send(fmt_order_placed(tag, signal, order_id, dry_run))
 
-    def notify_fill(self, tag: str, info: Dict,
-                    fills_today: int, fills_max: int):
+    def notify_fill(self, tag: str, info: dict, fills_today: int, fills_max: int):
         if self.enabled and self.level_trades:
             self.send(fmt_fill(tag, info, fills_today, fills_max))
 
-    def notify_close(self, tag: str, info: Dict, pnl: float,
-                     session_pnl: float, cum_pnl: float):
+    def notify_close(self, tag: str, info: dict, pnl: float, session_pnl: float, cum_pnl: float):
         if self.enabled and self.level_trades:
             self.send(fmt_close(tag, info, pnl, session_pnl, cum_pnl))
 
@@ -722,8 +707,7 @@ class TelegramBot:
         if self.enabled and self.level_risk:
             self.send(fmt_risk_breach(reason))
 
-    def notify_daily_limit_warning(self, realized: float, limit: float,
-                                   fills_remaining: int):
+    def notify_daily_limit_warning(self, realized: float, limit: float, fills_remaining: int):
         """Envoyé quand on dépasse 80% de la limite journalière."""
         if self.enabled and self.level_risk:
             self.send(fmt_daily_limit_warning(realized, limit, fills_remaining))
@@ -732,8 +716,9 @@ class TelegramBot:
         if self.enabled and self.level_risk:
             self.send(fmt_consec_loss_pause(days))
 
-    def notify_day_damping_active(self, rdp: float, soft_cap: float,
-                                   hard_cap: float, day_progress: float):
+    def notify_day_damping_active(
+        self, rdp: float, soft_cap: float, hard_cap: float, day_progress: float
+    ):
         """Damping day_progress passe < 1.0 (1ère fois du jour)."""
         if self.enabled and self.level_risk:
             self.send(fmt_day_damping_active(rdp, soft_cap, hard_cap, day_progress))
@@ -756,8 +741,7 @@ class TelegramBot:
         if self.enabled and self.level_system:
             self.send(fmt_system_error(context, error))
 
-    def notify_session_start(self, date_str: str, tickers: List[str],
-                              rm_status: Dict):
+    def notify_session_start(self, date_str: str, tickers: list[str], rm_status: dict):
         if self.enabled and self.level_system:
             self.send(fmt_session_start(date_str, tickers, rm_status))
 
@@ -765,8 +749,7 @@ class TelegramBot:
     # Niveau 2 — Bilan de session
     # ─────────────────────────────────────────────────────────────────────
 
-    def send_session_report(self, date_str: str, placed_tags: Dict,
-                            rm_status: Dict):
+    def send_session_report(self, date_str: str, placed_tags: dict, rm_status: dict):
         if self.enabled and self.level_report:
             self.send(fmt_session_report(date_str, placed_tags, rm_status))
 
@@ -774,12 +757,16 @@ class TelegramBot:
     # Niveau 3 — Commandes entrantes (/status)
     # ─────────────────────────────────────────────────────────────────────
 
-    def check_commands(self, placed_tags: Dict, rm_status: Dict,
-                       now_ny: str,
-                       on_pause=None,
-                       on_resume=None,
-                       paused: bool = False,
-                       today_str: str = "") -> int:
+    def check_commands(
+        self,
+        placed_tags: dict,
+        rm_status: dict,
+        now_ny: str,
+        on_pause=None,
+        on_resume=None,
+        paused: bool = False,
+        today_str: str = "",
+    ) -> int:
         """
         Interroge getUpdates, traite les commandes reçues.
 
@@ -797,8 +784,8 @@ class TelegramBot:
         if not self.enabled or not self.level_commands:
             return 0
 
-        updates  = self._get_updates()
-        handled  = 0
+        updates = self._get_updates()
+        handled = 0
         for update in updates:
             msg = update.get("message") or update.get("edited_message")
             if not msg:
@@ -816,19 +803,23 @@ class TelegramBot:
             elif text.startswith("/risk"):
                 # Imports tardifs pour ne pas créer de cycle
                 from config import (
-                    USER_DAILY_LOSS_MAX,
                     TOPSTEP_DAILY_LOSS_MAX,
-                    TOPSTEP_TRAILING_DD,
                     TOPSTEP_PROFIT_TARGET,
+                    TOPSTEP_TRAILING_DD,
+                    USER_DAILY_LOSS_MAX,
                 )
-                self.send(fmt_risk(
-                    rm_status, now_ny,
-                    user_daily_loss_max    = float(USER_DAILY_LOSS_MAX),
-                    topstep_daily_loss_max = float(TOPSTEP_DAILY_LOSS_MAX),
-                    topstep_trailing_dd    = float(TOPSTEP_TRAILING_DD),
-                    topstep_profit_target  = float(TOPSTEP_PROFIT_TARGET),
-                    paused                 = paused,
-                ))
+
+                self.send(
+                    fmt_risk(
+                        rm_status,
+                        now_ny,
+                        user_daily_loss_max=float(USER_DAILY_LOSS_MAX),
+                        topstep_daily_loss_max=float(TOPSTEP_DAILY_LOSS_MAX),
+                        topstep_trailing_dd=float(TOPSTEP_TRAILING_DD),
+                        topstep_profit_target=float(TOPSTEP_PROFIT_TARGET),
+                        paused=paused,
+                    )
+                )
                 handled += 1
 
             elif text.startswith("/trades"):

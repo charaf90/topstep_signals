@@ -20,6 +20,7 @@ Méthode :
 Usage :
     python -m scripts.optimize_v5_1_no_mes1 --csv-dir ./data
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,10 +30,9 @@ import numpy as np
 
 np.random.seed(42)
 
-from core.data import load_csv, build_timeframes
+from core.data import build_timeframes, load_csv
 from core.optimizer import optimize
 from core.registry import load_strategy
-
 
 SELECTED_TICKERS = ["NQ1", "YM1"]
 
@@ -45,8 +45,10 @@ def main():
     parser.add_argument("--is-end", type=str, default="2025-09-30")
     parser.add_argument("--oos-start", type=str, default="2025-10-01")
     parser.add_argument(
-        "--output-dir", type=str, default="output/no_mes1",
-        help="Dossier séparé pour ne pas écraser les artefacts v5.1 actuels"
+        "--output-dir",
+        type=str,
+        default="output/no_mes1",
+        help="Dossier séparé pour ne pas écraser les artefacts v5.1 actuels",
     )
     args = parser.parse_args()
 
@@ -76,7 +78,8 @@ def main():
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     optimize(
-        module, data,
+        module,
+        data,
         is_end=args.is_end,
         oos_start=args.oos_start,
         robustness_report=True,

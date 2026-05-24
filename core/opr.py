@@ -42,28 +42,36 @@ Le module reste indépendant des modules `composite` (zones / scoring) afin
 que les deux stratégies cohabitent.
 """
 
-from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-import numpy as np
-
 from config import (
-    INSTRUMENTS, RISK_PER_TRADE_USD, OPR_ENABLED,
-    OPR_TIMEZONE, OPR_WINDOW_START, OPR_WINDOW_END, OPR_SESSION_END,
-    OPR_ATR_PERIOD, OPR_SL_ATR_MULT, OPR_TP_ATR_MULT, OPR_SL_MIN_POINTS,
+    INSTRUMENTS,
+    OPR_ATR_PERIOD,
+    OPR_ENABLED,
     OPR_MAX_TRADES_PER_DAY,
-    OPR_MIN_EXCURSION_ATR, OPR_MAX_VOL_ZSCORE, OPR_VOL_ZSCORE_WINDOW,
+    OPR_MAX_VOL_ZSCORE,
+    OPR_MIN_EXCURSION_ATR,
+    OPR_SESSION_END,
+    OPR_SL_ATR_MULT,
+    OPR_SL_MIN_POINTS,
+    OPR_TIMEZONE,
+    OPR_TP_ATR_MULT,
+    OPR_VOL_ZSCORE_WINDOW,
+    OPR_WINDOW_END,
+    OPR_WINDOW_START,
+    RISK_PER_TRADE_USD,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────
 # Helpers timezone
 # ─────────────────────────────────────────────────────────────────────────
 
-def _ny_session_view(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
-                     tz: ZoneInfo) -> Optional[pd.DataFrame]:
+
+def _ny_session_view(
+    df_15m: pd.DataFrame, day_ny: pd.Timestamp, tz: ZoneInfo
+) -> pd.DataFrame | None:
     """
     Renvoie une vue triée du DataFrame 15min couvrant la session US en
     heure NY pour `day_ny` (un Timestamp localisé NY à minuit) :
@@ -85,16 +93,14 @@ def _ny_session_view(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
 
     h_start, m_start = OPR_WINDOW_START
     h_end, m_end = OPR_SESSION_END
-    session_start = day_ny.replace(hour=h_start, minute=m_start,
-                                   second=0, microsecond=0)
-    session_end = day_ny.replace(hour=h_end, minute=m_end,
-                                 second=0, microsecond=0)
+    session_start = day_ny.replace(hour=h_start, minute=m_start, second=0, microsecond=0)
+    session_end = day_ny.replace(hour=h_end, minute=m_end, second=0, microsecond=0)
 
     mask = (df_ny.index >= session_start) & (df_ny.index <= session_end)
     return df_ny.loc[mask]
 
 
-def _opr_bar(df_session_ny: pd.DataFrame) -> Optional[pd.Series]:
+def _opr_bar(df_session_ny: pd.DataFrame) -> pd.Series | None:
     """
     Identifie la bougie OPR (ouverture cash NY) **par pic de volume** dans
     la fenêtre `[OPR_WINDOW_START, OPR_WINDOW_END[` NY (par défaut
@@ -124,8 +130,7 @@ def _opr_bar(df_session_ny: pd.DataFrame) -> Optional[pd.Series]:
     win_start = day_anchor.replace(hour=h_start, minute=m_start)
     win_end = day_anchor.replace(hour=h_end, minute=m_end)
 
-    cand = df_session_ny[(df_session_ny.index >= win_start)
-                         & (df_session_ny.index < win_end)]
+    cand = df_session_ny[(df_session_ny.index >= win_start) & (df_session_ny.index < win_end)]
     if cand.empty or float(cand["volume"].sum()) <= 0:
         return None
 
@@ -137,8 +142,8 @@ def _opr_bar(df_session_ny: pd.DataFrame) -> Optional[pd.Series]:
 # ATR journalier — référence pour SL/TP
 # ─────────────────────────────────────────────────────────────────────────
 
-def _compute_atr_daily(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
-                       period: int) -> Optional[float]:
+
+def _compute_atr_daily(df_15m: pd.DataFrame, day_ny: pd.Timestamp, period: int) -> float | None:
     """
     ATR journalier (en points) sur les `period` derniers jours achevés
     strictement avant `day_ny` (Timestamp NY-aware).
@@ -164,20 +169,32 @@ def _compute_atr_daily(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
     if len(before) < period * 80:  # ~80 bougies 15m / jour de marché
         return None
 
-    daily = before.resample("D").agg({
-        "open": "first", "high": "max", "low": "min", "close": "last",
-    }).dropna()
+    daily = (
+        before.resample("D")
+        .agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+            }
+        )
+        .dropna()
+    )
     if len(daily) < period + 1:
         return None
 
     high = daily["high"]
     low = daily["low"]
     prev_close = daily["close"].shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     atr = tr.rolling(period).mean().dropna()
     if atr.empty:
         return None
@@ -189,6 +206,7 @@ def _compute_atr_daily(df_15m: pd.DataFrame, day_ny: pd.Timestamp,
 # Trade builder
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def _make_signal(
     ticker: str,
     direction: str,
@@ -199,7 +217,7 @@ def _make_signal(
     sl_pts: float,
     tp_pts: float,
     atr_daily: float,
-) -> Optional[Dict]:
+) -> dict | None:
     """
     Construit le dict signal (entry/SL/TP/sizing) à partir d'un trigger
     armé. SL/TP sont calculés en amont par run_opr_day depuis l'ATR
@@ -207,7 +225,7 @@ def _make_signal(
     """
     inst = INSTRUMENTS[ticker]
     tick = inst["tick_size"]
-    dpp  = inst["dollar_per_point"]
+    dpp = inst["dollar_per_point"]
 
     def _tick(p: float) -> float:
         return round(round(p / tick) * tick, 10)
@@ -273,8 +291,8 @@ def _make_signal(
 # Moteur de session (1 jour)
 # ─────────────────────────────────────────────────────────────────────────
 
-def _check_trigger(bar: pd.Series, opr_high: float, opr_low: float
-                   ) -> Optional[str]:
+
+def _check_trigger(bar: pd.Series, opr_high: float, opr_low: float) -> str | None:
     """Renvoie 'long', 'short' ou None pour la bougie courante."""
     o = float(bar["open"])
     c = float(bar["close"])
@@ -308,7 +326,7 @@ def _passes_trigger_filter(
 
     `bar` et `bars` sont en heure NY (tz-aware) — cohérent avec df_session.
     """
-    ts = bar.name   # timestamp tz-aware NY de la bougie trigger
+    ts = bar.name  # timestamp tz-aware NY de la bougie trigger
 
     # ── Filtre 1 : excursion minimale vers l'OPR ──────────────────────────
     min_excursion = OPR_MIN_EXCURSION_ATR.get(ticker)
@@ -347,9 +365,9 @@ def _bar_hits(direction: str, level: float, bar: pd.Series) -> bool:
     return float(bar["low"]) <= level <= float(bar["high"])
 
 
-def run_opr_day(df_15m: pd.DataFrame, ticker: str,
-                day_ny: pd.Timestamp) -> Tuple[List[Dict], List[Dict],
-                                               Optional[Dict]]:
+def run_opr_day(
+    df_15m: pd.DataFrame, ticker: str, day_ny: pd.Timestamp
+) -> tuple[list[dict], list[dict], dict | None]:
     """
     Joue la session OPR d'un jour donné suivant le PineScript.
 
@@ -416,14 +434,13 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
         return [], [], opr_zone
 
     h_close, m_close = OPR_SESSION_END
-    session_end_t = day_ny.replace(hour=h_close, minute=m_close,
-                                   second=0, microsecond=0)
+    session_end_t = day_ny.replace(hour=h_close, minute=m_close, second=0, microsecond=0)
 
     # État de la session
-    pending: Optional[Dict] = None       # ordre limite armé (en attente de fill)
-    position: Optional[Dict] = None      # position ouverte (entry/SL/TP)
-    signals: List[Dict] = []
-    trades: List[Dict] = []
+    pending: dict | None = None  # ordre limite armé (en attente de fill)
+    position: dict | None = None  # position ouverte (entry/SL/TP)
+    signals: list[dict] = []
+    trades: list[dict] = []
     n_fills = 0
 
     bars = df_session  # bornée [WINDOW_START NY, SESSION_END NY]
@@ -446,10 +463,16 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
             tp = position["tp"]
             n_ct = position["n_ct"]
 
-            hit_sl = (bar["low"] <= sl <= bar["high"]) if direction == "long" \
+            hit_sl = (
+                (bar["low"] <= sl <= bar["high"])
+                if direction == "long"
                 else (bar["low"] <= sl <= bar["high"])
-            hit_tp = (bar["low"] <= tp <= bar["high"]) if direction == "long" \
+            )
+            hit_tp = (
+                (bar["low"] <= tp <= bar["high"])
+                if direction == "long"
                 else (bar["low"] <= tp <= bar["high"])
+            )
 
             # Précis : pour un long, SL = entry - X (en bas), TP = entry + Y
             # (en haut). hit_sl ⇔ low ≤ sl ; hit_tp ⇔ high ≥ tp.
@@ -482,8 +505,7 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
                 exit_price = float(bar["close"])
 
             if result is not None:
-                pnl_pts = (exit_price - entry) if direction == "long" \
-                    else (entry - exit_price)
+                pnl_pts = (exit_price - entry) if direction == "long" else (entry - exit_price)
                 pnl = n_ct * pnl_pts * dpp
                 trade = {
                     "result": result,
@@ -492,8 +514,7 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
                     "fill_time": str(position["fill_time"]),
                     "exit_time": str(ts),
                 }
-                trades.append({"_signal_idx": position["signal_idx"],
-                               **trade})
+                trades.append({"_signal_idx": position["signal_idx"], **trade})
                 position = None  # libère le slot pour un nouveau trigger
                 # On continue l'itération : pas de nouvel ordre sur la
                 # bougie d'exit (cohérent PineScript : la décision suivante
@@ -555,18 +576,22 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
                         result, exit_price = "TP", tp
 
                     if result is not None:
-                        pnl_pts = (exit_price - position["entry"]) \
-                            if direction == "long" \
+                        pnl_pts = (
+                            (exit_price - position["entry"])
+                            if direction == "long"
                             else (position["entry"] - exit_price)
+                        )
                         pnl = position["n_ct"] * pnl_pts * dpp
-                        trades.append({
-                            "_signal_idx": position["signal_idx"],
-                            "result": result,
-                            "pnl": float(pnl),
-                            "exit": float(exit_price),
-                            "fill_time": str(position["fill_time"]),
-                            "exit_time": str(ts),
-                        })
+                        trades.append(
+                            {
+                                "_signal_idx": position["signal_idx"],
+                                "result": result,
+                                "pnl": float(pnl),
+                                "exit": float(exit_price),
+                                "fill_time": str(position["fill_time"]),
+                                "exit_time": str(ts),
+                            }
+                        )
                         position = None
                     continue  # fill traité, on passe à la bougie suivante
 
@@ -586,9 +611,14 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
             continue
 
         if not _passes_trigger_filter(
-            bar=bar, direction=trig, bars=bars,
-            opr_ts_ny=opr_ts_ny, opr_high=opr_high, opr_low=opr_low,
-            atr_daily=atr_daily, ticker=ticker,
+            bar=bar,
+            direction=trig,
+            bars=bars,
+            opr_ts_ny=opr_ts_ny,
+            opr_high=opr_high,
+            opr_low=opr_low,
+            atr_daily=atr_daily,
+            ticker=ticker,
         ):
             continue
 
@@ -624,38 +654,51 @@ def run_opr_day(df_15m: pd.DataFrame, ticker: str,
         last_bar = bars.iloc[-1]
         exit_price = float(last_bar["close"])
         direction = position["direction"]
-        pnl_pts = (exit_price - position["entry"]) if direction == "long" \
+        pnl_pts = (
+            (exit_price - position["entry"])
+            if direction == "long"
             else (position["entry"] - exit_price)
+        )
         pnl = position["n_ct"] * pnl_pts * dpp
-        trades.append({
-            "_signal_idx": position["signal_idx"],
-            "result": "TE",
-            "pnl": float(pnl),
-            "exit": float(exit_price),
-            "fill_time": str(position["fill_time"]),
-            "exit_time": str(timestamps[-1]),
-        })
+        trades.append(
+            {
+                "_signal_idx": position["signal_idx"],
+                "result": "TE",
+                "pnl": float(pnl),
+                "exit": float(exit_price),
+                "fill_time": str(position["fill_time"]),
+                "exit_time": str(timestamps[-1]),
+            }
+        )
         position = None
 
     if pending is not None:
-        trades.append({
-            "_signal_idx": pending["signal_idx"],
-            "result": "NOT_FILLED",
-            "pnl": 0.0,
-            "exit": None,
-            "fill_time": None,
-            "exit_time": None,
-        })
+        trades.append(
+            {
+                "_signal_idx": pending["signal_idx"],
+                "result": "NOT_FILLED",
+                "pnl": 0.0,
+                "exit": None,
+                "fill_time": None,
+                "exit_time": None,
+            }
+        )
         pending = None
 
     # On garantit qu'à chaque signal correspond un trade (1:1 par index).
     indexed = {t["_signal_idx"]: t for t in trades}
-    out_trades: List[Dict] = []
+    out_trades: list[dict] = []
     for i in range(len(signals)):
-        t = indexed.get(i, {
-            "result": "NOT_FILLED", "pnl": 0.0,
-            "exit": None, "fill_time": None, "exit_time": None,
-        })
+        t = indexed.get(
+            i,
+            {
+                "result": "NOT_FILLED",
+                "pnl": 0.0,
+                "exit": None,
+                "fill_time": None,
+                "exit_time": None,
+            },
+        )
         # Nettoyage : on retire la clé interne
         t = {k: v for k, v in t.items() if k != "_signal_idx"}
         out_trades.append(t)

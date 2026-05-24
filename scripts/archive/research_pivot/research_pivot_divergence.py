@@ -10,6 +10,7 @@ Pipeline : walk-forward 4 splits, comparaison baseline vs enrichi.
 
 Usage : python scripts/research_pivot_divergence.py --ticker MCL1
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,9 +18,9 @@ import sys
 import warnings
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -36,6 +37,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import research_pivot_nq1 as base  # noqa: E402
+
 from core.data import load_csv  # noqa: E402
 
 OUT_ROOT = ROOT / "output" / "pivot_research_div"
@@ -49,16 +51,37 @@ OOS_HORIZON_DAYS = 60
 ORDER = 20
 
 BASELINE_FEATURES = [
-    "ema9_slope", "ema21_slope", "ema50_slope",
-    "roc_5", "roc_20", "roc_50", "adx_14",
-    "atr_14", "atr_ratio_short_long", "bb_width",
-    "dist_close_ema21_atr", "range_atr_ratio",
-    "body_range_ratio", "upper_wick_ratio", "lower_wick_ratio", "vol_rel",
-    "dist_to_max20_atr", "dist_to_min20_atr",
-    "past_pivot_density_2atr", "past_pivot_density_1atr",
-    "ret_lag_1", "ret_lag_2", "ret_lag_3", "ret_lag_5", "ret_lag_10",
+    "ema9_slope",
+    "ema21_slope",
+    "ema50_slope",
+    "roc_5",
+    "roc_20",
+    "roc_50",
+    "adx_14",
+    "atr_14",
+    "atr_ratio_short_long",
+    "bb_width",
+    "dist_close_ema21_atr",
+    "range_atr_ratio",
+    "body_range_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+    "vol_rel",
+    "dist_to_max20_atr",
+    "dist_to_min20_atr",
+    "past_pivot_density_2atr",
+    "past_pivot_density_1atr",
+    "ret_lag_1",
+    "ret_lag_2",
+    "ret_lag_3",
+    "ret_lag_5",
+    "ret_lag_10",
     "up_bars_last_10",
-    "hour_ny", "minute_ny", "dow", "bars_since_open", "is_macro_day",
+    "hour_ny",
+    "minute_ny",
+    "dow",
+    "bars_since_open",
+    "is_macro_day",
 ]
 
 
@@ -74,14 +97,14 @@ def rolling_slope(s: pd.Series, w: int) -> pd.Series:
     x = np.arange(w, dtype=np.float64)
     x_mean = x.mean()
     x_centered = x - x_mean
-    denom = (x_centered ** 2).sum()
+    denom = (x_centered**2).sum()
     # convolution causale : on inverse les poids pour matcher le "dernier point au temps t"
     weights = x_centered / denom
     y = s.to_numpy(dtype=np.float64)
     # mode 'valid' = sortie de longueur N - w + 1
     conv = np.convolve(y, weights[::-1], mode="valid")
     out = np.full(len(s), np.nan)
-    out[w - 1:] = conv
+    out[w - 1 :] = conv
     return pd.Series(out, index=s.index)
 
 
@@ -187,16 +210,23 @@ def score_proba(y_true, p, base_rate):
 
 def train_set(X_is, y_is, X_oos, y_oos, base_rate):
     rf = RandomForestClassifier(
-        n_estimators=300, max_depth=8, class_weight="balanced",
-        random_state=42, n_jobs=-1, min_samples_leaf=20,
+        n_estimators=300,
+        max_depth=8,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        min_samples_leaf=20,
     )
     rf.fit(X_is, y_is)
     p_rf = rf.predict_proba(X_oos)[:, 1]
     sc_rf = score_proba(y_oos, p_rf, base_rate)
 
     hgb = HistGradientBoostingClassifier(
-        max_iter=300, learning_rate=0.05, max_depth=6,
-        class_weight="balanced", random_state=42,
+        max_iter=300,
+        learning_rate=0.05,
+        max_depth=6,
+        class_weight="balanced",
+        random_state=42,
     )
     hgb.fit(X_is, y_is)
     p_hgb = hgb.predict_proba(X_oos)[:, 1]
@@ -204,7 +234,8 @@ def train_set(X_is, y_is, X_oos, y_oos, base_rate):
     # Best of two
     best = "rf" if sc_rf["pr_auc"] >= sc_hgb["pr_auc"] else "hgb"
     return {
-        "rf": sc_rf, "hgb": sc_hgb,
+        "rf": sc_rf,
+        "hgb": sc_hgb,
         "best": best,
         "best_score": sc_rf if best == "rf" else sc_hgb,
         "best_model": rf if best == "rf" else hgb,
@@ -228,8 +259,7 @@ def wf_run(df, feature_cols, label_col="is_pivot_any"):
         y_oos = df_oos[label_col].to_numpy(dtype=np.int32)
         base_rate = float(y_oos.mean())
         res = train_set(X_is, y_is, X_oos, y_oos, base_rate)
-        per_split.append({"split": i, "n_oos": len(df_oos),
-                          "base_rate": base_rate, **res})
+        per_split.append({"split": i, "n_oos": len(df_oos), "base_rate": base_rate, **res})
         last_model = res["best_model"]
         last_X_oos = X_oos
         last_y_oos = y_oos
@@ -284,48 +314,68 @@ def main():
     print(f"  • {len(df_clean):,} barres après dropna")
 
     # Run baseline
-    print("\n=== BASELINE ({} features) ===".format(len(BASELINE_FEATURES)))
+    print(f"\n=== BASELINE ({len(BASELINE_FEATURES)} features) ===")
     sum_base = wf_run(df_clean, BASELINE_FEATURES)
     for mk in ("rf", "hgb"):
-        print(f"  • {mk}  PR-AUC={sum_base[f'{mk}_pr_auc_mean']:.3f}±{sum_base[f'{mk}_pr_auc_std']:.3f}  "
-              f"P@R10%={sum_base[f'{mk}_p@r10_mean']:.2%}±{sum_base[f'{mk}_p@r10_std']:.2%}")
+        print(
+            f"  • {mk}  PR-AUC={sum_base[f'{mk}_pr_auc_mean']:.3f}±{sum_base[f'{mk}_pr_auc_std']:.3f}  "
+            f"P@R10%={sum_base[f'{mk}_p@r10_mean']:.2%}±{sum_base[f'{mk}_p@r10_std']:.2%}"
+        )
 
-    print("\n=== ENRICHI ({} features) ===".format(len(enriched_features)))
+    print(f"\n=== ENRICHI ({len(enriched_features)} features) ===")
     sum_enr = wf_run(df_clean, enriched_features)
     for mk in ("rf", "hgb"):
-        print(f"  • {mk}  PR-AUC={sum_enr[f'{mk}_pr_auc_mean']:.3f}±{sum_enr[f'{mk}_pr_auc_std']:.3f}  "
-              f"P@R10%={sum_enr[f'{mk}_p@r10_mean']:.2%}±{sum_enr[f'{mk}_p@r10_std']:.2%}")
+        print(
+            f"  • {mk}  PR-AUC={sum_enr[f'{mk}_pr_auc_mean']:.3f}±{sum_enr[f'{mk}_pr_auc_std']:.3f}  "
+            f"P@R10%={sum_enr[f'{mk}_p@r10_mean']:.2%}±{sum_enr[f'{mk}_p@r10_std']:.2%}"
+        )
 
     # Permutation importance des nouvelles features (enrichi, dernier split)
     print("\n▸ Permutation importance dernier split (enrichi)…")
     pi = permutation_importance(
-        sum_enr["last_model"], sum_enr["last_X_oos"], sum_enr["last_y_oos"],
-        n_repeats=5, random_state=42, n_jobs=-1, scoring="average_precision",
+        sum_enr["last_model"],
+        sum_enr["last_X_oos"],
+        sum_enr["last_y_oos"],
+        n_repeats=5,
+        random_state=42,
+        n_jobs=-1,
+        scoring="average_precision",
     )
-    imp = pd.DataFrame({"feature": enriched_features, "importance": pi.importances_mean,
-                        "is_new": [f in new_cols for f in enriched_features]})
+    imp = pd.DataFrame(
+        {
+            "feature": enriched_features,
+            "importance": pi.importances_mean,
+            "is_new": [f in new_cols for f in enriched_features],
+        }
+    )
     imp = imp.sort_values("importance", ascending=False)
 
     # ────── Rapport ──────
     lines = [f"# Divergences prix/oscillateurs — {ticker} order={ORDER}\n"]
     w = lines.append
-    w(f"- Barres totales : **{len(df_clean):,}**  | Splits WF utilisés : **{sum_enr['n_splits']}/{len(SPLITS)}**")
+    w(
+        f"- Barres totales : **{len(df_clean):,}**  | Splits WF utilisés : **{sum_enr['n_splits']}/{len(SPLITS)}**"
+    )
     w(f"- Base rate OOS moyen : **{np.mean([s['base_rate'] for s in sum_enr['per_split']]):.2%}**")
-    w(f"- Nouvelles features ajoutées : **{len(new_cols)}** "
-      f"(pentes prix×3 + pentes osc×9 + divergences×9 + niveaux osc×3)\n")
+    w(
+        f"- Nouvelles features ajoutées : **{len(new_cols)}** "
+        f"(pentes prix×3 + pentes osc×9 + divergences×9 + niveaux osc×3)\n"
+    )
 
     w("## Baseline vs Enrichi (best model par split — moyenne ± std sur 4 splits)\n")
     rows = []
     for mk, lbl in (("rf", "RF"), ("hgb", "HGB")):
-        rows.append({
-            "modèle": lbl,
-            "PR-AUC base": f"{sum_base[f'{mk}_pr_auc_mean']:.3f} ± {sum_base[f'{mk}_pr_auc_std']:.3f}",
-            "PR-AUC enr.": f"{sum_enr[f'{mk}_pr_auc_mean']:.3f} ± {sum_enr[f'{mk}_pr_auc_std']:.3f}",
-            "Δ PR-AUC": f"{(sum_enr[f'{mk}_pr_auc_mean'] - sum_base[f'{mk}_pr_auc_mean']):+.3f}",
-            "P@R10 base": f"{sum_base[f'{mk}_p@r10_mean']:.2%}",
-            "P@R10 enr.": f"{sum_enr[f'{mk}_p@r10_mean']:.2%}",
-            "Δ P@R10": f"{(sum_enr[f'{mk}_p@r10_mean'] - sum_base[f'{mk}_p@r10_mean']):+.2%}",
-        })
+        rows.append(
+            {
+                "modèle": lbl,
+                "PR-AUC base": f"{sum_base[f'{mk}_pr_auc_mean']:.3f} ± {sum_base[f'{mk}_pr_auc_std']:.3f}",
+                "PR-AUC enr.": f"{sum_enr[f'{mk}_pr_auc_mean']:.3f} ± {sum_enr[f'{mk}_pr_auc_std']:.3f}",
+                "Δ PR-AUC": f"{(sum_enr[f'{mk}_pr_auc_mean'] - sum_base[f'{mk}_pr_auc_mean']):+.3f}",
+                "P@R10 base": f"{sum_base[f'{mk}_p@r10_mean']:.2%}",
+                "P@R10 enr.": f"{sum_enr[f'{mk}_p@r10_mean']:.2%}",
+                "Δ P@R10": f"{(sum_enr[f'{mk}_p@r10_mean'] - sum_base[f'{mk}_p@r10_mean']):+.2%}",
+            }
+        )
     w(pd.DataFrame(rows).to_markdown(index=False))
 
     w("\n## Top 20 features (enrichi, permutation importance dernier split)\n")

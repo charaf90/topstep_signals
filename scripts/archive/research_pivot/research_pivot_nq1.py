@@ -16,6 +16,7 @@ Output : output/pivot_research/{dataset.csv, label_diagnostics.md,
 
 Aucune modification de core/, broker/, strategies/, config.py.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,9 +25,9 @@ import warnings
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -47,8 +48,8 @@ np.random.seed(42)
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.data import load_csv  # noqa: E402
 from config import MACRO_EVENT_DATES  # noqa: E402
+from core.data import load_csv  # noqa: E402
 
 OUT_ROOT = ROOT / "output" / "pivot_research"
 
@@ -117,14 +118,21 @@ def _adx(df: pd.DataFrame, n: int) -> pd.Series:
     ).max(axis=1)
     atr_n = tr.ewm(alpha=1 / n, adjust=False).mean()
     plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1 / n, adjust=False).mean() / atr_n
-    minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1 / n, adjust=False).mean() / atr_n
+    minus_di = (
+        100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1 / n, adjust=False).mean() / atr_n
+    )
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     return dx.ewm(alpha=1 / n, adjust=False).mean()
 
 
-def _past_pivot_density(close: np.ndarray, atr: np.ndarray, lookback: int = 200,
-                        recent_gap: int = 10, band_atr: float = 2.0,
-                        order: int = 5) -> np.ndarray:
+def _past_pivot_density(
+    close: np.ndarray,
+    atr: np.ndarray,
+    lookback: int = 200,
+    recent_gap: int = 10,
+    band_atr: float = 2.0,
+    order: int = 5,
+) -> np.ndarray:
     """Pour chaque t, compte les pivots détectés strictement avant
     (t - recent_gap), à une distance ≤ band_atr * ATR(t) de Close(t).
 
@@ -276,14 +284,18 @@ def write_label_diagnostics(df: pd.DataFrame, atr_col: str = "atr_14") -> dict:
         w("## Distance entre pivots successifs (minutes)\n")
         w(f"- Médiane : **{int(np.median(gaps))} min** ({int(np.median(gaps) / 5)} barres M5)")
         w(f"- Moyenne : **{int(np.mean(gaps))} min**")
-        w(f"- P10 / P90 : **{int(np.percentile(gaps, 10))} / {int(np.percentile(gaps, 90))} min**\n")
+        w(
+            f"- P10 / P90 : **{int(np.percentile(gaps, 10))} / {int(np.percentile(gaps, 90))} min**\n"
+        )
 
     # Densité dans une zone
     if "past_pivot_density_2atr" in df.columns:
         d = df["past_pivot_density_2atr"].replace([np.inf, -np.inf], np.nan).dropna()
         w("## Densité de pivots passés dans ±2·ATR autour de Close\n")
         w(f"- Médiane : **{d.median():.1f}**")
-        w(f"- P75 / P90 / Max : **{d.quantile(0.75):.0f} / {d.quantile(0.9):.0f} / {d.max():.0f}**\n")
+        w(
+            f"- P75 / P90 / Max : **{d.quantile(0.75):.0f} / {d.quantile(0.9):.0f} / {d.max():.0f}**\n"
+        )
 
         # Base rate conditionnel à la densité
         df_d = df.copy()
@@ -302,8 +314,12 @@ def write_label_diagnostics(df: pd.DataFrame, atr_col: str = "atr_14") -> dict:
 # ────────────────────────────────────────────────────────────────────────────
 # 4. Leak check
 # ────────────────────────────────────────────────────────────────────────────
-def leak_check(df: pd.DataFrame, feature_cols: list[str], label_col: str = "is_pivot_any",
-               threshold: float = 0.5) -> list[tuple[str, float]]:
+def leak_check(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    label_col: str = "is_pivot_any",
+    threshold: float = 0.5,
+) -> list[tuple[str, float]]:
     """Liste les features dont |Pearson| > threshold avec le label. Si non
     vide → leak suspect, à investiguer.
     """
@@ -345,8 +361,12 @@ def train_and_eval(X_is, y_is, X_oos, y_oos, feature_names, base_rate_oos):
 
     # Random Forest
     rf = RandomForestClassifier(
-        n_estimators=500, max_depth=8, class_weight="balanced",
-        random_state=42, n_jobs=-1, min_samples_leaf=20,
+        n_estimators=500,
+        max_depth=8,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        min_samples_leaf=20,
     )
     rf.fit(X_is, y_is)
     p_rf = rf.predict_proba(X_oos)[:, 1]
@@ -354,8 +374,11 @@ def train_and_eval(X_is, y_is, X_oos, y_oos, feature_names, base_rate_oos):
 
     # HistGradientBoosting
     hgb = HistGradientBoostingClassifier(
-        max_iter=300, learning_rate=0.05, max_depth=6,
-        class_weight="balanced", random_state=42,
+        max_iter=300,
+        learning_rate=0.05,
+        max_depth=6,
+        class_weight="balanced",
+        random_state=42,
     )
     hgb.fit(X_is, y_is)
     p_hgb = hgb.predict_proba(X_oos)[:, 1]
@@ -383,8 +406,9 @@ def plot_pr_curves(y_oos, probas: dict, base_rate, path: Path):
         prec, rec, _ = precision_recall_curve(y_oos, p)
         ap = average_precision_score(y_oos, p)
         ax.plot(rec, prec, label=f"{name} (PR-AUC={ap:.3f})", linewidth=1.5)
-    ax.axhline(base_rate, color="gray", linestyle="--", alpha=0.6,
-               label=f"base rate OOS ({base_rate:.2%})")
+    ax.axhline(
+        base_rate, color="gray", linestyle="--", alpha=0.6, label=f"base rate OOS ({base_rate:.2%})"
+    )
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
     ax.set_title(f"Courbes Précision-Recall OOS — {TICKER} M5 pivots (order={PIVOT_ORDER})")
@@ -400,7 +424,12 @@ def plot_pr_curves(y_oos, probas: dict, base_rate, path: Path):
 def plot_feature_importance(model, X_oos, y_oos, feature_names, path: Path, top_n: int = 15):
     print("  • Permutation importance (peut prendre 1-2 min)…")
     pi = permutation_importance(
-        model, X_oos, y_oos, n_repeats=5, random_state=42, n_jobs=-1,
+        model,
+        X_oos,
+        y_oos,
+        n_repeats=5,
+        random_state=42,
+        n_jobs=-1,
         scoring="average_precision",
     )
     imp = pd.DataFrame({"feature": feature_names, "importance": pi.importances_mean})
@@ -419,8 +448,9 @@ def plot_feature_importance(model, X_oos, y_oos, feature_names, path: Path, top_
 # ────────────────────────────────────────────────────────────────────────────
 # 7. Rapport final
 # ────────────────────────────────────────────────────────────────────────────
-def write_report(stats_label, results, imp_df, leak_suspects, n_is, n_oos,
-                 is_start, is_end, oos_start, oos_end):
+def write_report(
+    stats_label, results, imp_df, leak_suspects, n_is, n_oos, is_start, is_end, oos_start, oos_end
+):
     lines = []
     w = lines.append
     base_rate = stats_label["base_rate"]
@@ -447,13 +477,15 @@ def write_report(stats_label, results, imp_df, leak_suspects, n_is, n_oos,
     w("## 3. Performance OOS des modèles\n")
     rows = []
     for name, sc in results.items():
-        rows.append({
-            "modèle": name,
-            "PR-AUC": f"{sc['pr_auc']:.3f}",
-            "prec@recall=5%": f"{sc['prec_at_recall_5']:.2%}",
-            "prec@recall=10%": f"{sc['prec_at_recall_10']:.2%}",
-            "prec@recall=20%": f"{sc['prec_at_recall_20']:.2%}",
-        })
+        rows.append(
+            {
+                "modèle": name,
+                "PR-AUC": f"{sc['pr_auc']:.3f}",
+                "prec@recall=5%": f"{sc['prec_at_recall_5']:.2%}",
+                "prec@recall=10%": f"{sc['prec_at_recall_10']:.2%}",
+                "prec@recall=20%": f"{sc['prec_at_recall_20']:.2%}",
+            }
+        )
     w(pd.DataFrame(rows).to_markdown(index=False))
     w(f"\nBase rate OOS de référence : **{base_rate:.2%}**")
     w("- Lift = précision / base_rate. Lift > 1 = mieux que le hasard.\n")
@@ -473,39 +505,55 @@ def write_report(stats_label, results, imp_df, leak_suspects, n_is, n_oos,
     best_prec_r10 = best["prec_at_recall_10"]
     lift_r10 = best_prec_r10 / base_rate if base_rate > 0 else 0
     w("## 5. Verdict\n")
-    w(f"Précision @ recall=10 % du meilleur modèle : **{best_prec_r10:.2%}** "
-      f"(lift = ×{lift_r10:.2f}).\n")
+    w(
+        f"Précision @ recall=10 % du meilleur modèle : **{best_prec_r10:.2%}** "
+        f"(lift = ×{lift_r10:.2f}).\n"
+    )
     if best_prec_r10 > 0.50:
         verdict = "🟢 **PROMETTEUR**"
-        explication = ("Précision > 50 % à recall 10 % — concept solide. "
-                       "Étape suivante : formaliser un label causal (ex: 'pivot "
-                       "confirmé à t' prédit à t+5), puis lancer `@new-strategy` ou "
-                       "`@quant MODE: discover` pour transformer en signal trading.")
+        explication = (
+            "Précision > 50 % à recall 10 % — concept solide. "
+            "Étape suivante : formaliser un label causal (ex: 'pivot "
+            "confirmé à t' prédit à t+5), puis lancer `@new-strategy` ou "
+            "`@quant MODE: discover` pour transformer en signal trading."
+        )
     elif best_prec_r10 > 0.30:
         verdict = "🟡 **INTÉRESSANT**"
-        explication = ("Précision 30-50 % à recall 10 % — features ont du signal. "
-                       "Étape suivante : présenter le rapport à `@quant MODE: discover` "
-                       "pour test comme filtre sur OPR/Fib.")
+        explication = (
+            "Précision 30-50 % à recall 10 % — features ont du signal. "
+            "Étape suivante : présenter le rapport à `@quant MODE: discover` "
+            "pour test comme filtre sur OPR/Fib."
+        )
     elif best_prec_r10 > 1.5 * base_rate:
         verdict = "🟠 **LIMITE**"
-        explication = ("Précision modeste mais lift > 1.5×. Insuffisant pour une "
-                       "stratégie pure ; envisager comme feature parmi d'autres "
-                       "dans un modèle plus large.")
+        explication = (
+            "Précision modeste mais lift > 1.5×. Insuffisant pour une "
+            "stratégie pure ; envisager comme feature parmi d'autres "
+            "dans un modèle plus large."
+        )
     else:
         verdict = "🔴 **INUTILE**"
-        explication = ("Précision ≤ 1.5× base rate. Le concept de pivot "
-                       "argrelextrema sur Close M5 NQ1 n'est pas prédictible avec "
-                       "ces features. Pivots ressemblent à du bruit conditionnel.")
+        explication = (
+            "Précision ≤ 1.5× base rate. Le concept de pivot "
+            "argrelextrema sur Close M5 NQ1 n'est pas prédictible avec "
+            "ces features. Pivots ressemblent à du bruit conditionnel."
+        )
     w(f"### {verdict}\n")
     w(explication + "\n")
 
     w("## 6. Caveats\n")
-    w("- Label non-causal : un signal posé à t ne peut être tradé qu'à t+6 (réalité physique). "
-      "Métriques affichées surévaluent légèrement la tradabilité.")
-    w(f"- `past_pivot_density_*` utilise un cutoff t-10 et un lookback=200 — strictement "
-      "causal mais à valider visuellement si le concept est poussé en stratégie.")
-    w("- Une seule fenêtre OOS (~3 mois). Walk-forward multi-fenêtre recommandé avant tout commit "
-      "vers une stratégie.")
+    w(
+        "- Label non-causal : un signal posé à t ne peut être tradé qu'à t+6 (réalité physique). "
+        "Métriques affichées surévaluent légèrement la tradabilité."
+    )
+    w(
+        "- `past_pivot_density_*` utilise un cutoff t-10 et un lookback=200 — strictement "
+        "causal mais à valider visuellement si le concept est poussé en stratégie."
+    )
+    w(
+        "- Une seule fenêtre OOS (~3 mois). Walk-forward multi-fenêtre recommandé avant tout commit "
+        "vers une stratégie."
+    )
     w("- Aucun tuning d'hyperparamètres — résultats indicatifs.")
     w("")
 
@@ -518,10 +566,13 @@ def write_report(stats_label, results, imp_df, leak_suspects, n_is, n_oos,
 # ────────────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--order", type=int, default=5,
-                        help="Ordre argrelextrema (défaut: 5)")
-    parser.add_argument("--ticker", type=str, default="NQ1",
-                        help="Ticker (défaut: NQ1). Doit avoir data/<TICKER>_data_m5.csv")
+    parser.add_argument("--order", type=int, default=5, help="Ordre argrelextrema (défaut: 5)")
+    parser.add_argument(
+        "--ticker",
+        type=str,
+        default="NQ1",
+        help="Ticker (défaut: NQ1). Doit avoir data/<TICKER>_data_m5.csv",
+    )
     args = parser.parse_args()
 
     global PIVOT_ORDER, OUT_DIR, TICKER, DATA_CSV
@@ -546,21 +597,42 @@ def main():
 
     feature_cols = [
         # tendance / momentum
-        "ema9_slope", "ema21_slope", "ema50_slope",
-        "roc_5", "roc_20", "roc_50", "adx_14",
+        "ema9_slope",
+        "ema21_slope",
+        "ema50_slope",
+        "roc_5",
+        "roc_20",
+        "roc_50",
+        "adx_14",
         # volatilité
-        "atr_14", "atr_ratio_short_long", "bb_width",
-        "dist_close_ema21_atr", "range_atr_ratio",
+        "atr_14",
+        "atr_ratio_short_long",
+        "bb_width",
+        "dist_close_ema21_atr",
+        "range_atr_ratio",
         # microstructure
-        "body_range_ratio", "upper_wick_ratio", "lower_wick_ratio", "vol_rel",
+        "body_range_ratio",
+        "upper_wick_ratio",
+        "lower_wick_ratio",
+        "vol_rel",
         # position relative
-        "dist_to_max20_atr", "dist_to_min20_atr",
-        "past_pivot_density_2atr", "past_pivot_density_1atr",
+        "dist_to_max20_atr",
+        "dist_to_min20_atr",
+        "past_pivot_density_2atr",
+        "past_pivot_density_1atr",
         # séquence
-        "ret_lag_1", "ret_lag_2", "ret_lag_3", "ret_lag_5", "ret_lag_10",
+        "ret_lag_1",
+        "ret_lag_2",
+        "ret_lag_3",
+        "ret_lag_5",
+        "ret_lag_10",
         "up_bars_last_10",
         # timing
-        "hour_ny", "minute_ny", "dow", "bars_since_open", "is_macro_day",
+        "hour_ny",
+        "minute_ny",
+        "dow",
+        "bars_since_open",
+        "is_macro_day",
     ]
     print(f"  • {len(feature_cols)} features")
 
@@ -603,28 +675,42 @@ def main():
     print(f"▸ Entraînement 3 modèles (IS={len(X_is):,}, OOS={len(X_oos):,})…")
     results, probas, hgb, rf = train_and_eval(X_is, y_is, X_oos, y_oos, feature_cols, base_rate_oos)
     for name, sc in results.items():
-        print(f"  • {name:18s}  PR-AUC={sc['pr_auc']:.3f}  "
-              f"P@R5%={sc['prec_at_recall_5']:.2%}  "
-              f"P@R10%={sc['prec_at_recall_10']:.2%}  "
-              f"P@R20%={sc['prec_at_recall_20']:.2%}")
+        print(
+            f"  • {name:18s}  PR-AUC={sc['pr_auc']:.3f}  "
+            f"P@R5%={sc['prec_at_recall_5']:.2%}  "
+            f"P@R10%={sc['prec_at_recall_10']:.2%}  "
+            f"P@R20%={sc['prec_at_recall_20']:.2%}"
+        )
 
     print("▸ Plots…")
     plot_pr_curves(y_oos, probas, base_rate_oos, OUT_DIR / "precision_recall_OOS.png")
     # Importance sur le meilleur modèle non-linéaire (RF, plus rapide que HGB ici)
     imp_df = plot_feature_importance(
-        rf, X_oos, y_oos, feature_cols, OUT_DIR / "feature_importance.png", top_n=15,
+        rf,
+        X_oos,
+        y_oos,
+        feature_cols,
+        OUT_DIR / "feature_importance.png",
+        top_n=15,
     )
 
     print("▸ Rapport markdown…")
     verdict = write_report(
-        stats_label, results, imp_df, suspects, len(df_is), len(df_oos),
-        df_is.index[0].date(), df_is.index[-1].date(),
-        df_oos.index[0].date(), df_oos.index[-1].date(),
+        stats_label,
+        results,
+        imp_df,
+        suspects,
+        len(df_is),
+        len(df_oos),
+        df_is.index[0].date(),
+        df_is.index[-1].date(),
+        df_oos.index[0].date(),
+        df_oos.index[-1].date(),
     )
 
-    print(f"\n══════════════════════════════════════════════")
+    print("\n══════════════════════════════════════════════")
     print(f"  VERDICT : {verdict}")
-    print(f"══════════════════════════════════════════════")
+    print("══════════════════════════════════════════════")
     print(f"  Outputs → {OUT_DIR}")
 
 

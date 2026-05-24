@@ -25,33 +25,31 @@ Usage :
 """
 
 from __future__ import annotations
-from typing import List, Dict, Optional
 
 # Rang 1 = meilleur. Basés sur OOS walk-forward (Dec 2024 → Mar 2026).
 # Mettre à jour après chaque re-calibration walk-forward.
-TICKER_PRIORITY: Dict[str, Dict[str, int]] = {
+TICKER_PRIORITY: dict[str, dict[str, int]] = {
     "composite": {"NQ1": 1, "MES1": 2, "YM1": 3},
-    "opr":       {"NQ1": 1, "YM1": 2, "MES1": 3},
-    "fib":       {"NQ1": 1, "YM1": 2, "MES1": 3},
+    "opr": {"NQ1": 1, "YM1": 2, "MES1": 3},
+    "fib": {"NQ1": 1, "YM1": 2, "MES1": 3},
     # fib-v4 OOS Phase 4 : NQ1 PF=6.47 > MES1 PF=6.01 > MGC1 PF=2.53
-    "fib-v4":    {"NQ1": 1, "MES1": 2, "MGC1": 3},
+    "fib-v4": {"NQ1": 1, "MES1": 2, "MGC1": 3},
     # vpc-v4 OOS : NQ1 PF≈1.85 > MES1 PF≈1.40 (YM1 hors-périmètre)
-    "vpc":       {"NQ1": 1, "MES1": 2},
-    "VPC":       {"NQ1": 1, "MES1": 2},   # tolérance casse sur la clé strategy
+    "vpc": {"NQ1": 1, "MES1": 2},
+    "VPC": {"NQ1": 1, "MES1": 2},  # tolérance casse sur la clé strategy
 }
 
 # Score OOS de référence (utilisé pour info / logging uniquement)
-TICKER_OOS_SCORE: Dict[str, Dict[str, float]] = {
+TICKER_OOS_SCORE: dict[str, dict[str, float]] = {
     "composite": {"NQ1": 1.87, "MES1": 1.39, "YM1": 0.0},
-    "opr":       {"NQ1": 6979.5, "YM1": 6835.0, "MES1": 1510.0},
-    "fib":       {"NQ1": 18.67, "YM1": 7.11, "MES1": 4.51},
-    "fib-v4":    {"NQ1": 6.47, "MES1": 6.01, "MGC1": 2.53},
-    "vpc":       {"NQ1": 1.85, "MES1": 1.40},
+    "opr": {"NQ1": 6979.5, "YM1": 6835.0, "MES1": 1510.0},
+    "fib": {"NQ1": 18.67, "YM1": 7.11, "MES1": 4.51},
+    "fib-v4": {"NQ1": 6.47, "MES1": 6.01, "MGC1": 2.53},
+    "vpc": {"NQ1": 1.85, "MES1": 1.40},
 }
 
 
-def pick_best_ticker(signals: List[Dict],
-                     strategy_key: Optional[str] = None) -> Optional[Dict]:
+def pick_best_ticker(signals: list[dict], strategy_key: str | None = None) -> dict | None:
     """
     Parmi une liste de signaux (même stratégie, tickers différents), retourne
     le signal de l'actif le mieux classé OOS.
@@ -68,13 +66,13 @@ def pick_best_ticker(signals: List[Dict],
     key = strategy_key or signals[0].get("strategy", "")
     priority = TICKER_PRIORITY.get(key, {})
 
-    def _rank(sig: Dict) -> int:
+    def _rank(sig: dict) -> int:
         return priority.get(sig.get("ticker", ""), 999)
 
     return min(signals, key=_rank)
 
 
-def filter_correlated_signals(signals: List[Dict]) -> List[Dict]:
+def filter_correlated_signals(signals: list[dict]) -> list[dict]:
     """
     Filtre une liste de signaux mixtes (stratégies et tickers) en garantissant
     que pour chaque stratégie, un seul actif est retenu si plusieurs ont été
@@ -92,7 +90,7 @@ def filter_correlated_signals(signals: List[Dict]) -> List[Dict]:
     # Regroupe par (stratégie, direction) — deux signaux de même stratégie
     # mais directions opposées (ex. OPR long NQ1 / OPR short YM1) restent
     # indépendants car la corrélation n'est pas additive cross-direction.
-    groups: Dict[str, List[Dict]] = {}
+    groups: dict[str, list[dict]] = {}
     for sig in signals:
         strat = sig.get("strategy", "unknown")
         direction = sig.get("direction", "")

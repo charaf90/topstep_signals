@@ -18,30 +18,31 @@ ces trades que la décision de promotion s'appuie.
 Usage :
   python scripts/generate_robustness_fib_v4.py
 """
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import (
+    COMMISSION_RT_PER_CONTRACT,
+    FIB_V4_LEVEL_PER_TICKER,
+    FIB_V4_TICKERS,
     INSTRUMENTS,
-    SLIPPAGE_TICKS_PER_TICKER, COMMISSION_RT_PER_CONTRACT,
-    FIB_V4_TICKERS, FIB_V4_LEVEL_PER_TICKER,
-    TOPSTEP_DAILY_LOSS_MAX,
+    SLIPPAGE_TICKS_PER_TICKER,
 )
 from core.data import load_csv
-from core.strategy_fib_v4 import run_fib_v4_backtest
 from core.robustness import (
-    run_full_robustness,
     format_summary_markdown,
+    run_full_robustness,
 )
+from core.strategy_fib_v4 import run_fib_v4_backtest
 
 DATA_DIR = PROJECT_ROOT / "data"
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -60,7 +61,8 @@ def cost_rt(ticker: str) -> float:
 def collect_oos_trades(ticker: str) -> pd.DataFrame:
     df = load_csv(str(DATA_DIR / f"{ticker}_data_m15.csv"))
     trades = run_fib_v4_backtest(
-        df, ticker,
+        df,
+        ticker,
         fib_level=FIB_V4_LEVEL_PER_TICKER[ticker],
     )
     if len(trades) == 0:
@@ -72,8 +74,7 @@ def collect_oos_trades(ticker: str) -> pd.DataFrame:
     trades["pnl"] = trades["pnl_gross"] - rt * trades["n_ct"]
     # filtre OOS
     trades["pending_dt"] = pd.to_datetime(trades["pending_time"])
-    trades = trades[(trades["pending_dt"] >= OOS_START) &
-                    (trades["pending_dt"] <= OOS_END)].copy()
+    trades = trades[(trades["pending_dt"] >= OOS_START) & (trades["pending_dt"] <= OOS_END)].copy()
     # colonnes attendues par regime_stress_test (peut nécessiter ajustements)
     if "date" not in trades.columns:
         trades["date"] = trades["pending_dt"].dt.strftime("%Y-%m-%d")
@@ -81,7 +82,7 @@ def collect_oos_trades(ticker: str) -> pd.DataFrame:
 
 
 def main():
-    print(f"  Collecte trades OOS sur les 3 cellules 🟢 fib-v4...")
+    print("  Collecte trades OOS sur les 3 cellules 🟢 fib-v4...")
     parts = []
     per_ticker = {}
     for ticker in FIB_V4_TICKERS:
@@ -95,8 +96,7 @@ def main():
         print(f"    {ticker}: {len(t)} trades OOS, P&L=${t['pnl'].sum():+,.0f}")
 
     portfolio = pd.concat(parts, ignore_index=True).sort_values("pending_dt")
-    print(f"\n  Portefeuille OOS : {len(portfolio)} trades, "
-          f"P&L=${portfolio['pnl'].sum():+,.0f}")
+    print(f"\n  Portefeuille OOS : {len(portfolio)} trades, P&L=${portfolio['pnl'].sum():+,.0f}")
 
     # n_tests Bonferroni : 5 seuils wick × 3 cellules = 15 tests environ ;
     # mais le test pertinent est la sélection par cellule = 5 par ticker, soit
@@ -107,6 +107,7 @@ def main():
     # mais le DD réel doit comparer à la limite TRAILING (TOPSTEP_TRAILING_DD=2000).
     # On choisit la plus contraignante (trailing dd) pour MC DD probabilité.
     from config import TOPSTEP_TRAILING_DD
+
     topstep_limit = TOPSTEP_TRAILING_DD
 
     print(f"\n  Génération robustness portefeuille (PORTFOLIO, n={len(portfolio)})...")
@@ -167,8 +168,10 @@ def main():
     md.append(f"# Robustness — {STRATEGY_ID}\n")
     md.append(f"**Période OOS** : {OOS_START.date()} → {OOS_END.date()}")
     md.append(f"**Univers** : {', '.join(FIB_V4_TICKERS)} (M15)")
-    md.append(f"**Filtres data-driven** : wick_through_atr (seuil par ticker) "
-              f"+ pivot_break_atr ≥ 0 + skip macro days MGC1")
+    md.append(
+        "**Filtres data-driven** : wick_through_atr (seuil par ticker) "
+        "+ pivot_break_atr ≥ 0 + skip macro days MGC1"
+    )
     md.append(f"**Bonferroni** : {n_tests_bonferroni} tests (5 seuils wick × 3 cellules)\n")
 
     md.append("## Synthèse par ticker (OOS)\n")
@@ -181,7 +184,7 @@ def main():
             continue
         md.append(
             f"| {t} | {d['n']} | ${d['pnl']:+,.0f} "
-            f"| {per_ticker[t]['wr']*100:.1f}% "
+            f"| {per_ticker[t]['wr'] * 100:.1f}% "
             f"| {d['bootstrap_pf_p_above']:.1f}% "
             f"| {d['psr']:.1f}% "
             f"| ${d['mc_dd_p95']:+,.0f} | ${d['mc_dd_p99']:+,.0f} |"

@@ -21,42 +21,52 @@ IS/OOS :
 Usage :
   python scripts/optimize_fib_v4.py
 """
+
 from __future__ import annotations
+
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
-import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import core.strategy_fib as sf
+
 from config import (
-    INSTRUMENTS,
-    SLIPPAGE_TICKS_PER_TICKER, COMMISSION_RT_PER_CONTRACT,
-    FIB_SL_ATR_MULT_PER_TICKER, FIB_TP_ATR_MULT_PER_TICKER,
+    COMMISSION_RT_PER_CONTRACT,
     FIB_MIN_IMPULSE_ATR_PER_TICKER,
+    FIB_SL_ATR_MULT_PER_TICKER,
+    FIB_TP_ATR_MULT_PER_TICKER,
+    INSTRUMENTS,
+    SLIPPAGE_TICKS_PER_TICKER,
 )
 from core.data import load_csv
 from core.robustness import block_bootstrap
-import core.strategy_fib as sf
 
 DATA_DIR = PROJECT_ROOT / "data"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 
 FIB_CONSTANTS_M15 = {
-    "FIB_ATR_PERIOD":         14,  "FIB_EMA_FAST_PERIOD":    50,
-    "FIB_EMA_SLOW_PERIOD":    200, "FIB_ADX_PERIOD":         14,
-    "FIB_PIVOT_LEFT":         8,   "FIB_PIVOT_RIGHT":        8,
-    "FIB_MAX_IMPULSE_BARS":   25,  "FIB_IMPULSE_LOOKBACK":   60,
-    "FIB_ORDER_TIMEOUT_BARS": 12,  "FIB_MAX_HOLD_BARS":      32,
+    "FIB_ATR_PERIOD": 14,
+    "FIB_EMA_FAST_PERIOD": 50,
+    "FIB_EMA_SLOW_PERIOD": 200,
+    "FIB_ADX_PERIOD": 14,
+    "FIB_PIVOT_LEFT": 8,
+    "FIB_PIVOT_RIGHT": 8,
+    "FIB_MAX_IMPULSE_BARS": 25,
+    "FIB_IMPULSE_LOOKBACK": 60,
+    "FIB_ORDER_TIMEOUT_BARS": 12,
+    "FIB_MAX_HOLD_BARS": 32,
 }
 FIB_CONSTANTS_M5 = {k: v * 3 for k, v in FIB_CONSTANTS_M15.items()}
 
 # Splits IS/OOS — heure UTC, date des trades (pending_time)
 IS_END_M15 = pd.Timestamp("2025-09-30 23:59:59")
 OOS_END_M15 = pd.Timestamp("2026-05-31 23:59:59")
-IS_END_M5  = pd.Timestamp("2026-01-15 23:59:59")  # ~50% de l'historique M5
+IS_END_M5 = pd.Timestamp("2026-01-15 23:59:59")  # ~50% de l'historique M5
 
 # Grille de seuils wick_through_atr (5 valeurs)
 WICK_GRID = [0.05, 0.10, 0.20, 0.40, 0.80]
@@ -92,7 +102,8 @@ def run_cell_full(ticker: str, tf: str, fib_level: float) -> pd.DataFrame:
     df = load_csv(str(csv_path))
     patch_constants(FIB_CONSTANTS_M15 if tf == "m15" else FIB_CONSTANTS_M5)
     trades = sf.run_fib_backtest(
-        df, ticker,
+        df,
+        ticker,
         fib_level=fib_level,
         sl_mult=FIB_SL_ATR_MULT_PER_TICKER[ticker],
         tp_mult=FIB_TP_ATR_MULT_PER_TICKER[ticker],
@@ -117,25 +128,21 @@ def split_is_oos(trades: pd.DataFrame, tf: str) -> tuple[pd.DataFrame, pd.DataFr
     is_end = IS_END_M15 if tf == "m15" else IS_END_M5
     oos_end = OOS_END_M15
     is_trades = trades[trades["pending_dt"] <= is_end].copy()
-    oos_trades = trades[(trades["pending_dt"] > is_end) &
-                        (trades["pending_dt"] <= oos_end)].copy()
+    oos_trades = trades[(trades["pending_dt"] > is_end) & (trades["pending_dt"] <= oos_end)].copy()
     return is_trades, oos_trades
 
 
-def apply_filter(trades: pd.DataFrame, wick_max: float,
-                 pivot_buffer: float = 0.0) -> pd.DataFrame:
+def apply_filter(trades: pd.DataFrame, wick_max: float, pivot_buffer: float = 0.0) -> pd.DataFrame:
     """Filtre fib-v4 : wick_through_atr < seuil ET pivot_break_atr >= -buffer."""
     if "wick_through_atr" not in trades.columns:
         return trades
-    mask = (trades["wick_through_atr"] < wick_max) & \
-           (trades["pivot_break_atr"] >= -pivot_buffer)
+    mask = (trades["wick_through_atr"] < wick_max) & (trades["pivot_break_atr"] >= -pivot_buffer)
     return trades[mask].copy()
 
 
 def metrics(trades: pd.DataFrame) -> dict:
     if len(trades) == 0:
-        return dict(n=0, wr=float("nan"), pf=float("nan"),
-                    pnl=0.0, dd=0.0, sharpe=float("nan"))
+        return dict(n=0, wr=float("nan"), pf=float("nan"), pnl=0.0, dd=0.0, sharpe=float("nan"))
     wins = trades[trades["pnl"] > 0]
     losses = trades[trades["pnl"] < 0]
     gp = wins["pnl"].sum()
@@ -159,14 +166,25 @@ def evaluate_cell(ticker: str, tf: str, fib_level: float) -> dict:
     """Workflow complet sur une cellule : baseline → IS/OOS → grid → bootstrap."""
     trades = run_cell_full(ticker, tf, fib_level)
     if len(trades) < 60:
-        return dict(ticker=ticker, tf=tf, fib_level=fib_level, n_total=len(trades),
-                    skipped="trop peu de trades")
+        return dict(
+            ticker=ticker,
+            tf=tf,
+            fib_level=fib_level,
+            n_total=len(trades),
+            skipped="trop peu de trades",
+        )
 
     is_trades, oos_trades = split_is_oos(trades, tf)
     if len(is_trades) < 30 or len(oos_trades) < 10:
-        return dict(ticker=ticker, tf=tf, fib_level=fib_level,
-                    n_total=len(trades), n_is=len(is_trades), n_oos=len(oos_trades),
-                    skipped="split IS/OOS insuffisant")
+        return dict(
+            ticker=ticker,
+            tf=tf,
+            fib_level=fib_level,
+            n_total=len(trades),
+            n_is=len(is_trades),
+            n_oos=len(oos_trades),
+            skipped="split IS/OOS insuffisant",
+        )
 
     # Baseline IS/OOS (sans filtre)
     base_is = metrics(is_trades)
@@ -184,11 +202,18 @@ def evaluate_cell(ticker: str, tf: str, fib_level: float) -> dict:
         gi = apply_filter(is_trades, wmax, PIVOT_BREAK_BUFFER)
         go = apply_filter(oos_trades, wmax, PIVOT_BREAK_BUFFER)
         mi, mo = metrics(gi), metrics(go)
-        grid_rows.append(dict(
-            wick_max=wmax,
-            n_is=mi["n"], pf_is=mi["pf"], pnl_is=mi["pnl"],
-            n_oos=mo["n"], pf_oos=mo["pf"], pnl_oos=mo["pnl"], dd_oos=mo["dd"],
-        ))
+        grid_rows.append(
+            dict(
+                wick_max=wmax,
+                n_is=mi["n"],
+                pf_is=mi["pf"],
+                pnl_is=mi["pnl"],
+                n_oos=mo["n"],
+                pf_oos=mo["pf"],
+                pnl_oos=mo["pnl"],
+                dd_oos=mo["dd"],
+            )
+        )
     grid_df = pd.DataFrame(grid_rows)
 
     # Sélection : meilleur seuil sur IS, contrainte n_is ≥ 30
@@ -202,8 +227,9 @@ def evaluate_cell(ticker: str, tf: str, fib_level: float) -> dict:
     chosen_wmax = float(chosen["wick_max"])
     chosen_oos_trades = apply_filter(oos_trades, chosen_wmax, PIVOT_BREAK_BUFFER)
     if len(chosen_oos_trades) >= 10:
-        boot = block_bootstrap(chosen_oos_trades, n_iterations=1000,
-                                metric="profit_factor", threshold=1.0, seed=42)
+        boot = block_bootstrap(
+            chosen_oos_trades, n_iterations=1000, metric="profit_factor", threshold=1.0, seed=42
+        )
         boot_p = float(boot.get("p_above_threshold", float("nan")))
     else:
         boot_p = float("nan")
@@ -222,17 +248,29 @@ def evaluate_cell(ticker: str, tf: str, fib_level: float) -> dict:
         verdict = "🔴 REJET"
 
     return dict(
-        ticker=ticker, tf=tf, fib_level=fib_level,
-        n_total=len(trades), n_is=len(is_trades), n_oos=len(oos_trades),
+        ticker=ticker,
+        tf=tf,
+        fib_level=fib_level,
+        n_total=len(trades),
+        n_is=len(is_trades),
+        n_oos=len(oos_trades),
         # Baseline (sans filtre)
-        base_pf_is=base_is["pf"], base_pf_oos=base_oos["pf"],
-        base_pnl_oos=base_oos["pnl"], base_dd_oos=base_oos["dd"],
+        base_pf_is=base_is["pf"],
+        base_pf_oos=base_oos["pf"],
+        base_pnl_oos=base_oos["pnl"],
+        base_dd_oos=base_oos["dd"],
         # Stratégie A
-        a_pf_is=a_is_m["pf"], a_pf_oos=a_oos_m["pf"], a_n_oos=a_oos_m["n"],
-        a_pnl_oos=a_oos_m["pnl"], a_dd_oos=a_oos_m["dd"],
+        a_pf_is=a_is_m["pf"],
+        a_pf_oos=a_oos_m["pf"],
+        a_n_oos=a_oos_m["n"],
+        a_pnl_oos=a_oos_m["pnl"],
+        a_dd_oos=a_oos_m["dd"],
         # Stratégie B (chosen)
-        b_wick_max=chosen_wmax, b_pf_is=float(chosen["pf_is"]),
-        b_pf_oos=pf_oos, b_n_oos=n_oos, b_pnl_oos=float(chosen["pnl_oos"]),
+        b_wick_max=chosen_wmax,
+        b_pf_is=float(chosen["pf_is"]),
+        b_pf_oos=pf_oos,
+        b_n_oos=n_oos,
+        b_pnl_oos=float(chosen["pnl_oos"]),
         b_dd_oos=float(chosen["dd_oos"]),
         boot_p_above_1=boot_p,
         verdict=verdict,
@@ -255,9 +293,11 @@ def main():
         if res.get("skipped"):
             print(f"SKIP ({res['skipped']})")
         else:
-            print(f"verdict={res['verdict']} | A: PF_oos={res['a_pf_oos']:.2f} | "
-                  f"B: wick<{res['b_wick_max']:.2f} → PF_oos={res['b_pf_oos']:.2f} "
-                  f"(n={res['b_n_oos']}, BS={res['boot_p_above_1']:.2f})")
+            print(
+                f"verdict={res['verdict']} | A: PF_oos={res['a_pf_oos']:.2f} | "
+                f"B: wick<{res['b_wick_max']:.2f} → PF_oos={res['b_pf_oos']:.2f} "
+                f"(n={res['b_n_oos']}, BS={res['boot_p_above_1']:.2f})"
+            )
 
     # Tableau simple
     simple_rows = [{k: v for k, v in r.items() if k != "grid"} for r in results]
@@ -272,29 +312,39 @@ def main():
 def write_markdown_report(results: list, path: Path) -> None:
     lines = []
     lines.append("# Phase 4 — Walk-forward fib-v4\n")
-    lines.append(f"**Filtres testés** :")
-    lines.append(f"- Stratégie A (seuil universel) : `wick_through_atr < {WICK_UNIVERSAL}` "
-                 f"AND `pivot_break_atr >= -{PIVOT_BREAK_BUFFER}`")
-    lines.append(f"- Stratégie B (grid par cellule) : `wick_through_atr ∈ {WICK_GRID}` "
-                 f"+ `pivot_break_atr >= -{PIVOT_BREAK_BUFFER}` ; sélection sur IS, validation OOS\n")
-    lines.append(f"**Splits IS/OOS** :")
-    lines.append(f"- M15 : IS ≤ 2025-09-30 ; OOS 2025-10-01 → 2026-05-31")
-    lines.append(f"- M5  : IS ≤ 2026-01-15 (~50%) ; OOS 2026-01-16 → 2026-05-31\n")
-    lines.append(f"**Bootstrap stationnaire** : `core.robustness.block_bootstrap` "
-                 f"(1000 itérations, block_size auto = √n).\n")
-    lines.append(f"**Critères verdict** :")
-    lines.append(f"- 🟢 PRODUCTION : PF OOS ≥ 1.5 ET n_oos ≥ 20 ET P(PF>1) ≥ 80%")
-    lines.append(f"- 🟡 VEILLE     : PF OOS ≥ 1.2 ET n_oos ≥ 8 ET P(PF>1) ≥ 50%")
-    lines.append(f"- 🔴 REJET      : sinon\n")
+    lines.append("**Filtres testés** :")
+    lines.append(
+        f"- Stratégie A (seuil universel) : `wick_through_atr < {WICK_UNIVERSAL}` "
+        f"AND `pivot_break_atr >= -{PIVOT_BREAK_BUFFER}`"
+    )
+    lines.append(
+        f"- Stratégie B (grid par cellule) : `wick_through_atr ∈ {WICK_GRID}` "
+        f"+ `pivot_break_atr >= -{PIVOT_BREAK_BUFFER}` ; sélection sur IS, validation OOS\n"
+    )
+    lines.append("**Splits IS/OOS** :")
+    lines.append("- M15 : IS ≤ 2025-09-30 ; OOS 2025-10-01 → 2026-05-31")
+    lines.append("- M5  : IS ≤ 2026-01-15 (~50%) ; OOS 2026-01-16 → 2026-05-31\n")
+    lines.append(
+        "**Bootstrap stationnaire** : `core.robustness.block_bootstrap` "
+        "(1000 itérations, block_size auto = √n).\n"
+    )
+    lines.append("**Critères verdict** :")
+    lines.append("- 🟢 PRODUCTION : PF OOS ≥ 1.5 ET n_oos ≥ 20 ET P(PF>1) ≥ 80%")
+    lines.append("- 🟡 VEILLE     : PF OOS ≥ 1.2 ET n_oos ≥ 8 ET P(PF>1) ≥ 50%")
+    lines.append("- 🔴 REJET      : sinon\n")
 
     # Tableau de synthèse
     lines.append("\n## Tableau de synthèse\n")
-    lines.append("| Cellule | n IS | n OOS | Baseline PF OOS | A PF OOS | B seuil | B PF OOS | n OOS B | P(PF>1) | Verdict |")
+    lines.append(
+        "| Cellule | n IS | n OOS | Baseline PF OOS | A PF OOS | B seuil | B PF OOS | n OOS B | P(PF>1) | Verdict |"
+    )
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for r in results:
         if r.get("skipped"):
-            lines.append(f"| {r['ticker']} {r['tf']} {r['fib_level']:.3f} "
-                         f"| — | — | — | — | — | — | — | — | SKIP ({r['skipped']}) |")
+            lines.append(
+                f"| {r['ticker']} {r['tf']} {r['fib_level']:.3f} "
+                f"| — | — | — | — | — | — | — | — | SKIP ({r['skipped']}) |"
+            )
             continue
         lines.append(
             f"| {r['ticker']} {r['tf']} {r['fib_level']:.3f} "
@@ -311,13 +361,19 @@ def write_markdown_report(results: list, path: Path) -> None:
         if r.get("skipped"):
             continue
         lines.append(f"\n### {r['ticker']} {r['tf']} fib={r['fib_level']:.3f} → {r['verdict']}\n")
-        lines.append(f"Baseline (sans filtre) — IS: PF={r['base_pf_is']:.2f} | OOS: "
-                     f"PF={r['base_pf_oos']:.2f}, P&L=${r['base_pnl_oos']:+,.0f}, DD=${r['base_dd_oos']:+,.0f}\n")
-        lines.append(f"Stratégie A (wick<{WICK_UNIVERSAL}) — OOS: PF={r['a_pf_oos']:.2f}, "
-                     f"n={r['a_n_oos']}, P&L=${r['a_pnl_oos']:+,.0f}\n")
-        lines.append(f"Stratégie B (chosen wick<{r['b_wick_max']}) — OOS: PF={r['b_pf_oos']:.2f}, "
-                     f"n={r['b_n_oos']}, P&L=${r['b_pnl_oos']:+,.0f}, DD=${r['b_dd_oos']:+,.0f}, "
-                     f"P(PF>1)={r['boot_p_above_1']:.2f}\n")
+        lines.append(
+            f"Baseline (sans filtre) — IS: PF={r['base_pf_is']:.2f} | OOS: "
+            f"PF={r['base_pf_oos']:.2f}, P&L=${r['base_pnl_oos']:+,.0f}, DD=${r['base_dd_oos']:+,.0f}\n"
+        )
+        lines.append(
+            f"Stratégie A (wick<{WICK_UNIVERSAL}) — OOS: PF={r['a_pf_oos']:.2f}, "
+            f"n={r['a_n_oos']}, P&L=${r['a_pnl_oos']:+,.0f}\n"
+        )
+        lines.append(
+            f"Stratégie B (chosen wick<{r['b_wick_max']}) — OOS: PF={r['b_pf_oos']:.2f}, "
+            f"n={r['b_n_oos']}, P&L=${r['b_pnl_oos']:+,.0f}, DD=${r['b_dd_oos']:+,.0f}, "
+            f"P(PF>1)={r['boot_p_above_1']:.2f}\n"
+        )
         lines.append("\nGrid détaillé :\n")
         lines.append("| wick_max | n IS | PF IS | n OOS | PF OOS | P&L OOS |")
         lines.append("|---|---|---|---|---|---|")

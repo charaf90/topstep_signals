@@ -60,9 +60,9 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Callable, List, Optional, Sequence
+from datetime import UTC, datetime
 
 _log = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ _log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Event normalisé (1 trade ou 1 quote = 1 MarketEvent)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class MarketEvent:
@@ -93,48 +94,51 @@ class MarketEvent:
 
     `payload` garde la version brute pour debug et nouveaux champs futurs.
     """
-    kind: str                                  # "trade" | "quote"
+
+    kind: str  # "trade" | "quote"
     contract_id: str
-    received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    ts_exchange: Optional[datetime] = None
+    received_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    ts_exchange: datetime | None = None
     payload: dict = field(default_factory=dict)
 
     # Champs trade
-    price: Optional[float] = None
-    volume: Optional[int] = None
-    aggressor: Optional[int] = None
+    price: float | None = None
+    volume: int | None = None
+    aggressor: int | None = None
 
     # Champs quote
-    best_bid: Optional[float] = None
-    best_ask: Optional[float] = None
-    last_price: Optional[float] = None
+    best_bid: float | None = None
+    best_ask: float | None = None
+    last_price: float | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers de parsing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _parse_ts(s) -> Optional[datetime]:
+
+def _parse_ts(s) -> datetime | None:
     """Parse un timestamp ISO 8601 tz-aware en datetime UTC. None si invalide."""
     if not s:
         return None
     if isinstance(s, datetime):
-        return s.astimezone(timezone.utc) if s.tzinfo else s.replace(tzinfo=timezone.utc)
+        return s.astimezone(UTC) if s.tzinfo else s.replace(tzinfo=UTC)
     try:
         dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     # Filtre les timestamps "0001-01-01" (sentinel ProjectX = N/A)
     if dt.year < 2000:
         return None
-    return dt.astimezone(timezone.utc)
+    return dt.astimezone(UTC)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Client realtime
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class ProjectXMarketRealtimeClient:
     """
@@ -167,24 +171,24 @@ class ProjectXMarketRealtimeClient:
         reconnect_delays: tuple = (0, 2, 5, 10, 30, 60, 120),
         max_silence_s: float = 60.0,
         force_reauth_s: float = 22 * 3600,
-        market_open_check: Optional[Callable[[], bool]] = None,
+        market_open_check: Callable[[], bool] | None = None,
         subscribe_quotes: bool = True,
         subscribe_trades: bool = True,
     ):
         if not contract_ids:
             raise ValueError("contract_ids ne peut pas être vide")
 
-        self._contract_ids   = list(contract_ids)
+        self._contract_ids = list(contract_ids)
         self._token_provider = token_provider
-        self._hub_url        = hub_url
-        self._market_open    = market_open_check or (lambda: True)
-        self._sub_quotes     = bool(subscribe_quotes)
-        self._sub_trades     = bool(subscribe_trades)
+        self._hub_url = hub_url
+        self._market_open = market_open_check or (lambda: True)
+        self._sub_quotes = bool(subscribe_quotes)
+        self._sub_trades = bool(subscribe_trades)
 
         # Politique reconnect/zombie
         self._reconnect_delays = tuple(reconnect_delays) or (5,)
-        self._max_silence_s    = float(max_silence_s)
-        self._force_reauth_s   = float(force_reauth_s)
+        self._max_silence_s = float(max_silence_s)
+        self._force_reauth_s = float(force_reauth_s)
 
         # Queue d'events (drop-oldest si saturée).
         self._queue: queue.Queue = queue.Queue(maxsize=int(queue_maxsize))
@@ -194,21 +198,21 @@ class ProjectXMarketRealtimeClient:
         # Reproduction du pattern broker/projectx_realtime.py:127-132 (sinon
         # deadlock observé en Phase B avec threading.Lock).
         self._connection = None
-        self._lock       = threading.RLock()
-        self._connected  = threading.Event()
+        self._lock = threading.RLock()
+        self._connected = threading.Event()
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
         # Télémétrie
-        self._last_event_ts     = time.monotonic()
-        self._last_open_ts      = 0.0
-        self._last_close_ts     = 0.0
-        self._last_drop_log_ts  = 0.0
-        self._disconnect_count  = 0
+        self._last_event_ts = time.monotonic()
+        self._last_open_ts = 0.0
+        self._last_close_ts = 0.0
+        self._last_drop_log_ts = 0.0
+        self._disconnect_count = 0
         self._reconnect_attempt = 0
-        self._dropped_events    = 0
-        self._trade_count       = 0
-        self._quote_count       = 0
+        self._dropped_events = 0
+        self._trade_count = 0
+        self._quote_count = 0
 
     # ─────────────────────────────────────────────────────────────────────
     # API publique
@@ -228,8 +232,11 @@ class ProjectXMarketRealtimeClient:
             daemon=True,
         )
         self._thread.start()
-        _log.info("MarketRT: client démarré (hub=%s, contracts=%d)",
-                  self._hub_url, len(self._contract_ids))
+        _log.info(
+            "MarketRT: client démarré (hub=%s, contracts=%d)",
+            self._hub_url,
+            len(self._contract_ids),
+        )
 
     def stop(self, timeout: float = 5.0) -> None:
         """Arrête proprement le supervisor et la connexion WS."""
@@ -247,9 +254,9 @@ class ProjectXMarketRealtimeClient:
     def is_connected(self) -> bool:
         return self._connected.is_set()
 
-    def drain_events(self, max_events: int = 2000) -> List[MarketEvent]:
+    def drain_events(self, max_events: int = 2000) -> list[MarketEvent]:
         """Drain non-bloquant. Retourne jusqu'à `max_events` events FIFO."""
-        out: List[MarketEvent] = []
+        out: list[MarketEvent] = []
         for _ in range(max_events):
             try:
                 out.append(self._queue.get_nowait())
@@ -262,15 +269,15 @@ class ProjectXMarketRealtimeClient:
         now = time.monotonic()
         last_evt = self._last_event_ts or now
         return {
-            "connected":          self._connected.is_set(),
-            "queue_depth":        self._queue.qsize(),
-            "dropped_events":     self._dropped_events,
-            "last_event_age_s":   now - last_evt,
-            "disconnect_count":   self._disconnect_count,
-            "reconnect_attempt":  self._reconnect_attempt,
-            "trade_count":        self._trade_count,
-            "quote_count":        self._quote_count,
-            "contract_ids":       list(self._contract_ids),
+            "connected": self._connected.is_set(),
+            "queue_depth": self._queue.qsize(),
+            "dropped_events": self._dropped_events,
+            "last_event_age_s": now - last_evt,
+            "disconnect_count": self._disconnect_count,
+            "reconnect_attempt": self._reconnect_attempt,
+            "trade_count": self._trade_count,
+            "quote_count": self._quote_count,
+            "contract_ids": list(self._contract_ids),
         }
 
     # ─────────────────────────────────────────────────────────────────────
@@ -293,19 +300,21 @@ class ProjectXMarketRealtimeClient:
                 url_with_token,
                 options={
                     "access_token_factory": self._token_provider,
-                    "skip_negotiation":     False,
+                    "skip_negotiation": False,
                 },
             )
-            .with_automatic_reconnect({
-                "type":               "raw",
-                "keep_alive_interval": 10,
-                "reconnect_interval":  5,
-                # max_attempts=-1 : désactive le reconnect AUTO de signalrcore.
-                # Cf. broker/projectx_realtime.py — fix bug double-reconnect /
-                # HTTP 429. Notre supervisor (boucle 10 s) gère tous les
-                # reconnects. Keep_alive_interval reste actif (handler séparé).
-                "max_attempts":        -1,
-            })
+            .with_automatic_reconnect(
+                {
+                    "type": "raw",
+                    "keep_alive_interval": 10,
+                    "reconnect_interval": 5,
+                    # max_attempts=-1 : désactive le reconnect AUTO de signalrcore.
+                    # Cf. broker/projectx_realtime.py — fix bug double-reconnect /
+                    # HTTP 429. Notre supervisor (boucle 10 s) gère tous les
+                    # reconnects. Keep_alive_interval reste actif (handler séparé).
+                    "max_attempts": -1,
+                }
+            )
             .build()
         )
 
@@ -338,15 +347,14 @@ class ProjectXMarketRealtimeClient:
             self._build_connection_and_start()
             _log.info("MarketRT: rebuild OK (tentative #%d)", self._reconnect_attempt)
         except Exception as exc:
-            _log.error("MarketRT: rebuild échoué (#%d) : %s",
-                       self._reconnect_attempt, exc)
+            _log.error("MarketRT: rebuild échoué (#%d) : %s", self._reconnect_attempt, exc)
 
     # ─── Hooks SignalR ────────────────────────────────────────────────────
 
     def _on_open(self, *_) -> None:
         try:
             self._connected.set()
-            self._last_open_ts  = time.monotonic()
+            self._last_open_ts = time.monotonic()
             self._last_event_ts = self._last_open_ts  # reset zombie watchdog
             with self._lock:
                 if self._connection is None:
@@ -356,9 +364,12 @@ class ProjectXMarketRealtimeClient:
                         self._connection.send("SubscribeContractQuotes", [cid])
                     if self._sub_trades:
                         self._connection.send("SubscribeContractTrades", [cid])
-            _log.info("MarketRT: connecté & subscriptions envoyées "
-                      "(quotes=%s trades=%s contracts=%s)",
-                      self._sub_quotes, self._sub_trades, self._contract_ids)
+            _log.info(
+                "MarketRT: connecté & subscriptions envoyées (quotes=%s trades=%s contracts=%s)",
+                self._sub_quotes,
+                self._sub_trades,
+                self._contract_ids,
+            )
         except Exception as exc:
             _log.exception("MarketRT: _on_open échoué : %s", exc)
 
@@ -420,7 +431,7 @@ class ProjectXMarketRealtimeClient:
                 if not isinstance(raw_trade, dict):
                     continue  # skip None / valeurs aberrantes
                 price = raw_trade.get("price")
-                vol   = raw_trade.get("volume")
+                vol = raw_trade.get("volume")
                 if price is None or vol is None:
                     continue
                 ts = _parse_ts(raw_trade.get("timestamp"))
@@ -489,8 +500,7 @@ class ProjectXMarketRealtimeClient:
         now = time.monotonic()
         if now - self._last_drop_log_ts > 60:
             self._last_drop_log_ts = now
-            _log.warning("MarketRT: queue saturée, drop oldest (total=%d)",
-                         self._dropped_events)
+            _log.warning("MarketRT: queue saturée, drop oldest (total=%d)", self._dropped_events)
 
     # ─────────────────────────────────────────────────────────────────────
     # Supervisor thread — détection zombie + reconnect forcé + reauth périodique
@@ -524,8 +534,7 @@ class ProjectXMarketRealtimeClient:
                         delay = self._reconnect_delays[
                             min(backoff_idx, len(self._reconnect_delays) - 1)
                         ]
-                        _log.info("MarketRT: déconnecté %.0fs — rebuild dans %ds",
-                                  age, delay)
+                        _log.info("MarketRT: déconnecté %.0fs — rebuild dans %ds", age, delay)
                         if delay > 0:
                             time.sleep(delay)
                         if self._stop_event.is_set():
@@ -539,17 +548,19 @@ class ProjectXMarketRealtimeClient:
                 if silence > self._max_silence_s and self._market_open():
                     _log.warning(
                         "MarketRT: silence %.0fs > max %.0fs → rebuild forcé",
-                        silence, self._max_silence_s,
+                        silence,
+                        self._max_silence_s,
                     )
                     self._rebuild_and_start()
                     backoff_idx = 0
                     continue
 
                 # Cas 3 : re-auth périodique
-                if self._last_open_ts > 0 and \
-                        (now - self._last_open_ts) > self._force_reauth_s:
-                    _log.info("MarketRT: re-auth périodique (open depuis %.0fh)",
-                              (now - self._last_open_ts) / 3600)
+                if self._last_open_ts > 0 and (now - self._last_open_ts) > self._force_reauth_s:
+                    _log.info(
+                        "MarketRT: re-auth périodique (open depuis %.0fh)",
+                        (now - self._last_open_ts) / 3600,
+                    )
                     self._rebuild_and_start()
                     backoff_idx = 0
                     continue

@@ -41,23 +41,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Dict, Optional, Tuple
 
 from config import (
-    TOPSTEP_DAILY_LOSS_MAX, TOPSTEP_TRAILING_DD, TOPSTEP_PROFIT_TARGET,
-    TOPSTEP_SAFETY_MULT, RISK_PER_TRADE_USD, CONSEC_LOSS_PAUSE_DAYS,
-    USER_DAILY_LOSS_MAX, USER_MAX_TRADES_PER_DAY, USER_MAX_OPEN_POSITIONS,
-    CHALLENGE_ADAPTIVE_SIZING_ENABLED, CHALLENGE_BYPASS_USER_DAILY_LIMIT,
-    CHALLENGE_RESET_DAY, CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+    CHALLENGE_ADAPTIVE_SIZING_ENABLED,
+    CHALLENGE_BYPASS_USER_DAILY_LIMIT,
+    CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+    CHALLENGE_RESET_DAY,
+    CONSEC_LOSS_PAUSE_DAYS,
+    RISK_PER_TRADE_USD,
+    TOPSTEP_DAILY_LOSS_MAX,
+    TOPSTEP_PROFIT_TARGET,
+    TOPSTEP_SAFETY_MULT,
+    TOPSTEP_TRAILING_DD,
+    USER_DAILY_LOSS_MAX,
+    USER_MAX_OPEN_POSITIONS,
+    USER_MAX_TRADES_PER_DAY,
 )
 
 
 @dataclass
 class _Order:
     """Ordre limite armé ou position active — risque dollar nominal."""
+
     risk_usd: float
-    opened_at: Optional[datetime] = None
-    metadata: Dict = field(default_factory=dict)
+    opened_at: datetime | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -85,7 +93,7 @@ class PortfolioRiskManager:
     cum_pnl: float = 0.0
     peak_pnl: float = 0.0
     realized_day_pnl: float = 0.0
-    current_day: Optional[date] = None
+    current_day: date | None = None
 
     # Streak de jours perdants consécutifs
     consec_loss_days: int = 0
@@ -94,9 +102,9 @@ class PortfolioRiskManager:
     daily_fills_count: int = 0
 
     # Ordres limites armés (en attente de fill)
-    pending_orders: Dict[str, _Order] = field(default_factory=dict)
+    pending_orders: dict[str, _Order] = field(default_factory=dict)
     # Positions filées actives (en cours)
-    active_positions: Dict[str, _Order] = field(default_factory=dict)
+    active_positions: dict[str, _Order] = field(default_factory=dict)
 
     # Constantes Topstep (overridables pour tests)
     daily_loss_limit: float = float(TOPSTEP_DAILY_LOSS_MAX)
@@ -111,9 +119,9 @@ class PortfolioRiskManager:
     user_max_open_positions: int = int(USER_MAX_OPEN_POSITIONS)
 
     # Tracking du reset mensuel (challenge Topstep). Persistés dans live_state.json.
-    last_reset_month: Optional[int] = None
-    last_reset_year: Optional[int] = None
-    last_monthly_reset_at: Optional[datetime] = None
+    last_reset_month: int | None = None
+    last_reset_year: int | None = None
+    last_monthly_reset_at: datetime | None = None
 
     # ────────────────────────────────────────────────────────────────────
     # Helpers internes
@@ -134,7 +142,7 @@ class PortfolioRiskManager:
         """
         return sum(o.risk_usd for o in self.active_positions.values())
 
-    def _maybe_roll_day(self, when: Optional[datetime] = None):
+    def _maybe_roll_day(self, when: datetime | None = None):
         """
         Si la date 'when' diffère de current_day, archive le P&L du jour
         précédent (mise à jour du streak consécutif) et reset les compteurs
@@ -161,7 +169,7 @@ class PortfolioRiskManager:
         # Vérification reset mensuel après mise à jour du jour
         self._maybe_roll_month(when)
 
-    def _maybe_roll_month(self, when: Optional[datetime] = None) -> bool:
+    def _maybe_roll_month(self, when: datetime | None = None) -> bool:
         """
         Reset mensuel du challenge Topstep : remet à zéro cum_pnl, peak_pnl
         et consec_loss_days quand on franchit CHALLENGE_RESET_DAY (jour 2 du
@@ -178,8 +186,7 @@ class PortfolioRiskManager:
         d = now.date() if isinstance(now, datetime) else now
         if d.day < CHALLENGE_RESET_DAY:
             return False
-        if (self.last_reset_month == d.month
-                and self.last_reset_year == d.year):
+        if self.last_reset_month == d.month and self.last_reset_year == d.year:
             return False
         # Exécute le reset
         self.cum_pnl = 0.0
@@ -187,16 +194,21 @@ class PortfolioRiskManager:
         self.consec_loss_days = 0
         self.last_reset_month = d.month
         self.last_reset_year = d.year
-        self.last_monthly_reset_at = now if isinstance(now, datetime) else datetime.combine(d, datetime.min.time())
+        self.last_monthly_reset_at = (
+            now if isinstance(now, datetime) else datetime.combine(d, datetime.min.time())
+        )
         return True
 
     # ────────────────────────────────────────────────────────────────────
     # API publique
     # ────────────────────────────────────────────────────────────────────
 
-    def can_open(self, risk_usd: float = RISK_PER_TRADE_USD,
-                 when: Optional[datetime] = None,
-                 tp_gain_usd: Optional[float] = None) -> Tuple[bool, str]:
+    def can_open(
+        self,
+        risk_usd: float = RISK_PER_TRADE_USD,
+        when: datetime | None = None,
+        tp_gain_usd: float | None = None,
+    ) -> tuple[bool, str]:
         """
         Retourne (autorise, raison) avant d'armer un nouvel ordre limite.
 
@@ -221,46 +233,38 @@ class PortfolioRiskManager:
 
         # 1. Cap positions actives (filées) simultanément
         n_active = len(self.active_positions)
-        if (self.user_max_open_positions > 0
-                and n_active >= self.user_max_open_positions):
-            return False, (
-                f"max_active_positions_{n_active}"
-                f"/{self.user_max_open_positions}"
-            )
+        if self.user_max_open_positions > 0 and n_active >= self.user_max_open_positions:
+            return False, (f"max_active_positions_{n_active}/{self.user_max_open_positions}")
 
         # 2. Cap fills journaliers — inutile d'armer si la journée est pleine
-        if (self.user_max_trades_per_day > 0
-                and self.daily_fills_count >= self.user_max_trades_per_day):
+        if (
+            self.user_max_trades_per_day > 0
+            and self.daily_fills_count >= self.user_max_trades_per_day
+        ):
             return False, (
-                f"daily_fills_cap_{self.daily_fills_count}"
-                f"/{self.user_max_trades_per_day}"
+                f"daily_fills_cap_{self.daily_fills_count}/{self.user_max_trades_per_day}"
             )
 
         # 3. Cap perte journalière sur P&L RÉALISÉ uniquement
         #    Bypassé en mode challenge adaptatif (seules les limites Topstep
         #    dures restent actives — cf. config CHALLENGE_BYPASS_USER_DAILY_LIMIT).
         challenge_bypass_user_daily = (
-            CHALLENGE_ADAPTIVE_SIZING_ENABLED
-            and CHALLENGE_BYPASS_USER_DAILY_LIMIT
+            CHALLENGE_ADAPTIVE_SIZING_ENABLED and CHALLENGE_BYPASS_USER_DAILY_LIMIT
         )
-        if (not challenge_bypass_user_daily
-                and self.realized_day_pnl <= -self.user_daily_loss_max):
+        if not challenge_bypass_user_daily and self.realized_day_pnl <= -self.user_daily_loss_max:
             return False, (
                 f"user_daily_loss_realized_{self.realized_day_pnl:+.0f}_"
                 f"below_{-self.user_daily_loss_max:.0f}"
             )
 
         # 4. Circuit breaker streak perdant
-        if (self.consec_loss_pause_days > 0
-                and self.consec_loss_days >= self.consec_loss_pause_days):
+        if self.consec_loss_pause_days > 0 and self.consec_loss_days >= self.consec_loss_pause_days:
             return False, f"consec_loss_pause_{self.consec_loss_days}"
 
         # 5. Slacks Topstep (daily $1K + trailing $2K)
         #    Pire cas : tous les ordres en attente ET le nouvel ordre → SL
         reserved = self._total_reserved_risk()
-        slack_daily = (
-            self.daily_loss_limit + self.realized_day_pnl - reserved
-        )
+        slack_daily = self.daily_loss_limit + self.realized_day_pnl - reserved
         trail_floor = self.peak_pnl - self.trailing_dd_limit
         slack_trail = self.cum_pnl - trail_floor - reserved
 
@@ -279,23 +283,21 @@ class PortfolioRiskManager:
         #    la perte réalisée ne dépasse pas user_daily_loss_max.
         #    Bypassé en mode challenge adaptatif.
         if self.user_daily_loss_max > 0 and not challenge_bypass_user_daily:
-            slack_user = (
-                self.user_daily_loss_max + self.realized_day_pnl - reserved
-            )
+            slack_user = self.user_daily_loss_max + self.realized_day_pnl - reserved
             if slack_user < risk_usd:
-                return False, (
-                    f"user_daily_slack_{slack_user:.0f}_below_{risk_usd:.0f}"
-                )
+                return False, (f"user_daily_slack_{slack_user:.0f}_below_{risk_usd:.0f}")
 
         # 7. Garde-fou règle de cohérence 50% Topstep — Combine uniquement.
         #    Tant que cum_pnl < profit_target, on est en phase d'évaluation
         #    et la règle 50% (best_day ≤ 50% du profit cumulé) peut nous coller
         #    une auto-augmentation du target. On bloque tout trade dont le
         #    TP plein pousserait le realized_day_pnl au-delà du seuil de garde.
-        if (CHALLENGE_ADAPTIVE_SIZING_ENABLED
-                and tp_gain_usd is not None
-                and tp_gain_usd > 0
-                and self.cum_pnl < self.profit_target):
+        if (
+            CHALLENGE_ADAPTIVE_SIZING_ENABLED
+            and tp_gain_usd is not None
+            and tp_gain_usd > 0
+            and self.cum_pnl < self.profit_target
+        ):
             rdp_post_tp = self.realized_day_pnl + float(tp_gain_usd)
             if rdp_post_tp > CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD:
                 return False, (
@@ -305,9 +307,13 @@ class PortfolioRiskManager:
 
         return True, "ok"
 
-    def register_open(self, trade_id: str, risk_usd: float,
-                      when: Optional[datetime] = None,
-                      metadata: Optional[Dict] = None):
+    def register_open(
+        self,
+        trade_id: str,
+        risk_usd: float,
+        when: datetime | None = None,
+        metadata: dict | None = None,
+    ):
         """
         Enregistre un ordre limite armé.
         Réserve le risque dollar dans le pool pending — NE compte PAS
@@ -321,8 +327,7 @@ class PortfolioRiskManager:
             metadata=metadata or {},
         )
 
-    def register_fill(self, trade_id: str,
-                      when: Optional[datetime] = None) -> bool:
+    def register_fill(self, trade_id: str, when: datetime | None = None) -> bool:
         """
         Confirme le fill d'un ordre limite.
         Déplace trade_id de pending_orders → active_positions et
@@ -338,8 +343,9 @@ class PortfolioRiskManager:
         self.daily_fills_count += 1
         return True
 
-    def register_close(self, trade_id: str, pnl: float,
-                       when: Optional[datetime] = None) -> Tuple[bool, str]:
+    def register_close(
+        self, trade_id: str, pnl: float, when: datetime | None = None
+    ) -> tuple[bool, str]:
         """
         Enregistre la clôture d'une position.
         Met à jour cum_pnl, peak_pnl, realized_day_pnl.
@@ -360,9 +366,7 @@ class PortfolioRiskManager:
             breaches.append(f"daily_loss_breached_{self.realized_day_pnl:.0f}")
         trail_floor = self.peak_pnl - self.trailing_dd_limit
         if self.cum_pnl <= trail_floor:
-            breaches.append(
-                f"trailing_dd_breached_dd={self.cum_pnl - trail_floor:.0f}"
-            )
+            breaches.append(f"trailing_dd_breached_dd={self.cum_pnl - trail_floor:.0f}")
         if breaches:
             return True, ";".join(breaches)
         return False, "ok"
@@ -388,7 +392,7 @@ class PortfolioRiskManager:
         self.pending_orders.clear()
         self.active_positions.clear()
 
-    def status(self) -> Dict:
+    def status(self) -> dict:
         """Snapshot lisible pour monitoring / logging."""
         reserved = self._total_reserved_risk()
         trail_floor = self.peak_pnl - self.trailing_dd_limit
@@ -396,7 +400,8 @@ class PortfolioRiskManager:
         in_combine = self.cum_pnl < self.profit_target
         consistency_cap_remaining = (
             CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD - self.realized_day_pnl
-            if in_combine and CHALLENGE_ADAPTIVE_SIZING_ENABLED else None
+            if in_combine and CHALLENGE_ADAPTIVE_SIZING_ENABLED
+            else None
         )
         return {
             "cum_pnl": self.cum_pnl,
@@ -405,18 +410,12 @@ class PortfolioRiskManager:
             "current_day": str(self.current_day) if self.current_day else None,
             "consec_loss_days": self.consec_loss_days,
             "daily_fills_count": self.daily_fills_count,
-            "daily_fills_remaining": max(
-                0, self.user_max_trades_per_day - self.daily_fills_count
-            ),
-            "user_daily_loss_remaining": max(
-                0.0, self.user_daily_loss_max + self.realized_day_pnl
-            ),
+            "daily_fills_remaining": max(0, self.user_max_trades_per_day - self.daily_fills_count),
+            "user_daily_loss_remaining": max(0.0, self.user_daily_loss_max + self.realized_day_pnl),
             "n_pending": len(self.pending_orders),
             "n_active": len(self.active_positions),
             "reserved_risk_usd": reserved,
-            "slack_daily": (
-                self.daily_loss_limit + self.realized_day_pnl - reserved
-            ),
+            "slack_daily": (self.daily_loss_limit + self.realized_day_pnl - reserved),
             "slack_trail": self.cum_pnl - trail_floor - reserved,
             "target_remaining": self.profit_target - self.cum_pnl,
             # Challenge adaptatif — exposé pour core/adaptive_sizing.py
@@ -424,12 +423,10 @@ class PortfolioRiskManager:
             "last_reset_month": self.last_reset_month,
             "last_reset_year": self.last_reset_year,
             "last_monthly_reset_at": (
-                self.last_monthly_reset_at.isoformat()
-                if self.last_monthly_reset_at else None
+                self.last_monthly_reset_at.isoformat() if self.last_monthly_reset_at else None
             ),
             "challenge_bypass_user_daily": (
-                CHALLENGE_ADAPTIVE_SIZING_ENABLED
-                and CHALLENGE_BYPASS_USER_DAILY_LIMIT
+                CHALLENGE_ADAPTIVE_SIZING_ENABLED and CHALLENGE_BYPASS_USER_DAILY_LIMIT
             ),
             # Garde-fou cohérence 50% Topstep — None si hors Combine
             "consistency_cap_max": CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,

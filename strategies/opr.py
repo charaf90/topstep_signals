@@ -9,25 +9,28 @@ Production : core/opr.py (live_runner.py l'importe directement — NE PAS MODIFI
 Ce module est le wrapper backtest/recherche uniquement.
 """
 
-import pandas as pd
 from zoneinfo import ZoneInfo
-from pathlib import Path
+
+import pandas as pd
 
 import config as cfg
 from config import (
-    INSTRUMENTS, OPR_STRATEGY_VERSION,
-    OPR_TIMEZONE, OPR_MAX_TRADES_PER_DAY,
-    OPR_SL_ATR_MULT, OPR_TP_ATR_MULT,
+    CONSEC_LOSS_PAUSE_DAYS,
     CUTOFF_HOUR_UTC,
-    DAILY_STOP_AFTER_SL, CONSEC_LOSS_PAUSE_DAYS, DAILY_LOCKIN_THRESHOLD,
+    DAILY_LOCKIN_THRESHOLD,
+    DAILY_STOP_AFTER_SL,
+    OPR_SL_ATR_MULT,
+    OPR_STRATEGY_VERSION,
+    OPR_TIMEZONE,
+    OPR_TP_ATR_MULT,
 )
 from core.opr import run_opr_day
 from core.risk_topstep import trade_allowed
 
 # ── Identité de la stratégie ─────────────────────────────────────────────────
-STRATEGY_ID = OPR_STRATEGY_VERSION          # "opr-v4"
-TICKERS     = ["MES1", "NQ1", "YM1"]
-CSV_SUFFIX  = "_opr"
+STRATEGY_ID = OPR_STRATEGY_VERSION  # "opr-v4"
+TICKERS = ["MES1", "NQ1", "YM1"]
+CSV_SUFFIX = "_opr"
 
 # ── Grille d'optimisation (walk-forward via core/optimizer.py) ───────────────
 PARAM_GRID = {
@@ -39,6 +42,7 @@ PARAM_GRID = {
 # ══════════════════════════════════════════════════════════════════════════════
 # Backtest
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def run_backtest(
     df_15m: pd.DataFrame,
@@ -62,13 +66,14 @@ def run_backtest(
         cfg.OPR_SL_ATR_MULT[ticker] = sl
         cfg.OPR_TP_ATR_MULT[ticker] = tp
         from core import opr as _opr
+
         _opr.OPR_SL_ATR_MULT[ticker] = sl
         _opr.OPR_TP_ATR_MULT[ticker] = tp
 
     try:
-        trades_out      = []
+        trades_out = []
         cum_pnl = peak_pnl = 0.0
-        consec_loss_days    = 0
+        consec_loss_days = 0
 
         if df_15m.index.tz is None:
             idx_ny = df_15m.index.tz_localize("UTC").tz_convert(tz)
@@ -84,9 +89,7 @@ def run_backtest(
                 continue
 
             if topstep_guard:
-                allowed, _ = trade_allowed(
-                    day_pnl=0.0, cum_pnl=cum_pnl, peak_pnl=peak_pnl
-                )
+                allowed, _ = trade_allowed(day_pnl=0.0, cum_pnl=cum_pnl, peak_pnl=peak_pnl)
                 if not allowed:
                     continue
 
@@ -98,47 +101,59 @@ def run_backtest(
 
             day_trades = []
             for sig, res in zip(signals, sim_results):
-                day_trades.append({
-                    "date":         ds,
-                    "strategy":     "OPR",
-                    "dir":          sig["direction"],
-                    "entry":        sig["entry"],
-                    "sl":           sig["sl"],
-                    "tp":           sig["tp"],
-                    "sl_dist":      sig["sl_dist"],
-                    "tp_dist":      sig["tp_dist"],
-                    "rr":           sig["rr"],
-                    "n_ct":         sig["n_ct"],
-                    "risk_$":       sig["risk"],
-                    "regime":       regime or "?",
-                    "zone_low":     sig["zone_low"],
-                    "zone_high":    sig["zone_high"],
-                    "trigger_time": sig.get("trigger_time"),
-                    **res,
-                })
+                day_trades.append(
+                    {
+                        "date": ds,
+                        "strategy": "OPR",
+                        "dir": sig["direction"],
+                        "entry": sig["entry"],
+                        "sl": sig["sl"],
+                        "tp": sig["tp"],
+                        "sl_dist": sig["sl_dist"],
+                        "tp_dist": sig["tp_dist"],
+                        "rr": sig["rr"],
+                        "n_ct": sig["n_ct"],
+                        "risk_$": sig["risk"],
+                        "regime": regime or "?",
+                        "zone_low": sig["zone_low"],
+                        "zone_high": sig["zone_high"],
+                        "trigger_time": sig.get("trigger_time"),
+                        **res,
+                    }
+                )
 
-            filled     = [t for t in day_trades if t["result"] != "NOT_FILLED"]
+            filled = [t for t in day_trades if t["result"] != "NOT_FILLED"]
             not_filled = [t for t in day_trades if t["result"] == "NOT_FILLED"]
             filled.sort(key=lambda t: t.get("fill_time") or "")
 
             kept = []
-            breaker_armed  = False
-            running_pnl    = 0.0
-            cancelled_cb   = []
+            breaker_armed = False
+            running_pnl = 0.0
+            cancelled_cb = []
             for t in filled:
                 if breaker_armed:
                     cancelled_cb.append(t)
                     continue
                 kept.append(t)
                 running_pnl += t["pnl"]
-                if DAILY_STOP_AFTER_SL and t["result"] == "SL":
-                    breaker_armed = True
-                elif DAILY_LOCKIN_THRESHOLD > 0 and running_pnl >= DAILY_LOCKIN_THRESHOLD:
+                if (
+                    DAILY_STOP_AFTER_SL
+                    and t["result"] == "SL"
+                    or DAILY_LOCKIN_THRESHOLD > 0
+                    and running_pnl >= DAILY_LOCKIN_THRESHOLD
+                ):
                     breaker_armed = True
 
             for t in cancelled_cb:
-                t.update({"result": "NOT_FILLED", "pnl": 0,
-                          "fill_time": None, "exit_time": None, "exit": None})
+                t.update(
+                    {
+                        "result": "NOT_FILLED",
+                        "pnl": 0,
+                        "fill_time": None,
+                        "exit_time": None,
+                        "exit": None,
+                    }
+                )
 
             trades_out.extend(kept + not_filled + cancelled_cb)
 
@@ -156,6 +171,7 @@ def run_backtest(
         cfg.OPR_SL_ATR_MULT[ticker] = sl_orig
         cfg.OPR_TP_ATR_MULT[ticker] = tp_orig
         from core import opr as _opr
+
         _opr.OPR_SL_ATR_MULT[ticker] = sl_orig
         _opr.OPR_TP_ATR_MULT[ticker] = tp_orig
 
@@ -166,6 +182,7 @@ def run_backtest(
 # Chart d'une journée (appelé par backtester pour 10 jours aléatoires)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def plot_day(
     df_15m: pd.DataFrame,
     ticker: str,
@@ -174,29 +191,35 @@ def plot_day(
     output_path: str,
 ):
     """Génère le chart OPR d'une journée."""
-    from core.analysis_chart import plot_day_analysis
-    from core.opr import run_opr_day
     from zoneinfo import ZoneInfo
 
-    tz     = ZoneInfo(OPR_TIMEZONE)
+    from core.analysis_chart import plot_day_analysis
+    from core.opr import run_opr_day
+
+    tz = ZoneInfo(OPR_TIMEZONE)
     day_ny = pd.Timestamp(date_str).tz_localize(tz)
 
     _, _, opr_zone = run_opr_day(df_15m, ticker, day_ny)
     cutoff = pd.Timestamp(f"{date_str} {CUTOFF_HOUR_UTC:02d}:00:00")
 
     # us_end DST-aware
-    us_end = (day_ny.replace(hour=16, minute=30)
-              .tz_convert("UTC").tz_localize(None))
+    us_end = day_ny.replace(hour=16, minute=30).tz_convert("UTC").tz_localize(None)
 
     zones_for_chart = []
     if opr_zone:
-        zones_for_chart.append({
-            "low": opr_zone["low"], "high": opr_zone["high"],
-            "mid": opr_zone["mid"], "quality": 100.0,
-            "n_tf": 1, "touches": 1,
-            "tfs": ["OPR"], "dominant_tf": "OPR",
-            "start_time": opr_zone["time_utc"],
-        })
+        zones_for_chart.append(
+            {
+                "low": opr_zone["low"],
+                "high": opr_zone["high"],
+                "mid": opr_zone["mid"],
+                "quality": 100.0,
+                "n_tf": 1,
+                "touches": 1,
+                "tfs": ["OPR"],
+                "dominant_tf": "OPR",
+                "start_time": opr_zone["time_utc"],
+            }
+        )
 
     plot_day_analysis(
         df_15m=df_15m,

@@ -8,19 +8,19 @@ avec un signal v4, et on vérifie que le wrapper v5.1 :
 
 Tous les tests sont causaux (utilisent des bars FERMÉES uniquement).
 """
+
 from __future__ import annotations
 
-from pathlib import Path
+from datetime import UTC
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
 
+from config import OPR_TIMEZONE
+from core.data import load_csv
 from core.opr import run_opr_day
 from core.opr_v5_1 import get_opr_v5_1_live_signals
-from config import OPR_TIMEZONE, OPR_V5_1_F2_MIN_ATR
-from core.data import load_csv
-
 
 _TZ = ZoneInfo(OPR_TIMEZONE)
 
@@ -53,15 +53,14 @@ def _truncate_at(df: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
 # Test 1 : MES1 → pass-through strict (v4)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_mes1_passthrough_to_v4(df_mes1):
     """MES1 n'étant PAS dans OPR_V5_1_LIVE_TICKERS, le wrapper doit retourner
     exactement le même output que run_opr_day."""
-    day = _trading_day("2025-11-03")   # un lundi OOS aléatoire
+    day = _trading_day("2025-11-03")  # un lundi OOS aléatoire
 
     sigs_v4, trades_v4, zone_v4 = run_opr_day(df_mes1, "MES1", day)
-    sigs_v51, trades_v51, zone_v51 = get_opr_v5_1_live_signals(
-        df_mes1, "MES1", day
-    )
+    sigs_v51, trades_v51, zone_v51 = get_opr_v5_1_live_signals(df_mes1, "MES1", day)
 
     # Pass-through strict : objets identiques
     assert sigs_v51 == sigs_v4
@@ -72,6 +71,7 @@ def test_mes1_passthrough_to_v4(df_mes1):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 2 : NQ1 avec timeline complète → F2 a eu le temps de cross
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_nq1_with_full_day_emits_signal(df_nq1):
     """Sur une journée complète où v5.1 backtest a fillé, le wrapper avec
@@ -104,6 +104,7 @@ def test_nq1_with_full_day_emits_signal(df_nq1):
 # Test 3 : NQ1 immédiatement après trigger → pas encore d'émission
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_nq1_at_trigger_time_emits_nothing(df_nq1):
     """
     Si on tronque les bars EXACTEMENT au trigger_time, il n'y a pas encore
@@ -125,8 +126,7 @@ def test_nq1_at_trigger_time_emits_nothing(df_nq1):
 
     # Tronquer juste avant la bougie suivant le trigger pour ne PAS avoir de
     # bars post-trigger fermées. df_nq1.index est en UTC naïf.
-    cutoff_utc = (trigger_ts + pd.Timedelta(minutes=1)
-                   ).tz_convert("UTC").tz_localize(None)
+    cutoff_utc = (trigger_ts + pd.Timedelta(minutes=1)).tz_convert("UTC").tz_localize(None)
     df_truncated = _truncate_at(df_nq1, cutoff_utc)
 
     sigs_v51, _, _ = get_opr_v5_1_live_signals(df_truncated, "NQ1", day)
@@ -145,6 +145,7 @@ def test_nq1_at_trigger_time_emits_nothing(df_nq1):
 # Test 4 : Idempotence — appels répétés donnent le même résultat
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_idempotent_repeated_calls(df_nq1):
     """Appeler le wrapper plusieurs fois sur les mêmes données doit produire
     exactement le même résultat (déterministe, sans état caché)."""
@@ -162,9 +163,11 @@ def test_idempotent_repeated_calls(df_nq1):
 # Test 5 : Pass-through pour ticker non configuré
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_unknown_ticker_passthrough(df_mes1, monkeypatch):
     """Si OPR_V5_1_LIVE_TICKERS est vidé temporairement, MES1 reste passthrough."""
     import core.opr_v5_1 as mod
+
     monkeypatch.setattr(mod, "OPR_V5_1_LIVE_TICKERS", [])
 
     day = _trading_day("2025-11-03")
@@ -177,9 +180,11 @@ def test_unknown_ticker_passthrough(df_mes1, monkeypatch):
 # Test 6 : threshold None → comportement v4 strict
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_threshold_none_yields_v4(df_nq1, monkeypatch):
     """Si f2_min_atr est None pour un ticker, le wrapper retourne v4 strict."""
     import core.opr_v5_1 as mod
+
     monkeypatch.setattr(mod, "OPR_V5_1_F2_MIN_ATR", {"NQ1": None, "YM1": None})
 
     day = _trading_day("2025-12-01")
@@ -191,6 +196,7 @@ def test_threshold_none_yields_v4(df_nq1, monkeypatch):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 7-9 : Phase C — intégration M1 buffer (paramètres optionnels)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _trigger_ts_for(df, ticker: str, day: pd.Timestamp) -> pd.Timestamp:
     """Helper : retourne le trigger_time du premier signal v4 du jour."""
@@ -209,8 +215,8 @@ def test_m1_buffer_overrides_m15_extremum(df_nq1):
     post-trigger, l'excursion calculée doit utiliser le high M1 (et donc
     déclencher l'émission plus tôt ou avec un F2 plus élevé que sans buffer).
     """
-    from broker.m1_buffer import M1Buffer, M1Bar
-    from datetime import timezone
+
+    from broker.m1_buffer import M1Bar, M1Buffer
 
     day = _trading_day("2025-12-01")
     trigger_ts = _trigger_ts_for(df_nq1, "NQ1", day)
@@ -232,16 +238,19 @@ def test_m1_buffer_overrides_m15_extremum(df_nq1):
     spike_high = opr_high + (baseline_f2 + 0.5) * atr_daily  # bien au-dessus seuil
     spike_bar = M1Bar(
         contract_id="CON.F.US.MNQ.M26",
-        start_ts=trigger_ts.tz_convert("UTC").to_pydatetime().replace(
-            tzinfo=timezone.utc
-        ),
-        open=spike_high, high=spike_high, low=spike_high - 1,
-        close=spike_high - 0.5, volume=10,
+        start_ts=trigger_ts.tz_convert("UTC").to_pydatetime().replace(tzinfo=UTC),
+        open=spike_high,
+        high=spike_high,
+        low=spike_high - 1,
+        close=spike_high - 0.5,
+        volume=10,
     )
     buf.inject_bars([spike_bar])
 
     sigs_m1, _, _ = get_opr_v5_1_live_signals(
-        df_nq1, "NQ1", day,
+        df_nq1,
+        "NQ1",
+        day,
         m1_buffer=buf,
         contract_id="CON.F.US.MNQ.M26",
     )
@@ -261,7 +270,9 @@ def test_m1_buffer_empty_falls_back_to_m15(df_nq1):
 
     sigs_baseline, _, _ = get_opr_v5_1_live_signals(df_nq1, "NQ1", day)
     sigs_with_empty_buf, _, _ = get_opr_v5_1_live_signals(
-        df_nq1, "NQ1", day,
+        df_nq1,
+        "NQ1",
+        day,
         m1_buffer=buf,
         contract_id="CON.F.US.MNQ.M26",
     )
@@ -269,9 +280,7 @@ def test_m1_buffer_empty_falls_back_to_m15(df_nq1):
     # Même résultat numérique (mêmes signals)
     assert len(sigs_baseline) == len(sigs_with_empty_buf)
     for s1, s2 in zip(sigs_baseline, sigs_with_empty_buf):
-        assert s1["v5_1_f2_running_at_emit"] == pytest.approx(
-            s2["v5_1_f2_running_at_emit"]
-        )
+        assert s1["v5_1_f2_running_at_emit"] == pytest.approx(s2["v5_1_f2_running_at_emit"])
     # Annotation source = M15 pour les deux
     for s in sigs_with_empty_buf:
         assert s["v5_1_f2_source"] == "M15"
@@ -285,7 +294,9 @@ def test_m1_buffer_without_contract_id_uses_m15(df_nq1):
     buf = M1Buffer(max_minutes=10)
     # Même sans contract_id, le code doit ignorer le buffer
     sigs, _, _ = get_opr_v5_1_live_signals(
-        df_nq1, "NQ1", day,
+        df_nq1,
+        "NQ1",
+        day,
         m1_buffer=buf,
         contract_id=None,
     )

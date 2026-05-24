@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import calendar
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from config import (
     CHALLENGE_DAY_PROFIT_HARD_CAP_USD,
@@ -70,10 +70,10 @@ def trading_days_until(today: datetime | date, reset_day: int = CHALLENGE_RESET_
 
 
 def compute_factors(
-    rm_status: Dict[str, Any],
-    signal: Dict[str, Any],
+    rm_status: dict[str, Any],
+    signal: dict[str, Any],
     today: datetime,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Calcule tous les facteurs intermédiaires nécessaires au sizing adaptatif.
     Utilisé à la fois pour le calcul du risque et le logging.
@@ -147,10 +147,10 @@ def compute_factors(
 
 
 def adaptive_risk_usd(
-    rm_status: Dict[str, Any],
-    signal: Dict[str, Any],
+    rm_status: dict[str, Any],
+    signal: dict[str, Any],
     today: datetime,
-) -> Tuple[float, Dict[str, float]]:
+) -> tuple[float, dict[str, float]]:
     """
     Calcule le risque par trade adaptatif (USD).
 

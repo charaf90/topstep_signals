@@ -29,16 +29,15 @@ Conventions :
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. STATIONARY BOOTSTRAP
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _stationary_bootstrap_indices(
     n: int,
@@ -135,6 +134,7 @@ def block_bootstrap(
 # 2. MONTE CARLO PERMUTATION DU DD
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def monte_carlo_drawdown(
     trades: pd.DataFrame,
     n_iterations: int = 1000,
@@ -176,8 +176,8 @@ def monte_carlo_drawdown(
     return {
         "n_iterations": int(n_iterations),
         "dd_median": float(np.median(dd_distribution)),
-        "dd_p95_worst": float(np.percentile(dd_distribution, 5)),   # 95% au-dessus
-        "dd_p99_worst": float(np.percentile(dd_distribution, 1)),   # 99% au-dessus
+        "dd_p95_worst": float(np.percentile(dd_distribution, 5)),  # 95% au-dessus
+        "dd_p99_worst": float(np.percentile(dd_distribution, 1)),  # 99% au-dessus
         "dd_worst": float(dd_distribution.min()),
         "dd_topstep_breach_pct": breach_pct,
         "topstep_dd_remaining": float(topstep_dd_remaining),
@@ -187,6 +187,7 @@ def monte_carlo_drawdown(
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. PROBABILISTIC SHARPE RATIO (Bailey & López de Prado 2012)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def probabilistic_sharpe_ratio(
     pnls: np.ndarray | pd.Series,
@@ -211,13 +212,13 @@ def probabilistic_sharpe_ratio(
     if sigma == 0:
         return {"error": "Écart-type nul"}
 
-    sr = mu / sigma                                # Sharpe par trade
+    sr = mu / sigma  # Sharpe par trade
     sr_ann = sr * math.sqrt(annualization_factor)
 
     skew = float(stats.skew(arr, bias=False))
     kurt = float(stats.kurtosis(arr, fisher=False, bias=False))  # 3 = normal
 
-    denom_sq = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr ** 2
+    denom_sq = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr**2
     if denom_sq <= 0 or not np.isfinite(denom_sq):
         return {"error": "Dénominateur invalide pour PSR"}
 
@@ -239,6 +240,7 @@ def probabilistic_sharpe_ratio(
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. CORRECTION DE BONFERRONI
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def bonferroni_threshold(alpha: float = 0.05, n_tests: int = 1) -> dict:
     """
@@ -266,6 +268,7 @@ def bonferroni_threshold(alpha: float = 0.05, n_tests: int = 1) -> dict:
 # 5. WHITE'S REALITY CHECK (simplifié)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def reality_check(
     pnls_per_strategy: dict[str, np.ndarray],
     n_iterations: int = 1000,
@@ -284,8 +287,9 @@ def reality_check(
     """
     rng = np.random.default_rng(seed)
 
-    means = {name: float(np.mean(pnls)) for name, pnls in pnls_per_strategy.items()
-             if len(pnls) > 0}
+    means = {
+        name: float(np.mean(pnls)) for name, pnls in pnls_per_strategy.items() if len(pnls) > 0
+    }
     if not means:
         return {"error": "Aucune stratégie valide"}
 
@@ -300,7 +304,7 @@ def reality_check(
             if len(pnls) == 0:
                 continue
             sample = rng.choice(pnls, size=len(pnls), replace=True)
-            centered = sample.mean() - means[name]   # centrage sous H0
+            centered = sample.mean() - means[name]  # centrage sous H0
             sample_means.append(centered)
         boot_max[it] = max(sample_means) if sample_means else 0.0
 
@@ -322,11 +326,18 @@ def reality_check(
 # 6. STRESS PAR RÉGIME
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _regime_stats(subset: pd.DataFrame, label: str) -> dict:
     """Statistiques d'un sous-ensemble de trades."""
     if len(subset) == 0:
-        return {"regime": label, "n_trades": 0, "pf": None,
-                "pnl_total": 0.0, "wr_pct": None, "verdict": "—"}
+        return {
+            "regime": label,
+            "n_trades": 0,
+            "pf": None,
+            "pnl_total": 0.0,
+            "wr_pct": None,
+            "verdict": "—",
+        }
     gains = float(subset.loc[subset["pnl"] > 0, "pnl"].sum())
     losses = float(-subset.loc[subset["pnl"] < 0, "pnl"].sum())
     pf = gains / losses if losses > 0 else (float("inf") if gains > 0 else 0.0)
@@ -360,8 +371,8 @@ def regime_stress_test(trades: pd.DataFrame) -> pd.DataFrame:
 
     if "regime" in trades.columns:
         rows.append(_regime_stats(trades[trades["regime"] == "trending"], "trending"))
-        rows.append(_regime_stats(trades[trades["regime"] == "ranging"],  "ranging"))
-        rows.append(_regime_stats(trades[trades["regime"] == "neutral"],  "neutral"))
+        rows.append(_regime_stats(trades[trades["regime"] == "ranging"], "ranging"))
+        rows.append(_regime_stats(trades[trades["regime"] == "neutral"], "neutral"))
 
     if "atr_pct" in trades.columns and trades["atr_pct"].notna().any():
         rows.append(_regime_stats(trades[trades["atr_pct"] >= 0.75], "vol_high"))
@@ -373,14 +384,17 @@ def regime_stress_test(trades: pd.DataFrame) -> pd.DataFrame:
         rows.append(_regime_stats(macro, "macro_day"))
         rows.append(_regime_stats(non_macro, "non_macro_day"))
 
-    return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=["regime", "n_trades", "pf", "pnl_total", "wr_pct", "verdict"]
+    return (
+        pd.DataFrame(rows)
+        if rows
+        else pd.DataFrame(columns=["regime", "n_trades", "pf", "pnl_total", "wr_pct", "verdict"])
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 7. WORST-CASE CLUSTERING
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def worst_case_clustering(trades: pd.DataFrame, n_worst: int = 20) -> dict:
     """
@@ -435,6 +449,7 @@ def worst_case_clustering(trades: pd.DataFrame, n_worst: int = 20) -> dict:
 # 8. PIPELINE COMPLET
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def run_full_robustness(
     trades: pd.DataFrame,
     n_strategies_tested: int = 1,
@@ -456,21 +471,24 @@ def run_full_robustness(
     pnls = trades["pnl"].to_numpy() if "pnl" in trades.columns else np.array([])
 
     return {
-        "n_trades":          int(len(trades)),
-        "bootstrap_pf":      block_bootstrap(trades, metric="profit_factor", threshold=1.0, seed=seed),
-        "bootstrap_pnl":     block_bootstrap(trades, metric="pnl",            threshold=0.0, seed=seed),
-        "bootstrap_sharpe":  block_bootstrap(trades, metric="sharpe",         threshold=0.0, seed=seed),
-        "monte_carlo_dd":    monte_carlo_drawdown(trades, topstep_dd_remaining=topstep_dd_remaining, seed=seed),
-        "bonferroni":        bonferroni_threshold(alpha=0.05, n_tests=n_strategies_tested),
-        "psr":               probabilistic_sharpe_ratio(pnls, sr_target=0.0),
-        "regime_stress":     regime_stress_test(trades).to_dict("records"),
-        "worst_clustering":  worst_case_clustering(trades, n_worst=20),
+        "n_trades": int(len(trades)),
+        "bootstrap_pf": block_bootstrap(trades, metric="profit_factor", threshold=1.0, seed=seed),
+        "bootstrap_pnl": block_bootstrap(trades, metric="pnl", threshold=0.0, seed=seed),
+        "bootstrap_sharpe": block_bootstrap(trades, metric="sharpe", threshold=0.0, seed=seed),
+        "monte_carlo_dd": monte_carlo_drawdown(
+            trades, topstep_dd_remaining=topstep_dd_remaining, seed=seed
+        ),
+        "bonferroni": bonferroni_threshold(alpha=0.05, n_tests=n_strategies_tested),
+        "psr": probabilistic_sharpe_ratio(pnls, sr_target=0.0),
+        "regime_stress": regime_stress_test(trades).to_dict("records"),
+        "worst_clustering": worst_case_clustering(trades, n_worst=20),
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 9. FORMATAGE DE SORTIE
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def format_summary_markdown(results: dict) -> str:
     """Génère un bloc markdown prêt à insérer dans output/rapport_<id>.md."""
@@ -479,15 +497,17 @@ def format_summary_markdown(results: dict) -> str:
     # Bootstrap
     bp = results.get("bootstrap_pf", {})
     if "error" not in bp:
-        lines.append(f"**Bootstrap stationnaire** (n_trades={bp['n_trades']}, "
-                     f"block_size={bp['block_size']}, {bp['n_iterations']} itér.)")
+        lines.append(
+            f"**Bootstrap stationnaire** (n_trades={bp['n_trades']}, "
+            f"block_size={bp['block_size']}, {bp['n_iterations']} itér.)"
+        )
         lines.append("")
         lines.append("| Métrique | P5 | Médian | P95 | P(> seuil) |")
         lines.append("|---|---|---|---|---|")
         for key, label, fmt in [
-            ("bootstrap_pf",     "Profit Factor",     "{:.2f}"),
-            ("bootstrap_pnl",    "P&L net ($)",       "{:+.0f}"),
-            ("bootstrap_sharpe", "Sharpe annualisé",  "{:.2f}"),
+            ("bootstrap_pf", "Profit Factor", "{:.2f}"),
+            ("bootstrap_pnl", "P&L net ($)", "{:+.0f}"),
+            ("bootstrap_sharpe", "Sharpe annualisé", "{:.2f}"),
         ]:
             r = results.get(key, {})
             if "error" in r:
@@ -501,24 +521,27 @@ def format_summary_markdown(results: dict) -> str:
     # Bonferroni
     bf = results.get("bonferroni", {})
     if bf:
-        lines.append(f"**Correction Bonferroni** : {bf['n_tests']} tests · "
-                     f"seuil bootstrap requis ≥ **{bf['bootstrap_threshold_pct']:.2f} %**")
+        lines.append(
+            f"**Correction Bonferroni** : {bf['n_tests']} tests · "
+            f"seuil bootstrap requis ≥ **{bf['bootstrap_threshold_pct']:.2f} %**"
+        )
         lines.append("")
 
     # PSR
     psr = results.get("psr", {})
     if "error" not in psr:
-        lines.append(f"**Probabilistic Sharpe Ratio (PSR)** : "
-                     f"Sharpe ann. = {psr['sharpe_annualized']:.2f} · "
-                     f"PSR(0) = **{psr['psr_pct']:.1f} %** "
-                     f"(skew={psr['skewness']:.2f}, kurt={psr['kurtosis']:.2f})")
+        lines.append(
+            f"**Probabilistic Sharpe Ratio (PSR)** : "
+            f"Sharpe ann. = {psr['sharpe_annualized']:.2f} · "
+            f"PSR(0) = **{psr['psr_pct']:.1f} %** "
+            f"(skew={psr['skewness']:.2f}, kurt={psr['kurtosis']:.2f})"
+        )
         lines.append("")
 
     # Monte Carlo DD
     mc = results.get("monte_carlo_dd", {})
     if "error" not in mc:
-        lines.append("**Monte Carlo permutation du DD** "
-                     f"({mc['n_iterations']} itérations)")
+        lines.append(f"**Monte Carlo permutation du DD** ({mc['n_iterations']} itérations)")
         lines.append("")
         lines.append("| Métrique | Valeur |")
         lines.append("|---|---|")
@@ -526,8 +549,10 @@ def format_summary_markdown(results: dict) -> str:
         lines.append(f"| DD P95 (queue) | ${mc['dd_p95_worst']:+.0f} |")
         lines.append(f"| DD P99 (queue) | ${mc['dd_p99_worst']:+.0f} |")
         lines.append(f"| DD pire-cas | ${mc['dd_worst']:+.0f} |")
-        lines.append(f"| P(DD > limite Topstep ${mc['topstep_dd_remaining']:.0f}) | "
-                     f"{mc['dd_topstep_breach_pct']:.1f} % |")
+        lines.append(
+            f"| P(DD > limite Topstep ${mc['topstep_dd_remaining']:.0f}) | "
+            f"{mc['dd_topstep_breach_pct']:.1f} % |"
+        )
         lines.append("")
 
     # Régimes
@@ -540,16 +565,20 @@ def format_summary_markdown(results: dict) -> str:
         for r in regime_rows:
             pf = f"{r['pf']:.2f}" if r.get("pf") is not None else "—"
             wr = f"{r['wr_pct']:.0f}%" if r.get("wr_pct") is not None else "—"
-            lines.append(f"| {r['regime']} | {r['n_trades']} | {pf} | "
-                         f"${r['pnl_total']:+.0f} | {wr} | {r['verdict']} |")
+            lines.append(
+                f"| {r['regime']} | {r['n_trades']} | {pf} | "
+                f"${r['pnl_total']:+.0f} | {wr} | {r['verdict']} |"
+            )
         lines.append("")
 
     # Clustering
     wc = results.get("worst_clustering", {})
     if "error" not in wc:
-        lines.append(f"**Worst-case clustering** (top {wc['n_worst']} pires trades) : "
-                     f"perte cumulée ${wc['total_loss']:+.0f} sur "
-                     f"{wc['date_range_days']} jours ({wc['concentration_period']})")
+        lines.append(
+            f"**Worst-case clustering** (top {wc['n_worst']} pires trades) : "
+            f"perte cumulée ${wc['total_loss']:+.0f} sur "
+            f"{wc['date_range_days']} jours ({wc['concentration_period']})"
+        )
         if wc.get("concentration_flags"):
             lines.append(f"⚠️ Drapeaux : {', '.join(wc['concentration_flags'])}")
         lines.append("")
@@ -595,39 +624,42 @@ if __name__ == "__main__":
     # Génère 200 trades synthétiques avec edge léger positif
     rng = np.random.default_rng(123)
     n = 200
-    pnls = rng.normal(loc=15, scale=80, size=n)        # espérance +$15, vol $80
+    pnls = rng.normal(loc=15, scale=80, size=n)  # espérance +$15, vol $80
     dates = pd.date_range("2025-10-01", periods=n, freq="3h").strftime("%Y-%m-%d")
-    regimes = rng.choice(["trending", "ranging", "neutral"],
-                         size=n, p=[0.4, 0.4, 0.2])
+    regimes = rng.choice(["trending", "ranging", "neutral"], size=n, p=[0.4, 0.4, 0.2])
     tickers = rng.choice(["MES1", "NQ1", "YM1"], size=n)
 
-    df = pd.DataFrame({
-        "date":         dates,
-        "dir":          rng.choice(["long", "short"], size=n),
-        "entry":        100.0,
-        "sl":           99.0,
-        "tp":           102.0,
-        "sl_dist":      1.0,
-        "tp_dist":      2.0,
-        "rr":           2.0,
-        "n_ct":         1,
-        "result":       np.where(pnls > 0, "TP", "SL"),
-        "pnl":          pnls.round(2),
-        "fill_time":    pd.NaT,
-        "exit_time":    pd.NaT,
-        "exit":         100.0,
-        "regime":       regimes,
-        "ticker":       tickers,
-        "atr_pct":      rng.uniform(0, 1, size=n),
-        "is_macro_day": rng.random(size=n) < 0.1,
-    })
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "dir": rng.choice(["long", "short"], size=n),
+            "entry": 100.0,
+            "sl": 99.0,
+            "tp": 102.0,
+            "sl_dist": 1.0,
+            "tp_dist": 2.0,
+            "rr": 2.0,
+            "n_ct": 1,
+            "result": np.where(pnls > 0, "TP", "SL"),
+            "pnl": pnls.round(2),
+            "fill_time": pd.NaT,
+            "exit_time": pd.NaT,
+            "exit": 100.0,
+            "regime": regimes,
+            "ticker": tickers,
+            "atr_pct": rng.uniform(0, 1, size=n),
+            "is_macro_day": rng.random(size=n) < 0.1,
+        }
+    )
 
-    print(f"\nGénéré : {n} trades, P&L total = ${df['pnl'].sum():+.0f}, "
-          f"WR = {(df['pnl'] > 0).mean()*100:.1f}%\n")
+    print(
+        f"\nGénéré : {n} trades, P&L total = ${df['pnl'].sum():+.0f}, "
+        f"WR = {(df['pnl'] > 0).mean() * 100:.1f}%\n"
+    )
 
     results = run_full_robustness(
         df,
-        n_strategies_tested=16,           # ex : grid 4×4
+        n_strategies_tested=16,  # ex : grid 4×4
         topstep_dd_remaining=2000.0,
         seed=42,
     )

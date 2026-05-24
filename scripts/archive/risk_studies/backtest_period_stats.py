@@ -14,10 +14,8 @@ OPR/MES1 (v4) volontairement exclu (drag identifié).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,9 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "OPR/NQ1 (v5.1)": ROOT / "output/backtest_NQ1_opr_v5_1.csv",
     "OPR/YM1 (v5.1)": ROOT / "output/backtest_YM1_opr_v5_1.csv",
-    "FIB/MES1 (v4)":  ROOT / "output/backtest_MES1_fib_v4.csv",
-    "FIB/NQ1 (v4)":   ROOT / "output/backtest_NQ1_fib_v4.csv",
-    "FIB/MGC1 (v4)":  ROOT / "output/backtest_MGC1_fib_v4.csv",
+    "FIB/MES1 (v4)": ROOT / "output/backtest_MES1_fib_v4.csv",
+    "FIB/NQ1 (v4)": ROOT / "output/backtest_NQ1_fib_v4.csv",
+    "FIB/MGC1 (v4)": ROOT / "output/backtest_MGC1_fib_v4.csv",
 }
 
 REFERENCE_RISK = 200
@@ -46,12 +44,16 @@ def load_all_trades(risk: int = REFERENCE_RISK) -> pd.DataFrame:
         risk_col = "risk_$" if "risk_$" in df.columns else "risk"
         df = df[df[risk_col] > 0].copy()
         df["pnl_rescaled"] = (df["pnl"].astype(float) / df[risk_col].astype(float)) * risk
-        parts.append(pd.DataFrame({
-            "date": df["date"],
-            "strategy": name,
-            "pnl": df["pnl_rescaled"],
-            "result": df["result"] if "result" in df.columns else None,
-        }))
+        parts.append(
+            pd.DataFrame(
+                {
+                    "date": df["date"],
+                    "strategy": name,
+                    "pnl": df["pnl_rescaled"],
+                    "result": df["result"] if "result" in df.columns else None,
+                }
+            )
+        )
     return pd.concat(parts, ignore_index=True).sort_values("date").reset_index(drop=True)
 
 
@@ -79,19 +81,21 @@ def period_stats_table(by_period: pd.DataFrame, label: str) -> pd.DataFrame:
         n_periods = len(pnl)
         n_pos = (pnl > 0).sum()
         n_neg = (pnl < 0).sum()
-        rows.append({
-            "strategy": strat,
-            "n_period": n_periods,
-            "n_trades": int(grp["n"].sum()),
-            "avg_n_trades": grp["n"].mean(),
-            "pnl_total": pnl.sum(),
-            "pnl_mean": pnl.mean(),
-            "pnl_median": pnl.median(),
-            "pnl_std": pnl.std(ddof=0),
-            "pct_positive": 100 * n_pos / n_periods if n_periods > 0 else 0,
-            "best": pnl.max(),
-            "worst": pnl.min(),
-        })
+        rows.append(
+            {
+                "strategy": strat,
+                "n_period": n_periods,
+                "n_trades": int(grp["n"].sum()),
+                "avg_n_trades": grp["n"].mean(),
+                "pnl_total": pnl.sum(),
+                "pnl_mean": pnl.mean(),
+                "pnl_median": pnl.median(),
+                "pnl_std": pnl.std(ddof=0),
+                "pct_positive": 100 * n_pos / n_periods if n_periods > 0 else 0,
+                "best": pnl.max(),
+                "worst": pnl.min(),
+            }
+        )
     return pd.DataFrame(rows).set_index("strategy")
 
 
@@ -108,24 +112,31 @@ def add_portfolio_row(stats: pd.DataFrame, trades: pd.DataFrame, period: str) ->
     n_pos = (pnl > 0).sum()
     total_trades = len(trades)
     avg_n = total_trades / n_periods if n_periods > 0 else 0
-    row = pd.DataFrame([{
-        "n_period": n_periods,
-        "n_trades": total_trades,
-        "avg_n_trades": avg_n,
-        "pnl_total": pnl.sum(),
-        "pnl_mean": pnl.mean(),
-        "pnl_median": pnl.median(),
-        "pnl_std": pnl.std(ddof=0),
-        "pct_positive": 100 * n_pos / n_periods if n_periods > 0 else 0,
-        "best": pnl.max(),
-        "worst": pnl.min(),
-    }], index=["**PORTFOLIO**"])
+    row = pd.DataFrame(
+        [
+            {
+                "n_period": n_periods,
+                "n_trades": total_trades,
+                "avg_n_trades": avg_n,
+                "pnl_total": pnl.sum(),
+                "pnl_mean": pnl.mean(),
+                "pnl_median": pnl.median(),
+                "pnl_std": pnl.std(ddof=0),
+                "pct_positive": 100 * n_pos / n_periods if n_periods > 0 else 0,
+                "best": pnl.max(),
+                "worst": pnl.min(),
+            }
+        ],
+        index=["**PORTFOLIO**"],
+    )
     return pd.concat([stats, row])
 
 
 def df_to_md(df: pd.DataFrame, period_label: str) -> str:
     lines = [f"\n### Stats {period_label} (risk = ${REFERENCE_RISK})\n"]
-    lines.append("| Stratégie | n périodes | n trades | trades/période | PnL total | PnL moy | PnL médian | σ | % périodes + | Best | Worst |")
+    lines.append(
+        "| Stratégie | n périodes | n trades | trades/période | PnL total | PnL moy | PnL médian | σ | % périodes + | Best | Worst |"
+    )
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for strat, row in df.iterrows():
         lines.append(
@@ -158,11 +169,21 @@ def plot_monthly_heatmap(trades: pd.DataFrame) -> Path:
     for i in range(by.shape[0]):
         for j in range(by.shape[1]):
             v = by.values[i, j]
-            ax.text(j, i, f"{v:+.0f}", ha="center", va="center",
-                    fontsize=7, color="black" if abs(v) < vmax * 0.6 else "white")
+            ax.text(
+                j,
+                i,
+                f"{v:+.0f}",
+                ha="center",
+                va="center",
+                fontsize=7,
+                color="black" if abs(v) < vmax * 0.6 else "white",
+            )
     plt.colorbar(im, ax=ax, label=f"PnL mensuel ($, risk ${REFERENCE_RISK})")
-    plt.title(f"PnL mensuel par stratégie + portfolio (risk = ${REFERENCE_RISK}/trade)",
-              fontsize=12, fontweight="bold")
+    plt.title(
+        f"PnL mensuel par stratégie + portfolio (risk = ${REFERENCE_RISK}/trade)",
+        fontsize=12,
+        fontweight="bold",
+    )
     plt.tight_layout()
     path = OUTDIR / "monthly_heatmap.png"
     plt.savefig(path, dpi=110, bbox_inches="tight")
@@ -179,10 +200,20 @@ def plot_monthly_pnl(trades: pd.DataFrame) -> Path:
         sub = t[t["strategy"] == strat].groupby("month")["pnl"].sum().sort_index().cumsum()
         ax.plot(sub.index, sub.values, label=strat, linewidth=1.5, marker="o", markersize=4)
     portfolio = t.groupby("month")["pnl"].sum().sort_index().cumsum()
-    ax.plot(portfolio.index, portfolio.values, label="PORTFOLIO",
-            linewidth=2.5, color="black", marker="s", markersize=5)
-    ax.set_title(f"PnL cumulé mensuel par stratégie (risk = ${REFERENCE_RISK}/trade)",
-                 fontsize=13, fontweight="bold")
+    ax.plot(
+        portfolio.index,
+        portfolio.values,
+        label="PORTFOLIO",
+        linewidth=2.5,
+        color="black",
+        marker="s",
+        markersize=5,
+    )
+    ax.set_title(
+        f"PnL cumulé mensuel par stratégie (risk = ${REFERENCE_RISK}/trade)",
+        fontsize=13,
+        fontweight="bold",
+    )
     ax.legend(loc="upper left", fontsize=9)
     ax.grid(alpha=0.3)
     ax.set_ylabel("PnL cumulé ($)")
@@ -204,8 +235,11 @@ def plot_weekly_box(trades: pd.DataFrame) -> Path:
     bp = ax.boxplot(data, labels=pivot.columns, patch_artist=True, showmeans=True)
     for patch in bp["boxes"]:
         patch.set_facecolor("#a8d8ea")
-    ax.set_title(f"Distribution du PnL hebdomadaire par stratégie (risk = ${REFERENCE_RISK})",
-                 fontsize=12, fontweight="bold")
+    ax.set_title(
+        f"Distribution du PnL hebdomadaire par stratégie (risk = ${REFERENCE_RISK})",
+        fontsize=12,
+        fontweight="bold",
+    )
     ax.set_ylabel("PnL hebdomadaire ($)")
     ax.axhline(0, color="red", linewidth=0.8, linestyle="--", alpha=0.5)
     ax.grid(alpha=0.3, axis="y")
@@ -220,8 +254,10 @@ def plot_weekly_box(trades: pd.DataFrame) -> Path:
 def main():
     print(f"→ Chargement (risk de référence = ${REFERENCE_RISK})…")
     trades = load_all_trades(REFERENCE_RISK)
-    print(f"  {len(trades)} trades sur {trades['strategy'].nunique()} stratégies "
-          f"({trades['date'].min().date()} → {trades['date'].max().date()})")
+    print(
+        f"  {len(trades)} trades sur {trades['strategy'].nunique()} stratégies "
+        f"({trades['date'].min().date()} → {trades['date'].max().date()})"
+    )
 
     print("→ Aggrégations…")
     daily_by = aggregate_period(trades, "D")
@@ -237,9 +273,12 @@ def main():
     monthly_stats = add_portfolio_row(monthly_stats, trades, "M")
 
     print("→ Génération charts…")
-    h = plot_monthly_heatmap(trades); print(f"  {h}")
-    m = plot_monthly_pnl(trades); print(f"  {m}")
-    w = plot_weekly_box(trades); print(f"  {w}")
+    h = plot_monthly_heatmap(trades)
+    print(f"  {h}")
+    m = plot_monthly_pnl(trades)
+    print(f"  {m}")
+    w = plot_weekly_box(trades)
+    print(f"  {w}")
 
     print("→ Génération report.md…")
     lines = []
@@ -247,8 +286,10 @@ def main():
     lines.append(f"**Période** : {trades['date'].min().date()} → {trades['date'].max().date()}  ")
     lines.append(f"**Stratégies** : {trades['strategy'].nunique()} (OPR/MES1 v4 exclu)  ")
     lines.append(f"**Trades** : {len(trades)}\n")
-    lines.append("Pour passer à un autre niveau de risque : multiplier par 0.5 (→$100), "
-                 "0.75 (→$150), 1.5 (→$300). PF, win rate et % périodes positives sont invariants.\n")
+    lines.append(
+        "Pour passer à un autre niveau de risque : multiplier par 0.5 (→$100), "
+        "0.75 (→$150), 1.5 (→$300). PF, win rate et % périodes positives sont invariants.\n"
+    )
 
     lines.append(df_to_md(daily_stats, "JOURNALIER"))
     lines.append("")
@@ -270,13 +311,21 @@ def main():
     # Distribution mensuelle
     lines.append("\n## Distribution mensuelle portfolio (résumé)\n")
     lines.append(f"- Mois testés : **{len(monthly_port)}**")
-    lines.append(f"- Mois positifs : **{(monthly_port > 0).sum()}** ({100*(monthly_port > 0).mean():.1f}%)")
-    lines.append(f"- Mois ≥ +$3000 (challenge passé) : **{(monthly_port >= 3000).sum()}** "
-                 f"({100*(monthly_port >= 3000).mean():.1f}%)")
-    lines.append(f"- Mois ≤ -$2000 (bust trailing DD) : **{(monthly_port <= -2000).sum()}** "
-                 f"({100*(monthly_port <= -2000).mean():.1f}%)")
-    lines.append(f"- Mois ≤ -$1000 (risque daily loss) : **{(monthly_port <= -1000).sum()}** "
-                 f"({100*(monthly_port <= -1000).mean():.1f}%)")
+    lines.append(
+        f"- Mois positifs : **{(monthly_port > 0).sum()}** ({100 * (monthly_port > 0).mean():.1f}%)"
+    )
+    lines.append(
+        f"- Mois ≥ +$3000 (challenge passé) : **{(monthly_port >= 3000).sum()}** "
+        f"({100 * (monthly_port >= 3000).mean():.1f}%)"
+    )
+    lines.append(
+        f"- Mois ≤ -$2000 (bust trailing DD) : **{(monthly_port <= -2000).sum()}** "
+        f"({100 * (monthly_port <= -2000).mean():.1f}%)"
+    )
+    lines.append(
+        f"- Mois ≤ -$1000 (risque daily loss) : **{(monthly_port <= -1000).sum()}** "
+        f"({100 * (monthly_port <= -1000).mean():.1f}%)"
+    )
 
     (OUTDIR / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\n✓ Tout dans {OUTDIR}/")

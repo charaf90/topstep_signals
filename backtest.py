@@ -20,36 +20,44 @@ from pathlib import Path
 import pandas as pd
 
 from config import INSTRUMENTS
-from core.data import load_csv, build_timeframes
+from core.data import build_timeframes, load_csv
+
 try:
     from core.data import fetch_live
 except ImportError:
     fetch_live = None
-from core import backtester, metrics as m
-from core.registry import discover_strategies, load_strategy, list_strategy_names
+from core import backtester
+from core import metrics as m
+from core.registry import discover_strategies, load_strategy
 
 
 def main():
     parser = argparse.ArgumentParser(description="Backtest standardisé (plug-and-play)")
-    parser.add_argument("--list", action="store_true",
-                        help="Liste les stratégies disponibles et quitte")
+    parser.add_argument(
+        "--list", action="store_true", help="Liste les stratégies disponibles et quitte"
+    )
 
     src = parser.add_mutually_exclusive_group()
     src.add_argument("--csv-dir", type=str, help="Répertoire CSV 15m")
-    src.add_argument("--live",    action="store_true",
-                     help="Données live TradingView")
-    parser.add_argument("--bars",     type=int,  default=10_000,
-                        help="Nombre de barres live (défaut 10 000)")
-    parser.add_argument("--strategy", type=str,  default=None,
-                        help="Stratégie à backtester (ou 'all')")
-    parser.add_argument("--ticker",   type=str,  default=None,
-                        help="Actif unique (défaut: tous)")
-    parser.add_argument("--plot",     action="store_true",
-                        help="Générer N charts par jour aléatoire (plot_day)")
-    parser.add_argument("--n-charts", type=int, default=10,
-                        help="Nombre de charts à générer (défaut 10)")
-    parser.add_argument("--portfolio-charts", action="store_true",
-                        help="Générer les charts portefeuille (equity, DD, heatmap, hourly)")
+    src.add_argument("--live", action="store_true", help="Données live TradingView")
+    parser.add_argument(
+        "--bars", type=int, default=10_000, help="Nombre de barres live (défaut 10 000)"
+    )
+    parser.add_argument(
+        "--strategy", type=str, default=None, help="Stratégie à backtester (ou 'all')"
+    )
+    parser.add_argument("--ticker", type=str, default=None, help="Actif unique (défaut: tous)")
+    parser.add_argument(
+        "--plot", action="store_true", help="Générer N charts par jour aléatoire (plot_day)"
+    )
+    parser.add_argument(
+        "--n-charts", type=int, default=10, help="Nombre de charts à générer (défaut 10)"
+    )
+    parser.add_argument(
+        "--portfolio-charts",
+        action="store_true",
+        help="Générer les charts portefeuille (equity, DD, heatmap, hourly)",
+    )
     parser.add_argument("--output-dir", type=str, default="./output")
     args = parser.parse_args()
 
@@ -77,14 +85,14 @@ def main():
         )
         return
 
-    tickers    = [args.ticker]  if args.ticker    else list(INSTRUMENTS)
+    tickers = [args.ticker] if args.ticker else list(INSTRUMENTS)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     results_by_strategy = {}
 
     for strat_name in strategy_names:
-        module  = load_strategy(strat_name)
+        module = load_strategy(strat_name)
         results = []
 
         for ticker in tickers:
@@ -111,7 +119,10 @@ def main():
             tf = build_timeframes(df_15m)
 
             res = backtester.run_for_ticker(
-                module, df_15m, ticker, tf=tf,
+                module,
+                df_15m,
+                ticker,
+                tf=tf,
                 plot=args.plot,
                 n_sample_charts=args.n_charts,
                 output_dir=output_dir,
@@ -143,17 +154,17 @@ def main():
                 continue
             combined = pd.concat(parts, ignore_index=True)
             paths = backtester.generate_portfolio_charts(
-                trades_df = combined,
-                strategy_id = sid,
-                output_dir  = output_dir,
+                trades_df=combined,
+                strategy_id=sid,
+                output_dir=output_dir,
             )
             print(f"\n  ▸ Charts portefeuille [{sid}] :")
             for k, p in paths.items():
                 print(f"    • {k:<12} → {p}")
 
-    print(f"\n{'='*60}")
-    print(f"  ✅ BACKTEST TERMINÉ")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("  ✅ BACKTEST TERMINÉ")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

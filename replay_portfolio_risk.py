@@ -19,13 +19,11 @@ Usage :
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from config import INSTRUMENTS, TOPSTEP_PROFIT_TARGET
+from config import INSTRUMENTS
 from core.risk_portfolio import PortfolioRiskManager
 from core.signal_selector import TICKER_PRIORITY
-
 
 SUFFIX_MAP = {"composite": "", "opr": "_opr", "fib": "_fib"}
 LABEL_MAP = {"composite": "Composite", "opr": "OPR", "fib": "Fib"}
@@ -66,10 +64,19 @@ def load_all_trades(output_dir: Path) -> pd.DataFrame:
                 df["risk_usd"] = df["risk"]
             else:
                 df["risk_usd"] = 100.0
-            rows.append(df[[
-                "strategy", "ticker", "fill_time_dt", "exit_time_dt",
-                "risk_usd", "pnl", "result",
-            ]])
+            rows.append(
+                df[
+                    [
+                        "strategy",
+                        "ticker",
+                        "fill_time_dt",
+                        "exit_time_dt",
+                        "risk_usd",
+                        "pnl",
+                        "result",
+                    ]
+                ]
+            )
     if not rows:
         return pd.DataFrame()
     out = pd.concat(rows, ignore_index=True)
@@ -92,10 +99,7 @@ def replay(trades: pd.DataFrame) -> dict:
     # Trades dont fill_time == exit_time : SL touché sur la même bougie que le fill.
     # L'exit doit être traité APRÈS le fill (pas avant), sinon la position n'est
     # jamais enregistrée et reste ouverte indéfiniment.
-    same_bar_idx = {
-        i for i, row in trades.iterrows()
-        if row["fill_time_dt"] == row["exit_time_dt"]
-    }
+    same_bar_idx = {i for i, row in trades.iterrows() if row["fill_time_dt"] == row["exit_time_dt"]}
 
     events = []
     for i, row in trades.iterrows():
@@ -130,8 +134,7 @@ def replay(trades: pd.DataFrame) -> dict:
     for ts, kind, idx in events:
         row = trades.iloc[idx]
         if kind == "fill":
-            ok, reason = rm.can_open(risk_usd=float(row["risk_usd"]),
-                                     when=ts.to_pydatetime())
+            ok, reason = rm.can_open(risk_usd=float(row["risk_usd"]), when=ts.to_pydatetime())
             if not ok:
                 blocked_count += 1
                 blocked_pnl_potential += float(row["pnl"])
@@ -141,8 +144,7 @@ def replay(trades: pd.DataFrame) -> dict:
             tid = f"{row['strategy']}_{row['ticker']}_{idx}"
             # Dans le backtest les CSVs contiennent des fills confirmés —
             # on arm + fill immédiatement pour comptabiliser le trade journalier.
-            rm.register_open(tid, float(row["risk_usd"]),
-                             when=ts.to_pydatetime())
+            rm.register_open(tid, float(row["risk_usd"]), when=ts.to_pydatetime())
             rm.register_fill(tid, when=ts.to_pydatetime())
             accepted_idx.add(idx)
             accepted_count += 1
@@ -150,8 +152,7 @@ def replay(trades: pd.DataFrame) -> dict:
             if idx not in accepted_idx:
                 continue
             tid = f"{row['strategy']}_{row['ticker']}_{idx}"
-            breach, _ = rm.register_close(tid, float(row["pnl"]),
-                                          when=ts.to_pydatetime())
+            breach, _ = rm.register_close(tid, float(row["pnl"]), when=ts.to_pydatetime())
             realized_pnl += float(row["pnl"])
             if breach:
                 breach_count += 1
@@ -194,25 +195,26 @@ def apply_correlation_filter(trades: pd.DataFrame) -> pd.DataFrame:
 
 
 def _print_replay(label: str, res: dict, pnl_ref: float):
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"  {label}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"  Trades soumis       : {res['n_total']}")
     print(f"  Trades acceptés     : {res['n_accepted']}")
-    print(f"  Trades bloqués      : {res['n_blocked']}  "
-          f"({res['block_rate_pct']:.1f} %)")
+    print(f"  Trades bloqués      : {res['n_blocked']}  ({res['block_rate_pct']:.1f} %)")
     print(f"  P&L réalisé         : ${res['realized_pnl']:+,.0f}")
     print(f"  P&L potentiel bloqué: ${res['blocked_pnl_potential']:+,.0f}")
     print(f"  Breaches limites    : {res['n_breaches']}")
     delta = res["realized_pnl"] - pnl_ref
-    print(f"  Δ P&L vs référence  : ${delta:+,.0f}  "
-          f"({100*delta/abs(pnl_ref) if pnl_ref else 0:.1f} %)")
+    print(
+        f"  Δ P&L vs référence  : ${delta:+,.0f}  "
+        f"({100 * delta / abs(pnl_ref) if pnl_ref else 0:.1f} %)"
+    )
     if res["top_block_reasons"]:
-        print(f"  Top raisons blocage :")
+        print("  Top raisons blocage :")
         for reason, count in res["top_block_reasons"].items():
             print(f"    {count:>4}× {reason}")
     if res["n_breaches"] == 0:
-        print(f"  ✓ Aucune limite Topstep franchie")
+        print("  ✓ Aucune limite Topstep franchie")
     else:
         print(f"  ⚠ {res['n_breaches']} breach(s)")
 
@@ -236,19 +238,19 @@ def main():
     cum = daily.cumsum()
     rolling_max = cum.cummax()
     max_dd = float((cum - rolling_max).min())
-    print(f"\n{'='*80}")
-    print(f"  RÉFÉRENCE — backtest tel quel (garde-fous per-stratégie actuels)")
-    print(f"{'='*80}")
+    print(f"\n{'=' * 80}")
+    print("  RÉFÉRENCE — backtest tel quel (garde-fous per-stratégie actuels)")
+    print(f"{'=' * 80}")
     print(f"  Trades       : {n_total}")
     print(f"  P&L total    : ${pnl_total:+,.0f}")
     print(f"  Max trailing DD : ${max_dd:+,.0f}")
-    print(f"  Daily P&L max : ${float(daily.max()):+,.0f}  "
-          f"min : ${float(daily.min()):+,.0f}")
+    print(f"  Daily P&L max : ${float(daily.max()):+,.0f}  min : ${float(daily.min()):+,.0f}")
 
     # ── Scénario A : garde-fou global SANS sélection actif ──────────────
     res_a = replay(trades)
-    _print_replay("REPLAY A — garde-fou global (3 fills/jour, sans sélection actif)",
-                  res_a, pnl_total)
+    _print_replay(
+        "REPLAY A — garde-fou global (3 fills/jour, sans sélection actif)", res_a, pnl_total
+    )
 
     # ── Scénario B : garde-fou global + sélection actif corrélé ─────────
     n_corr_removed = len(trades) - len(apply_correlation_filter(trades))
@@ -256,19 +258,24 @@ def main():
     res_b = replay(trades_sel)
     _print_replay(
         f"REPLAY B — garde-fou global + sélection actif (élimine {n_corr_removed} signaux corrélés)",
-        res_b, pnl_total,
+        res_b,
+        pnl_total,
     )
 
     # ── Comparaison A vs B ───────────────────────────────────────────────
-    print(f"\n{'='*80}")
-    print(f"  COMPARAISON — impact de la sélection actif (A vs B)")
-    print(f"{'='*80}")
-    print(f"  Trades soumis     : {res_a['n_total']:>6}  →  {res_b['n_total']:>6}  "
-          f"(−{n_corr_removed} corrélés éliminés amont)")
+    print(f"\n{'=' * 80}")
+    print("  COMPARAISON — impact de la sélection actif (A vs B)")
+    print(f"{'=' * 80}")
+    print(
+        f"  Trades soumis     : {res_a['n_total']:>6}  →  {res_b['n_total']:>6}  "
+        f"(−{n_corr_removed} corrélés éliminés amont)"
+    )
     print(f"  Trades acceptés   : {res_a['n_accepted']:>6}  →  {res_b['n_accepted']:>6}")
     print(f"  Trades bloqués    : {res_a['n_blocked']:>6}  →  {res_b['n_blocked']:>6}")
-    print(f"  P&L réalisé       : ${res_a['realized_pnl']:>+10,.0f}  →  "
-          f"${res_b['realized_pnl']:>+10,.0f}")
+    print(
+        f"  P&L réalisé       : ${res_a['realized_pnl']:>+10,.0f}  →  "
+        f"${res_b['realized_pnl']:>+10,.0f}"
+    )
     delta_ab = res_b["realized_pnl"] - res_a["realized_pnl"]
     print(f"  Δ P&L (B − A)     : ${delta_ab:>+10,.0f}")
 

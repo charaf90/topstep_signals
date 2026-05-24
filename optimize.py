@@ -16,25 +16,30 @@ import argparse
 from pathlib import Path
 
 from config import INSTRUMENTS
-from core.data import load_csv, build_timeframes
+from core.data import build_timeframes, load_csv
 from core.optimizer import optimize
 from core.registry import discover_strategies, load_strategy
 
 
 def main():
     parser = argparse.ArgumentParser(description="Optimisation walk-forward (plug-and-play)")
-    parser.add_argument("--list",     action="store_true",
-                        help="Liste les stratégies disponibles et quitte")
-    parser.add_argument("--csv-dir",  type=str, default=None)
-    parser.add_argument("--strategy", type=str, default=None,
-                        help="Stratégie à optimiser (ou 'all')")
-    parser.add_argument("--ticker",   type=str, default=None)
-    parser.add_argument("--is-end",   type=str, default="2025-09-30",
-                        help="Fin de la période IS (YYYY-MM-DD)")
-    parser.add_argument("--oos-start",type=str, default="2025-10-01",
-                        help="Début de la période OOS (YYYY-MM-DD)")
-    parser.add_argument("--no-robustness", action="store_true",
-                        help="Ne pas générer le rapport de robustesse")
+    parser.add_argument(
+        "--list", action="store_true", help="Liste les stratégies disponibles et quitte"
+    )
+    parser.add_argument("--csv-dir", type=str, default=None)
+    parser.add_argument(
+        "--strategy", type=str, default=None, help="Stratégie à optimiser (ou 'all')"
+    )
+    parser.add_argument("--ticker", type=str, default=None)
+    parser.add_argument(
+        "--is-end", type=str, default="2025-09-30", help="Fin de la période IS (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--oos-start", type=str, default="2025-10-01", help="Début de la période OOS (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--no-robustness", action="store_true", help="Ne pas générer le rapport de robustesse"
+    )
     parser.add_argument("--output-dir", type=str, default="output")
     args = parser.parse_args()
 
@@ -66,7 +71,7 @@ def main():
 
     for strat_name in strategy_names:
         module = load_strategy(strat_name)
-        data   = {}
+        data = {}
 
         for ticker in tickers:
             if ticker not in getattr(module, "TICKERS", tickers):
@@ -77,7 +82,7 @@ def main():
                 print(f"  [!] {csv_path} introuvable")
                 continue
             df_15m = load_csv(str(csv_path))
-            tf     = build_timeframes(df_15m)
+            tf = build_timeframes(df_15m)
             data[ticker] = (df_15m, tf)
 
         if not data:
@@ -85,11 +90,12 @@ def main():
             continue
 
         optimize(
-            module, data,
-            is_end             = args.is_end,
-            oos_start          = args.oos_start,
-            robustness_report  = not args.no_robustness,
-            output_dir         = args.output_dir,
+            module,
+            data,
+            is_end=args.is_end,
+            oos_start=args.oos_start,
+            robustness_report=not args.no_robustness,
+            output_dir=args.output_dir,
         )
 
 

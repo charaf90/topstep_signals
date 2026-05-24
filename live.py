@@ -32,7 +32,7 @@ from pathlib import Path
 _PID_FILE = Path(__file__).parent / "state" / "live_daemon.pid"
 
 
-_GRACEFUL_TIMEOUT = 10   # secondes avant SIGKILL si SIGTERM ignoré
+_GRACEFUL_TIMEOUT = 10  # secondes avant SIGKILL si SIGTERM ignoré
 
 
 def _acquire_pid_lock():
@@ -47,7 +47,7 @@ def _acquire_pid_lock():
     if _PID_FILE.exists():
         try:
             old_pid = int(_PID_FILE.read_text().strip())
-            os.kill(old_pid, 0)   # lève OSError si le process n'existe plus
+            os.kill(old_pid, 0)  # lève OSError si le process n'existe plus
             # Process vivant → on le remplace
             logging.warning(
                 "Ancien daemon détecté (PID %d) — arrêt en cours (mise à jour)…",
@@ -59,7 +59,7 @@ def _acquire_pid_lock():
                 try:
                     os.kill(old_pid, 0)
                 except OSError:
-                    break   # process terminé
+                    break  # process terminé
             else:
                 # Toujours vivant après le délai → SIGKILL
                 logging.warning("PID %d ne répond pas — SIGKILL", old_pid)
@@ -69,7 +69,7 @@ def _acquire_pid_lock():
                     pass
             logging.info("Ancien daemon arrêté. Démarrage de la nouvelle instance.")
         except (ValueError, OSError):
-            pass   # PID invalide ou process déjà mort → lock périmé
+            pass  # PID invalide ou process déjà mort → lock périmé
 
     _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     _PID_FILE.write_text(str(os.getpid()))
@@ -83,6 +83,7 @@ def _acquire_pid_lock():
     atexit.register(_cleanup)
     signal.signal(signal.SIGTERM, _cleanup)
 
+
 # Support .env simple (pas de dépendance python-dotenv)
 _env_file = Path(__file__).parent / ".env"
 if _env_file.exists():
@@ -92,41 +93,55 @@ if _env_file.exists():
             key, _, val = line.partition("=")
             os.environ.setdefault(key.strip(), val.strip())
 
-from broker.projectx_client import ProjectXClient
 from broker.live_runner import SessionRunner
+from broker.projectx_client import ProjectXClient
 from broker.telegram_bot import TelegramBot
 from config import (
     LIVE_STATE_FILE,
     TELEGRAM_ENABLED,
-    TELEGRAM_LEVEL_TRADES, TELEGRAM_LEVEL_RISK,
-    TELEGRAM_LEVEL_SYSTEM, TELEGRAM_LEVEL_REPORT, TELEGRAM_LEVEL_COMMANDS,
+    TELEGRAM_LEVEL_COMMANDS,
+    TELEGRAM_LEVEL_REPORT,
+    TELEGRAM_LEVEL_RISK,
+    TELEGRAM_LEVEL_SYSTEM,
+    TELEGRAM_LEVEL_TRADES,
 )
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Runner live TopstepX — OPR + Fib via ProjectX API"
-    )
+    p = argparse.ArgumentParser(description="Runner live TopstepX — OPR + Fib via ProjectX API")
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--tick",   action="store_true",
-                      help="Exécuter un seul tick puis quitter")
-    mode.add_argument("--daemon", action="store_true",
-                      help="Boucle toutes les 15 min (Ctrl+C pour stopper)")
+    mode.add_argument("--tick", action="store_true", help="Exécuter un seul tick puis quitter")
+    mode.add_argument(
+        "--daemon", action="store_true", help="Boucle toutes les 15 min (Ctrl+C pour stopper)"
+    )
 
-    p.add_argument("--execute", action="store_true",
-                   help="Passer des ordres réels (sinon dry-run)")
-    p.add_argument("--ticker",   type=str, default=None,
-                   help="Restreindre à un seul actif (NQ1, MES1, YM1)")
-    p.add_argument("--strategy", type=str, default="opr_fib_vpc",
-                   choices=["opr", "fib", "vpc", "opr_fib", "opr_fib_vpc"],
-                   help="Stratégie(s) à exécuter")
-    p.add_argument("--state",    type=str, default=LIVE_STATE_FILE,
-                   help="Chemin du fichier d'état JSON")
-    p.add_argument("--account-id", type=int, default=None,
-                   help="Identifiant du compte (override PROJECTX_ACCOUNT_ID)")
-    p.add_argument("--log-level", type=str, default="INFO",
-                   choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-                   help="Niveau de log")
+    p.add_argument("--execute", action="store_true", help="Passer des ordres réels (sinon dry-run)")
+    p.add_argument(
+        "--ticker", type=str, default=None, help="Restreindre à un seul actif (NQ1, MES1, YM1)"
+    )
+    p.add_argument(
+        "--strategy",
+        type=str,
+        default="opr_fib_vpc",
+        choices=["opr", "fib", "vpc", "opr_fib", "opr_fib_vpc"],
+        help="Stratégie(s) à exécuter",
+    )
+    p.add_argument(
+        "--state", type=str, default=LIVE_STATE_FILE, help="Chemin du fichier d'état JSON"
+    )
+    p.add_argument(
+        "--account-id",
+        type=int,
+        default=None,
+        help="Identifiant du compte (override PROJECTX_ACCOUNT_ID)",
+    )
+    p.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Niveau de log",
+    )
     return p.parse_args()
 
 
@@ -140,7 +155,7 @@ def _setup_logging(level: str):
 
 def _build_runner(args: argparse.Namespace) -> SessionRunner:
     username = os.environ.get("PROJECTX_USERNAME", "").strip()
-    api_key  = os.environ.get("PROJECTX_API_KEY",  "").strip()
+    api_key = os.environ.get("PROJECTX_API_KEY", "").strip()
     if not username or not api_key:
         logging.critical(
             "PROJECTX_USERNAME et PROJECTX_API_KEY doivent être définis "
@@ -163,45 +178,50 @@ def _build_runner(args: argparse.Namespace) -> SessionRunner:
             sys.exit(1)
         account = accounts[0]
         account_id = account["id"]
-        logging.info("Compte : %s (id=%d, solde=%.2f $, canTrade=%s)",
-                     account.get("name", "?"), account_id,
-                     account.get("balance", 0.0), account.get("canTrade"))
+        logging.info(
+            "Compte : %s (id=%d, solde=%.2f $, canTrade=%s)",
+            account.get("name", "?"),
+            account_id,
+            account.get("balance", 0.0),
+            account.get("canTrade"),
+        )
 
     tickers = [args.ticker] if args.ticker else None
 
     # ── Bot Telegram ──────────────────────────────────────────────────────
-    tg_token   = os.environ.get("TELEGRAM_BOT_TOKEN",  "").strip()
-    tg_chat_id = os.environ.get("TELEGRAM_CHAT_ID",    "").strip()
+    tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    tg_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     telegram = TelegramBot(
-        token           = tg_token,
-        chat_id         = tg_chat_id,
-        enabled         = TELEGRAM_ENABLED and bool(tg_token) and bool(tg_chat_id),
-        level_trades    = TELEGRAM_LEVEL_TRADES,
-        level_risk      = TELEGRAM_LEVEL_RISK,
-        level_system    = TELEGRAM_LEVEL_SYSTEM,
-        level_report    = TELEGRAM_LEVEL_REPORT,
-        level_commands  = TELEGRAM_LEVEL_COMMANDS,
+        token=tg_token,
+        chat_id=tg_chat_id,
+        enabled=TELEGRAM_ENABLED and bool(tg_token) and bool(tg_chat_id),
+        level_trades=TELEGRAM_LEVEL_TRADES,
+        level_risk=TELEGRAM_LEVEL_RISK,
+        level_system=TELEGRAM_LEVEL_SYSTEM,
+        level_report=TELEGRAM_LEVEL_REPORT,
+        level_commands=TELEGRAM_LEVEL_COMMANDS,
     )
 
     # Détecte si le compte est simulé (challenge) ou live (funded)
     accounts = client.get_accounts(only_active=True)
-    is_simulated = any(a.get("simulated", True) for a in accounts
-                       if a.get("id") == account_id)
+    is_simulated = any(a.get("simulated", True) for a in accounts if a.get("id") == account_id)
     live_mode = not is_simulated
     log = logging.getLogger("live")
-    log.info("Mode compte : %s (live_mode=%s)",
-             "SIMULÉ (challenge)" if not live_mode else "LIVE (funded)",
-             live_mode)
+    log.info(
+        "Mode compte : %s (live_mode=%s)",
+        "SIMULÉ (challenge)" if not live_mode else "LIVE (funded)",
+        live_mode,
+    )
 
     return SessionRunner(
-        client     = client,
-        account_id = account_id,
-        state_file = args.state,
-        dry_run    = not args.execute,
-        tickers    = tickers,
-        strategy   = args.strategy,
-        live_mode  = live_mode,
-        telegram   = telegram,
+        client=client,
+        account_id=account_id,
+        state_file=args.state,
+        dry_run=not args.execute,
+        tickers=tickers,
+        strategy=args.strategy,
+        live_mode=live_mode,
+        telegram=telegram,
     )
 
 
@@ -240,9 +260,10 @@ def main():
         # le prochain tick.
         import datetime as _dt
         import zoneinfo as _zi
+
         _NY = _zi.ZoneInfo("America/New_York")
 
-        now = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+        now = _dt.datetime.now(_dt.UTC).replace(tzinfo=None)
         minutes_to_next = 15 - (now.minute % 15)
         # vpc-v4 production : signal capté le plus tôt après la clôture M15
         # pour minimiser le délai entre fermeture de bougie et placement d'ordre.
@@ -253,7 +274,7 @@ def main():
         wait = minutes_to_next * 60 - now.second + seconds_offset
         log.info("Prochaine exécution dans %d s", wait)
 
-        elapsed      = 0
+        elapsed = 0
         poll_interval = 30  # secondes entre deux checks Telegram
         while elapsed < wait:
             sleep_chunk = min(poll_interval, wait - elapsed)
@@ -261,13 +282,11 @@ def main():
             elapsed += sleep_chunk
             if elapsed < wait:
                 try:
-                    now_utc_poll = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
-                    today_str    = (_dt.datetime.now(_dt.timezone.utc)
-                                    .astimezone(_NY)
-                                    .date().isoformat())
-                    now_ny_str   = (_dt.datetime.now(_dt.timezone.utc)
-                                    .astimezone(_NY)
-                                    .strftime("%Y-%m-%d %H:%M NY"))
+                    now_utc_poll = _dt.datetime.now(_dt.UTC).replace(tzinfo=None)
+                    today_str = _dt.datetime.now(_dt.UTC).astimezone(_NY).date().isoformat()
+                    now_ny_str = (
+                        _dt.datetime.now(_dt.UTC).astimezone(_NY).strftime("%Y-%m-%d %H:%M NY")
+                    )
                     # Drain WS d'abord (fast path, no-op si realtime désactivé)
                     runner._drain_realtime()
                     # Drain Market Hub (buffer M1 — Phase C, no-op si OFF)
@@ -282,13 +301,13 @@ def main():
                         **runner._get_broker_day_summary(now_utc_poll),
                     }
                     runner.tg.check_commands(
-                        placed_tags = runner.state.get("placed_tags", {}),
-                        rm_status   = rm_snap,
-                        now_ny      = now_ny_str,
-                        on_pause    = lambda: runner.set_paused(True),
-                        on_resume   = lambda: runner.set_paused(False),
-                        paused      = runner.is_paused(),
-                        today_str   = today_str,
+                        placed_tags=runner.state.get("placed_tags", {}),
+                        rm_status=rm_snap,
+                        now_ny=now_ny_str,
+                        on_pause=lambda: runner.set_paused(True),
+                        on_resume=lambda: runner.set_paused(False),
+                        paused=runner.is_paused(),
+                        today_str=today_str,
                     )
                 except Exception as exc:
                     log.debug("Poll Telegram entre ticks : %s", exc)

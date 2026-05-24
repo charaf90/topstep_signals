@@ -39,14 +39,12 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from broker.projectx_client import ProjectXClient
-
 
 _log = logging.getLogger(__name__)
 
@@ -57,27 +55,27 @@ _log = logging.getLogger(__name__)
 # Plafond API ProjectX par requête (20 000 bougies). On laisse une marge de
 # sécurité pour absorber les corrections d'horaire / overlap des chunks.
 MAX_BARS_PER_REQUEST = 20_000
-_SAFETY_FACTOR       = 0.95   # on demande ≤ 19 000 bars par chunk
+_SAFETY_FACTOR = 0.95  # on demande ≤ 19 000 bars par chunk
 
 # Unit codes API : (unit, unit_number, minutes_par_bougie)
-TIMEFRAMES: Dict[str, Tuple[int, int, int]] = {
+TIMEFRAMES: dict[str, tuple[int, int, int]] = {
     # Seconds
-    "s1":  (1, 1,   0),    # 1/60 minute (0 = sub-minute, traité à part)
-    "s5":  (1, 5,   0),
-    "s15": (1, 15,  0),
-    "s30": (1, 30,  0),
+    "s1": (1, 1, 0),  # 1/60 minute (0 = sub-minute, traité à part)
+    "s5": (1, 5, 0),
+    "s15": (1, 15, 0),
+    "s30": (1, 30, 0),
     # Minutes
-    "m1":  (2, 1,    1),
-    "m5":  (2, 5,    5),
-    "m15": (2, 15,  15),
-    "m30": (2, 30,  30),
+    "m1": (2, 1, 1),
+    "m5": (2, 5, 5),
+    "m15": (2, 15, 15),
+    "m30": (2, 30, 30),
     # Hours
-    "h1":  (3, 1,   60),
-    "h2":  (3, 2,  120),
-    "h4":  (3, 4,  240),
+    "h1": (3, 1, 60),
+    "h2": (3, 2, 120),
+    "h4": (3, 4, 240),
     # Days, weeks, months
-    "d1":  (4, 1, 1440),
-    "w1":  (5, 1, 10080),
+    "d1": (4, 1, 1440),
+    "w1": (5, 1, 10080),
     "mo1": (6, 1, 43200),
 }
 
@@ -88,32 +86,32 @@ TIMEFRAMES: Dict[str, Tuple[int, int, int]] = {
 #
 # Note : cette liste est indicative. Pour découvrir tous les contrats
 # disponibles, utiliser `list_known_symbols()` ou la CLI `--available`.
-CATALOG: Dict[str, Dict[str, str]] = {
+CATALOG: dict[str, dict[str, str]] = {
     # Equity index micros
-    "MES":  {"search": "MES",  "desc": "Micro E-mini S&P 500"},
-    "MNQ":  {"search": "MNQ",  "desc": "Micro E-mini Nasdaq-100"},
-    "MYM":  {"search": "MYM",  "desc": "Micro E-mini Dow Jones"},
-    "M2K":  {"search": "M2K",  "desc": "Micro E-mini Russell 2000"},
+    "MES": {"search": "MES", "desc": "Micro E-mini S&P 500"},
+    "MNQ": {"search": "MNQ", "desc": "Micro E-mini Nasdaq-100"},
+    "MYM": {"search": "MYM", "desc": "Micro E-mini Dow Jones"},
+    "M2K": {"search": "M2K", "desc": "Micro E-mini Russell 2000"},
     # Equity index full
-    "ES":   {"search": "ES",   "desc": "E-mini S&P 500"},
-    "NQ":   {"search": "NQ",   "desc": "E-mini Nasdaq-100"},
+    "ES": {"search": "ES", "desc": "E-mini S&P 500"},
+    "NQ": {"search": "NQ", "desc": "E-mini Nasdaq-100"},
     # Metals
-    "MGC":  {"search": "MGC",  "desc": "Micro Gold"},
-    "SIL":  {"search": "SIL",  "desc": "Micro Silver"},
-    "GC":   {"search": "GC",   "desc": "Gold"},
+    "MGC": {"search": "MGC", "desc": "Micro Gold"},
+    "SIL": {"search": "SIL", "desc": "Micro Silver"},
+    "GC": {"search": "GC", "desc": "Gold"},
     # Energy
-    "MCL":  {"search": "MCL",  "desc": "Micro Crude Oil"},
-    "MNG":  {"search": "MNG",  "desc": "Micro Natural Gas"},
-    "CL":   {"search": "CL",   "desc": "Crude Oil"},
+    "MCL": {"search": "MCL", "desc": "Micro Crude Oil"},
+    "MNG": {"search": "MNG", "desc": "Micro Natural Gas"},
+    "CL": {"search": "CL", "desc": "Crude Oil"},
     # Currencies
-    "M6E":  {"search": "M6E",  "desc": "Micro Euro FX"},
-    "M6B":  {"search": "M6B",  "desc": "Micro British Pound"},
-    "M6A":  {"search": "M6A",  "desc": "Micro Australian Dollar"},
+    "M6E": {"search": "M6E", "desc": "Micro Euro FX"},
+    "M6B": {"search": "M6B", "desc": "Micro British Pound"},
+    "M6A": {"search": "M6A", "desc": "Micro Australian Dollar"},
     # Crypto
-    "MBT":  {"search": "MBT",  "desc": "Micro Bitcoin"},
-    "MET":  {"search": "MET",  "desc": "Micro Ether"},
+    "MBT": {"search": "MBT", "desc": "Micro Bitcoin"},
+    "MET": {"search": "MET", "desc": "Micro Ether"},
     # Rates
-    "10Y":  {"search": "10Y",  "desc": "Micro 10-Year Yield"},
+    "10Y": {"search": "10Y", "desc": "Micro 10-Year Yield"},
 }
 
 
@@ -121,7 +119,8 @@ CATALOG: Dict[str, Dict[str, str]] = {
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _resolve_timeframe(tf: str) -> Tuple[int, int, int]:
+
+def _resolve_timeframe(tf: str) -> tuple[int, int, int]:
     """tf string → (unit, unit_number, minutes_par_bougie). Lève ValueError."""
     key = tf.lower().strip()
     if key not in TIMEFRAMES:
@@ -145,7 +144,7 @@ def _chunk_window_minutes(tf: str) -> int:
     return int(MAX_BARS_PER_REQUEST * _SAFETY_FACTOR * mpb)
 
 
-def _bars_to_df(bars: List[Dict]) -> pd.DataFrame:
+def _bars_to_df(bars: list[dict]) -> pd.DataFrame:
     """
     Convertit la réponse API en DataFrame OHLCV au format projet :
       index : pd.DatetimeIndex UTC NAÏF (cohérent avec core/data.py)
@@ -154,15 +153,15 @@ def _bars_to_df(bars: List[Dict]) -> pd.DataFrame:
     if not bars:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     df = pd.DataFrame(bars)
-    df = df.rename(columns={"t": "datetime", "o": "open", "h": "high",
-                            "l": "low",      "c": "close", "v": "volume"})
-    df["datetime"] = (pd.to_datetime(df["datetime"], utc=True)
-                       .dt.tz_localize(None))      # UTC naïf
-    df = (df.set_index("datetime")
-            .sort_index()
-            [["open", "high", "low", "close", "volume"]]
-            .astype({"open": float, "high": float, "low": float,
-                     "close": float}))
+    df = df.rename(
+        columns={"t": "datetime", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
+    )
+    df["datetime"] = pd.to_datetime(df["datetime"], utc=True).dt.tz_localize(None)  # UTC naïf
+    df = (
+        df.set_index("datetime")
+        .sort_index()[["open", "high", "low", "close", "volume"]]
+        .astype({"open": float, "high": float, "low": float, "close": float})
+    )
     df["volume"] = df["volume"].astype("int64")
     return df
 
@@ -171,12 +170,13 @@ def _bars_to_df(bars: List[Dict]) -> pd.DataFrame:
 # Résolution de contrat
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def resolve_contract(
     client: ProjectXClient,
     symbol: str,
     live: bool = False,
     prefer_micro: bool = True,
-) -> Optional[Dict]:
+) -> dict | None:
     """
     Résout un symbole (alias CATALOG ou raw) → premier contrat actif.
 
@@ -201,18 +201,23 @@ def resolve_contract(
     candidates = active or contracts
     # Match exact sur le root symbol si possible (évite par ex. NQ → MNQ
     # quand on demande "NQ" mais via CATALOG)
-    exact = [c for c in candidates
-             if c.get("name", "").upper().startswith(search_text.upper())
-             or c.get("symbolId", "").upper().endswith(search_text.upper())]
+    exact = [
+        c
+        for c in candidates
+        if c.get("name", "").upper().startswith(search_text.upper())
+        or c.get("symbolId", "").upper().endswith(search_text.upper())
+    ]
     chosen = (exact or candidates)[0]
-    _log.info("resolve_contract(%s) → %s (%s)",
-              symbol, chosen.get("id"), chosen.get("description", ""))
+    _log.info(
+        "resolve_contract(%s) → %s (%s)", symbol, chosen.get("id"), chosen.get("description", "")
+    )
     return chosen
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pagination temporelle (cœur du module)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def fetch_bars_paged(
     client: ProjectXClient,
@@ -243,34 +248,36 @@ def fetch_bars_paged(
 
     # Normalise en tz-aware UTC pour le calcul, puis on repassera en naïf
     def _to_utc(dt: datetime) -> datetime:
-        return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
 
     s_utc, e_utc = _to_utc(start_dt), _to_utc(end_dt)
     chunk_minutes = _chunk_window_minutes(timeframe)
     unit, unit_number, _ = _resolve_timeframe(timeframe)
 
-    parts: List[pd.DataFrame] = []
+    parts: list[pd.DataFrame] = []
     cursor_end = e_utc
     n_calls = 0
 
     while cursor_end > s_utc:
         cursor_start = max(s_utc, cursor_end - timedelta(minutes=chunk_minutes))
         n_calls += 1
-        _log.info("[%d] fetch %s → %s (tf=%s)",
-                  n_calls,
-                  cursor_start.strftime("%Y-%m-%d %H:%M"),
-                  cursor_end.strftime("%Y-%m-%d %H:%M"),
-                  timeframe)
+        _log.info(
+            "[%d] fetch %s → %s (tf=%s)",
+            n_calls,
+            cursor_start.strftime("%Y-%m-%d %H:%M"),
+            cursor_end.strftime("%Y-%m-%d %H:%M"),
+            timeframe,
+        )
         try:
             bars = client.get_bars(
-                contract_id     = contract_id,
-                start_dt        = cursor_start.replace(tzinfo=None),
-                end_dt          = cursor_end.replace(tzinfo=None),
-                unit            = unit,
-                unit_number     = unit_number,
-                limit           = MAX_BARS_PER_REQUEST,
-                live            = live,
-                include_partial = include_partial,
+                contract_id=contract_id,
+                start_dt=cursor_start.replace(tzinfo=None),
+                end_dt=cursor_end.replace(tzinfo=None),
+                unit=unit,
+                unit_number=unit_number,
+                limit=MAX_BARS_PER_REQUEST,
+                live=live,
+                include_partial=include_partial,
             )
         except Exception as exc:
             _log.error("Chunk %d échec : %s — on continue", n_calls, exc)
@@ -281,8 +288,9 @@ def fetch_bars_paged(
         df_chunk = _bars_to_df(bars)
         if not df_chunk.empty:
             parts.append(df_chunk)
-            _log.debug("  → %d bougies (de %s à %s)",
-                       len(df_chunk), df_chunk.index[0], df_chunk.index[-1])
+            _log.debug(
+                "  → %d bougies (de %s à %s)", len(df_chunk), df_chunk.index[0], df_chunk.index[-1]
+            )
         else:
             _log.warning("  → 0 bougie (chunk %d vide)", n_calls)
 
@@ -294,7 +302,7 @@ def fetch_bars_paged(
             if new_end <= cursor_start.replace(tzinfo=None):
                 cursor_end = cursor_start
             else:
-                cursor_end = new_end.to_pydatetime().replace(tzinfo=timezone.utc)
+                cursor_end = new_end.to_pydatetime().replace(tzinfo=UTC)
         else:
             cursor_end = cursor_start
 
@@ -306,8 +314,7 @@ def fetch_bars_paged(
     df = pd.concat(parts)
     df = df[~df.index.duplicated(keep="last")].sort_index()
     # Borne par sécurité au cas où l'API renvoie en dehors de la fenêtre demandée
-    df = df.loc[(df.index >= s_utc.replace(tzinfo=None))
-                & (df.index <= e_utc.replace(tzinfo=None))]
+    df = df.loc[(df.index >= s_utc.replace(tzinfo=None)) & (df.index <= e_utc.replace(tzinfo=None))]
     _log.info("Total : %d bougies sur %d appels API", len(df), n_calls)
     return df
 
@@ -316,12 +323,13 @@ def fetch_bars_paged(
 # API haut-niveau
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def fetch_history(
     client: ProjectXClient,
     symbol: str,
     days_back: int = 180,
     timeframe: str = "m15",
-    end: Optional[datetime] = None,
+    end: datetime | None = None,
     live: bool = False,
     include_partial: bool = False,
 ) -> pd.DataFrame:
@@ -350,17 +358,17 @@ def fetch_history(
     if not contract_id:
         raise ValueError(f"Contrat sans id pour '{symbol}' : {contract}")
 
-    end = end or datetime.now(timezone.utc)
+    end = end or datetime.now(UTC)
     start = end - timedelta(days=int(days_back))
 
     return fetch_bars_paged(
-        client          = client,
-        contract_id     = contract_id,
-        start_dt        = start,
-        end_dt          = end,
-        timeframe       = timeframe,
-        live            = live,
-        include_partial = include_partial,
+        client=client,
+        contract_id=contract_id,
+        start_dt=start,
+        end_dt=end,
+        timeframe=timeframe,
+        live=live,
+        include_partial=include_partial,
     )
 
 
@@ -387,17 +395,16 @@ def save_to_csv(
 
     if not overwrite and path.exists():
         from core.data import load_csv
+
         try:
             existing = load_csv(str(path))
             merged = pd.concat([existing, df_out])
             df_out = merged[~merged.index.duplicated(keep="last")].sort_index()
-            _log.info("Merge avec existant : %d → %d bougies",
-                      len(existing), len(df_out))
+            _log.info("Merge avec existant : %d → %d bougies", len(existing), len(df_out))
         except Exception as exc:
             _log.warning("Merge échoué (%s) — overwrite forcé", exc)
 
-    df_out.to_csv(path, index=True,
-                  date_format="%Y-%m-%d %H:%M:%S")
+    df_out.to_csv(path, index=True, date_format="%Y-%m-%d %H:%M:%S")
     _log.info("CSV écrit : %s  (%d lignes)", path, len(df_out))
     return path
 
@@ -406,7 +413,8 @@ def save_to_csv(
 # Catalogue / découverte
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def list_known_symbols() -> List[Tuple[str, str]]:
+
+def list_known_symbols() -> list[tuple[str, str]]:
     """Retourne [(alias, description)] du CATALOG raccourci."""
     return [(k, v["desc"]) for k, v in CATALOG.items()]
 
@@ -427,8 +435,7 @@ def list_available_on_topstepx(
     df = pd.DataFrame(contracts)
     if df.empty:
         return df
-    cols = ["id", "name", "description", "tickSize", "tickValue",
-            "symbolId", "activeContract"]
+    cols = ["id", "name", "description", "tickSize", "tickValue", "symbolId", "activeContract"]
     df = df[[c for c in cols if c in df.columns]]
     return df.sort_values(["symbolId", "name"]).reset_index(drop=True)
 
@@ -436,6 +443,7 @@ def list_available_on_topstepx(
 # ═══════════════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _build_client_from_env() -> ProjectXClient:
     """Lit .env et instancie un client connecté."""
@@ -447,11 +455,9 @@ def _build_client_from_env() -> ProjectXClient:
                 k, _, v = line.partition("=")
                 os.environ.setdefault(k.strip(), v.strip())
     user = os.environ.get("PROJECTX_USERNAME", "").strip()
-    api  = os.environ.get("PROJECTX_API_KEY",  "").strip()
+    api = os.environ.get("PROJECTX_API_KEY", "").strip()
     if not user or not api:
-        raise SystemExit(
-            "PROJECTX_USERNAME et PROJECTX_API_KEY doivent être définis (.env)"
-        )
+        raise SystemExit("PROJECTX_USERNAME et PROJECTX_API_KEY doivent être définis (.env)")
     client = ProjectXClient(user, api)
     if not client.login():
         raise SystemExit("Authentification ProjectX échouée")
@@ -462,30 +468,39 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fetch historique TopstepX → CSV compatible projet",
     )
-    parser.add_argument("--symbol",    type=str, default=None,
-                        help="Alias CATALOG (MGC, MCL, MNQ…) ou raw")
-    parser.add_argument("--timeframe", type=str, default="m15",
-                        choices=list(TIMEFRAMES.keys()))
-    parser.add_argument("--days",      type=int, default=180,
-                        help="Nombre de jours à remonter (défaut 180)")
-    parser.add_argument("--end",       type=str, default=None,
-                        help="Fin de fenêtre (YYYY-MM-DD) ; défaut maintenant")
-    parser.add_argument("--live",      action="store_true",
-                        help="Souscription live (défaut : sim)")
-    parser.add_argument("--save",      action="store_true",
-                        help="Écrire data/{TICKER}_data_{tf}.csv")
-    parser.add_argument("--ticker",    type=str, default=None,
-                        help="Nom de ticker à utiliser dans le CSV "
-                             "(défaut : --symbol majuscule)")
+    parser.add_argument(
+        "--symbol", type=str, default=None, help="Alias CATALOG (MGC, MCL, MNQ…) ou raw"
+    )
+    parser.add_argument("--timeframe", type=str, default="m15", choices=list(TIMEFRAMES.keys()))
+    parser.add_argument(
+        "--days", type=int, default=180, help="Nombre de jours à remonter (défaut 180)"
+    )
+    parser.add_argument(
+        "--end", type=str, default=None, help="Fin de fenêtre (YYYY-MM-DD) ; défaut maintenant"
+    )
+    parser.add_argument("--live", action="store_true", help="Souscription live (défaut : sim)")
+    parser.add_argument("--save", action="store_true", help="Écrire data/{TICKER}_data_{tf}.csv")
+    parser.add_argument(
+        "--ticker",
+        type=str,
+        default=None,
+        help="Nom de ticker à utiliser dans le CSV (défaut : --symbol majuscule)",
+    )
     parser.add_argument("--output-dir", type=str, default="data")
-    parser.add_argument("--merge", action="store_true",
-                        help="Au lieu d'écraser, fusionner avec le CSV existant")
-    parser.add_argument("--list",      action="store_true",
-                        help="Lister le CATALOG raccourci et quitter")
-    parser.add_argument("--available", action="store_true",
-                        help="Lister tous les contrats disponibles côté ProjectX")
-    parser.add_argument("--log-level", type=str, default="INFO",
-                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument(
+        "--merge", action="store_true", help="Au lieu d'écraser, fusionner avec le CSV existant"
+    )
+    parser.add_argument(
+        "--list", action="store_true", help="Lister le CATALOG raccourci et quitter"
+    )
+    parser.add_argument(
+        "--available",
+        action="store_true",
+        help="Lister tous les contrats disponibles côté ProjectX",
+    )
+    parser.add_argument(
+        "--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -517,33 +532,38 @@ def main() -> int:
 
     end_dt = None
     if args.end:
-        end_dt = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end_dt = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
 
     df = fetch_history(
-        client    = client,
-        symbol    = args.symbol,
-        days_back = args.days,
-        timeframe = args.timeframe,
-        end       = end_dt,
-        live      = args.live,
+        client=client,
+        symbol=args.symbol,
+        days_back=args.days,
+        timeframe=args.timeframe,
+        end=end_dt,
+        live=args.live,
     )
 
     if df.empty:
-        print(f"Aucune barre récupérée pour {args.symbol} {args.timeframe} "
-              f"sur les {args.days} derniers jours")
+        print(
+            f"Aucune barre récupérée pour {args.symbol} {args.timeframe} "
+            f"sur les {args.days} derniers jours"
+        )
         return 1
 
-    print(f"\n✓ {len(df):,} bougies récupérées  "
-          f"[{df.index.min()} → {df.index.max()}]")
+    print(f"\n✓ {len(df):,} bougies récupérées  [{df.index.min()} → {df.index.max()}]")
     print(df.head(3).to_string())
     print("...")
     print(df.tail(3).to_string())
 
     if args.save:
         ticker = (args.ticker or args.symbol).upper()
-        path = save_to_csv(df, ticker=ticker, timeframe=args.timeframe,
-                           output_dir=args.output_dir,
-                           overwrite=not args.merge)
+        path = save_to_csv(
+            df,
+            ticker=ticker,
+            timeframe=args.timeframe,
+            output_dir=args.output_dir,
+            overwrite=not args.merge,
+        )
         print(f"\n→ {path}")
         print(f"  Utilise : python backtest.py --strategy <nom> --csv-dir {args.output_dir}")
     return 0

@@ -7,6 +7,7 @@ chacun, puis rapporte moyenne ± std des métriques par (ticker, order).
 
 Usage : python scripts/research_pivot_wf.py --ticker NQ1 --order 10
 """
+
 from __future__ import annotations
 
 import argparse
@@ -14,12 +15,11 @@ import sys
 import warnings
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import average_precision_score, precision_recall_curve
@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 # On réutilise label_pivots / build_features / leak_check / FEATURE_COLS
 # en monkey-patchant les globals nécessaires.
 import research_pivot_nq1 as base  # noqa: E402
+
 from core.data import load_csv  # noqa: E402
 
 OUT_ROOT = ROOT / "output" / "pivot_research_wf"
@@ -50,16 +51,37 @@ SPLITS = [
 OOS_HORIZON_DAYS = 60  # ~2 mois
 
 FEATURE_COLS = [
-    "ema9_slope", "ema21_slope", "ema50_slope",
-    "roc_5", "roc_20", "roc_50", "adx_14",
-    "atr_14", "atr_ratio_short_long", "bb_width",
-    "dist_close_ema21_atr", "range_atr_ratio",
-    "body_range_ratio", "upper_wick_ratio", "lower_wick_ratio", "vol_rel",
-    "dist_to_max20_atr", "dist_to_min20_atr",
-    "past_pivot_density_2atr", "past_pivot_density_1atr",
-    "ret_lag_1", "ret_lag_2", "ret_lag_3", "ret_lag_5", "ret_lag_10",
+    "ema9_slope",
+    "ema21_slope",
+    "ema50_slope",
+    "roc_5",
+    "roc_20",
+    "roc_50",
+    "adx_14",
+    "atr_14",
+    "atr_ratio_short_long",
+    "bb_width",
+    "dist_close_ema21_atr",
+    "range_atr_ratio",
+    "body_range_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+    "vol_rel",
+    "dist_to_max20_atr",
+    "dist_to_min20_atr",
+    "past_pivot_density_2atr",
+    "past_pivot_density_1atr",
+    "ret_lag_1",
+    "ret_lag_2",
+    "ret_lag_3",
+    "ret_lag_5",
+    "ret_lag_10",
     "up_bars_last_10",
-    "hour_ny", "minute_ny", "dow", "bars_since_open", "is_macro_day",
+    "hour_ny",
+    "minute_ny",
+    "dow",
+    "bars_since_open",
+    "is_macro_day",
 ]
 
 
@@ -74,13 +96,20 @@ def precision_at_recall(y_true, y_score, target_recall):
 def train_one(X_is, y_is, X_oos, y_oos, model_name):
     if model_name == "random_forest":
         m = RandomForestClassifier(
-            n_estimators=300, max_depth=8, class_weight="balanced",
-            random_state=42, n_jobs=-1, min_samples_leaf=20,
+            n_estimators=300,
+            max_depth=8,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+            min_samples_leaf=20,
         )
     else:
         m = HistGradientBoostingClassifier(
-            max_iter=300, learning_rate=0.05, max_depth=6,
-            class_weight="balanced", random_state=42,
+            max_iter=300,
+            learning_rate=0.05,
+            max_depth=6,
+            class_weight="balanced",
+            random_state=42,
         )
     m.fit(X_is, y_is)
     p_oos = m.predict_proba(X_oos)[:, 1]
@@ -148,16 +177,18 @@ def run_one_cell(ticker: str, order: int) -> dict:
         hgb, p_hgb = train_one(X_is, y_is, X_oos, y_oos, "hist_gbm")
         sc_hgb = score_proba(y_oos, p_hgb, base_rate_oos)
 
-        per_split.append({
-            "split": i,
-            "is_end": str(is_end.date()),
-            "oos_end": str(min(oos_end, df.index[-1]).date()),
-            "n_is": int(len(df_is)),
-            "n_oos": int(len(df_oos)),
-            "base_rate": base_rate_oos,
-            "rf": sc_rf,
-            "hgb": sc_hgb,
-        })
+        per_split.append(
+            {
+                "split": i,
+                "is_end": str(is_end.date()),
+                "oos_end": str(min(oos_end, df.index[-1]).date()),
+                "n_is": int(len(df_is)),
+                "n_oos": int(len(df_oos)),
+                "base_rate": base_rate_oos,
+                "rf": sc_rf,
+                "hgb": sc_hgb,
+            }
+        )
         last_split_X_oos = X_oos
         last_split_y_oos = y_oos
         last_model = rf
@@ -165,8 +196,7 @@ def run_one_cell(ticker: str, order: int) -> dict:
     # Agrégation
     used = [s for s in per_split if "rf" in s]
     if not used:
-        return {"ticker": ticker, "order": order, "splits": per_split,
-                "error": "no usable split"}
+        return {"ticker": ticker, "order": order, "splits": per_split, "error": "no usable split"}
 
     def agg(metric, model_key):
         vals = np.array([s[model_key][metric] for s in used])
@@ -189,14 +219,20 @@ def run_one_cell(ticker: str, order: int) -> dict:
     if last_model is not None and last_split_X_oos is not None and len(last_split_y_oos) > 200:
         try:
             pi = permutation_importance(
-                last_model, last_split_X_oos, last_split_y_oos,
-                n_repeats=3, random_state=42, n_jobs=-1,
+                last_model,
+                last_split_X_oos,
+                last_split_y_oos,
+                n_repeats=3,
+                random_state=42,
+                n_jobs=-1,
                 scoring="average_precision",
             )
-            imp = pd.DataFrame({
-                "feature": FEATURE_COLS,
-                "importance": pi.importances_mean,
-            }).sort_values("importance", ascending=False)
+            imp = pd.DataFrame(
+                {
+                    "feature": FEATURE_COLS,
+                    "importance": pi.importances_mean,
+                }
+            ).sort_values("importance", ascending=False)
             summary["top_features"] = imp.head(10).to_dict(orient="records")
         except Exception as e:
             summary["top_features_error"] = str(e)
@@ -211,30 +247,34 @@ def run_one_cell(ticker: str, order: int) -> dict:
     w("## Métriques par split\n")
     rows = []
     for s in used:
-        rows.append({
-            "split": s["split"],
-            "is_end": s["is_end"],
-            "oos_end": s["oos_end"],
-            "n_oos": s["n_oos"],
-            "base_rate": f"{s['base_rate']:.2%}",
-            "rf_pr_auc": f"{s['rf']['pr_auc']:.3f}",
-            "rf_p@r10": f"{s['rf']['prec_at_recall_10']:.2%}",
-            "hgb_pr_auc": f"{s['hgb']['pr_auc']:.3f}",
-            "hgb_p@r10": f"{s['hgb']['prec_at_recall_10']:.2%}",
-        })
+        rows.append(
+            {
+                "split": s["split"],
+                "is_end": s["is_end"],
+                "oos_end": s["oos_end"],
+                "n_oos": s["n_oos"],
+                "base_rate": f"{s['base_rate']:.2%}",
+                "rf_pr_auc": f"{s['rf']['pr_auc']:.3f}",
+                "rf_p@r10": f"{s['rf']['prec_at_recall_10']:.2%}",
+                "hgb_pr_auc": f"{s['hgb']['pr_auc']:.3f}",
+                "hgb_p@r10": f"{s['hgb']['prec_at_recall_10']:.2%}",
+            }
+        )
     w(pd.DataFrame(rows).to_markdown(index=False))
     w("")
 
     w("## Synthèse walk-forward (moyenne ± std)\n")
     agg_rows = []
     for model_key, lbl in (("rf", "RF"), ("hgb", "HGB")):
-        agg_rows.append({
-            "modèle": lbl,
-            "PR-AUC": f"{summary[f'{model_key}_pr_auc_mean']:.3f} ± {summary[f'{model_key}_pr_auc_std']:.3f}",
-            "P@R5%": f"{summary[f'{model_key}_prec_at_recall_5_mean']:.2%} ± {summary[f'{model_key}_prec_at_recall_5_std']:.2%}",
-            "P@R10%": f"{summary[f'{model_key}_prec_at_recall_10_mean']:.2%} ± {summary[f'{model_key}_prec_at_recall_10_std']:.2%}",
-            "P@R20%": f"{summary[f'{model_key}_prec_at_recall_20_mean']:.2%} ± {summary[f'{model_key}_prec_at_recall_20_std']:.2%}",
-        })
+        agg_rows.append(
+            {
+                "modèle": lbl,
+                "PR-AUC": f"{summary[f'{model_key}_pr_auc_mean']:.3f} ± {summary[f'{model_key}_pr_auc_std']:.3f}",
+                "P@R5%": f"{summary[f'{model_key}_prec_at_recall_5_mean']:.2%} ± {summary[f'{model_key}_prec_at_recall_5_std']:.2%}",
+                "P@R10%": f"{summary[f'{model_key}_prec_at_recall_10_mean']:.2%} ± {summary[f'{model_key}_prec_at_recall_10_std']:.2%}",
+                "P@R20%": f"{summary[f'{model_key}_prec_at_recall_20_mean']:.2%} ± {summary[f'{model_key}_prec_at_recall_20_std']:.2%}",
+            }
+        )
     w(pd.DataFrame(agg_rows).to_markdown(index=False))
     w("")
 
@@ -262,9 +302,11 @@ def main():
     print(f"  • splits utilisés : {summary['n_splits']}/{len(SPLITS)}")
     print(f"  • base rate mean : {summary['base_rate_mean']:.2%}")
     for k in ("rf", "hgb"):
-        print(f"  • {k:4s}  PR-AUC = {summary[f'{k}_pr_auc_mean']:.3f} ± {summary[f'{k}_pr_auc_std']:.3f}  "
-              f"P@R10% = {summary[f'{k}_prec_at_recall_10_mean']:.2%} ± "
-              f"{summary[f'{k}_prec_at_recall_10_std']:.2%}")
+        print(
+            f"  • {k:4s}  PR-AUC = {summary[f'{k}_pr_auc_mean']:.3f} ± {summary[f'{k}_pr_auc_std']:.3f}  "
+            f"P@R10% = {summary[f'{k}_prec_at_recall_10_mean']:.2%} ± "
+            f"{summary[f'{k}_prec_at_recall_10_std']:.2%}"
+        )
 
 
 if __name__ == "__main__":

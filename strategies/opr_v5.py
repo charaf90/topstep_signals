@@ -37,7 +37,6 @@ Voir config.py section "STRATÉGIE OPR v5" pour les paramètres.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -48,22 +47,28 @@ np.random.seed(42)
 
 import config as cfg
 from config import (
-    OPR_TIMEZONE,
-    OPR_ATR_PERIOD,
-    OPR_SL_ATR_MULT, OPR_TP_ATR_MULT,
-    OPR_V5_STRATEGY_VERSION, OPR_V5_TICKERS,
-    OPR_V5_F1_MIN, OPR_V5_F1_MAX, OPR_V5_F2_MAX_ATR, OPR_V5_F3_MAX,
+    CONSEC_LOSS_PAUSE_DAYS,
     CUTOFF_HOUR_UTC,
-    DAILY_STOP_AFTER_SL, CONSEC_LOSS_PAUSE_DAYS, DAILY_LOCKIN_THRESHOLD,
+    DAILY_LOCKIN_THRESHOLD,
+    DAILY_STOP_AFTER_SL,
+    OPR_ATR_PERIOD,
+    OPR_SL_ATR_MULT,
+    OPR_TIMEZONE,
+    OPR_TP_ATR_MULT,
+    OPR_V5_F1_MAX,
+    OPR_V5_F1_MIN,
+    OPR_V5_F2_MAX_ATR,
+    OPR_V5_F3_MAX,
+    OPR_V5_STRATEGY_VERSION,
+    OPR_V5_TICKERS,
 )
-from core.opr import run_opr_day, _ny_session_view, _opr_bar, _compute_atr_daily
+from core.opr import _compute_atr_daily, _ny_session_view, _opr_bar, run_opr_day
 from core.risk_topstep import trade_allowed
 
-
 # ── Identité de la stratégie ─────────────────────────────────────────────────
-STRATEGY_ID   = OPR_V5_STRATEGY_VERSION          # "opr-v5"
-TICKERS       = list(OPR_V5_TICKERS)             # ["MES1", "NQ1", "YM1"]
-CSV_SUFFIX    = "_opr_v5"
+STRATEGY_ID = OPR_V5_STRATEGY_VERSION  # "opr-v5"
+TICKERS = list(OPR_V5_TICKERS)  # ["MES1", "NQ1", "YM1"]
+CSV_SUFFIX = "_opr_v5"
 CSV_TIMEFRAME = "m15"
 
 # ── Grille d'optimisation (walk-forward via core/optimizer.py) ───────────────
@@ -75,9 +80,9 @@ CSV_TIMEFRAME = "m15"
 #   3 × 3 × 3 = 27 combos/ticker → 81 total
 #   Bonferroni : p_seuil = 0.05 / 81 = 6.2e-4 → bootstrap ≥ 99.94 % requis
 PARAM_GRID = {
-    "f1_max":     [None, 6, 10],     # 0 = trigger immédiat post-OPR ; 12+ = très tardif
+    "f1_max": [None, 6, 10],  # 0 = trigger immédiat post-OPR ; 12+ = très tardif
     "f2_max_atr": [None, 0.5, 1.0],  # excursion max en ATR daily entre trigger et fill
-    "f3_max":     [None, 2, 4],      # bougies entre trigger et fill (M15)
+    "f3_max": [None, 2, 4],  # bougies entre trigger et fill (M15)
 }
 
 
@@ -85,7 +90,8 @@ PARAM_GRID = {
 # Helpers : conversion timestamps, comptage bougies
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _to_ts_ny(value, tz: ZoneInfo) -> Optional[pd.Timestamp]:
+
+def _to_ts_ny(value, tz: ZoneInfo) -> pd.Timestamp | None:
     """
     Convertit un timestamp (potentiellement string, naïf UTC, ou tz-aware)
     en pd.Timestamp tz-aware NY. None si valeur invalide ou nulle.
@@ -153,16 +159,17 @@ def _count_bars_strict(
 # Calcul features F1/F2/F3 — avec asserts causalité
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _compute_features_for_signal(
-    sig: Dict,
-    trade_res: Dict,
+    sig: dict,
+    trade_res: dict,
     df_session_ny: pd.DataFrame,
     opr_ts_ny: pd.Timestamp,
     opr_high: float,
     opr_low: float,
     atr_daily: float,
     tz: ZoneInfo,
-) -> Dict:
+) -> dict:
     """
     Calcule F1, F2 (en pts, ATR, OPR-range), F3 pour un signal donné.
 
@@ -211,17 +218,21 @@ def _compute_features_for_signal(
     #   start_inclusive=False  (on exclut la bougie OPR + 1, qui est opr_end_ts)
     #   end_inclusive=True     (la bougie trigger est comptée)
     f1 = _count_bars_strict(
-        df_session_ny, opr_end_ts, trigger_ts,
-        start_inclusive=False, end_inclusive=True,
+        df_session_ny,
+        opr_end_ts,
+        trigger_ts,
+        start_inclusive=False,
+        end_inclusive=True,
     )
 
     # Assert causalité : toutes les bougies considérées ont ts ≤ trigger_ts
-    bars_f1 = df_session_ny[(df_session_ny.index > opr_end_ts) &
-                            (df_session_ny.index <= trigger_ts)]
+    bars_f1 = df_session_ny[
+        (df_session_ny.index > opr_end_ts) & (df_session_ny.index <= trigger_ts)
+    ]
     if len(bars_f1) > 0:
-        assert bars_f1.index.max() <= trigger_ts, (
-            f"Look-ahead F1 détecté : bougie {bars_f1.index.max()} > trigger {trigger_ts}"
-        )
+        assert (
+            bars_f1.index.max() <= trigger_ts
+        ), f"Look-ahead F1 détecté : bougie {bars_f1.index.max()} > trigger {trigger_ts}"
 
     out["f1_bars"] = int(f1)
 
@@ -237,15 +248,14 @@ def _compute_features_for_signal(
     #   Sémantique projet : nb de bougies M15 entre `trigger_time` et `fill_time`
     #   La bougie trigger elle-même n'est pas dans le pullback (c'est la cassure).
     #   La bougie fill_time est la première qui touche le niveau LIMIT (incluse).
-    bars_f3 = df_session_ny[(df_session_ny.index > trigger_ts) &
-                            (df_session_ny.index <= fill_ts)]
+    bars_f3 = df_session_ny[(df_session_ny.index > trigger_ts) & (df_session_ny.index <= fill_ts)]
     f3 = int(len(bars_f3))
 
     # Assert causalité F3
     if f3 > 0:
-        assert bars_f3.index.max() <= fill_ts, (
-            f"Look-ahead F3 détecté : bougie {bars_f3.index.max()} > fill {fill_ts}"
-        )
+        assert (
+            bars_f3.index.max() <= fill_ts
+        ), f"Look-ahead F3 détecté : bougie {bars_f3.index.max()} > fill {fill_ts}"
 
     # F3 ≥ 1 par construction si filled (sinon le LIMIT ne peut pas avoir été touché
     # sur une bougie postérieure au trigger). Si f3 == 0, c'est que fill = trigger
@@ -254,14 +264,13 @@ def _compute_features_for_signal(
     out["f3_bars"] = max(f3, 1) if f3 >= 0 else 1
 
     # F2 : excursion max dans le sens de la cassure entre trigger (inclus) et fill (inclus)
-    bars_f2 = df_session_ny[(df_session_ny.index >= trigger_ts) &
-                            (df_session_ny.index <= fill_ts)]
+    bars_f2 = df_session_ny[(df_session_ny.index >= trigger_ts) & (df_session_ny.index <= fill_ts)]
 
     # Assert causalité F2
     if len(bars_f2) > 0:
-        assert bars_f2.index.max() <= fill_ts, (
-            f"Look-ahead F2 détecté : bougie {bars_f2.index.max()} > fill {fill_ts}"
-        )
+        assert (
+            bars_f2.index.max() <= fill_ts
+        ), f"Look-ahead F2 détecté : bougie {bars_f2.index.max()} > fill {fill_ts}"
 
     if bars_f2.empty:
         return out
@@ -285,14 +294,15 @@ def _compute_features_for_signal(
 # Application des filtres v5 — équivalent causal du filtre pré-fill
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _apply_v5_filters(
-    trade_row: Dict,
-    features: Dict,
-    f1_min: Optional[float],
-    f1_max: Optional[float],
-    f2_max_atr: Optional[float],
-    f3_max: Optional[float],
-) -> Tuple[Dict, Optional[str]]:
+    trade_row: dict,
+    features: dict,
+    f1_min: float | None,
+    f1_max: float | None,
+    f2_max_atr: float | None,
+    f3_max: float | None,
+) -> tuple[dict, str | None]:
     """
     Applique les filtres v5 sur un trade enrichi. Si rejet, marque NOT_FILLED.
 
@@ -310,18 +320,28 @@ def _apply_v5_filters(
     # ── F1 : borne basse puis borne haute ─────────────────────────────────────
     if f1_min is not None and not pd.isna(f1):
         if f1 < f1_min:
-            trade_row.update({
-                "result": "NOT_FILLED", "pnl": 0.0,
-                "fill_time": None, "exit_time": None, "exit": None,
-            })
+            trade_row.update(
+                {
+                    "result": "NOT_FILLED",
+                    "pnl": 0.0,
+                    "fill_time": None,
+                    "exit_time": None,
+                    "exit": None,
+                }
+            )
             return trade_row, "F1_too_short"
 
     if f1_max is not None and not pd.isna(f1):
         if f1 > f1_max:
-            trade_row.update({
-                "result": "NOT_FILLED", "pnl": 0.0,
-                "fill_time": None, "exit_time": None, "exit": None,
-            })
+            trade_row.update(
+                {
+                    "result": "NOT_FILLED",
+                    "pnl": 0.0,
+                    "fill_time": None,
+                    "exit_time": None,
+                    "exit": None,
+                }
+            )
             return trade_row, "F1_too_long"
 
     # ── Si trade NOT_FILLED nativement (v4 n'a pas fillé), F2/F3 = NaN → on
@@ -332,19 +352,29 @@ def _apply_v5_filters(
     # ── F2 : borne haute (excursion en ATR daily) ─────────────────────────────
     if f2_max_atr is not None and not pd.isna(f2_atr):
         if f2_atr > f2_max_atr:
-            trade_row.update({
-                "result": "NOT_FILLED", "pnl": 0.0,
-                "fill_time": None, "exit_time": None, "exit": None,
-            })
+            trade_row.update(
+                {
+                    "result": "NOT_FILLED",
+                    "pnl": 0.0,
+                    "fill_time": None,
+                    "exit_time": None,
+                    "exit": None,
+                }
+            )
             return trade_row, "F2_excursion_too_wide"
 
     # ── F3 : borne haute (nb de bougies trigger → fill) ──────────────────────
     if f3_max is not None and not pd.isna(f3):
         if f3 > f3_max:
-            trade_row.update({
-                "result": "NOT_FILLED", "pnl": 0.0,
-                "fill_time": None, "exit_time": None, "exit": None,
-            })
+            trade_row.update(
+                {
+                    "result": "NOT_FILLED",
+                    "pnl": 0.0,
+                    "fill_time": None,
+                    "exit_time": None,
+                    "exit": None,
+                }
+            )
             return trade_row, "F3_pullback_too_late"
 
     return trade_row, None
@@ -353,6 +383,7 @@ def _apply_v5_filters(
 # ═════════════════════════════════════════════════════════════════════════════
 # Interface plug-and-play : run_backtest
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def run_backtest(
     df_15m: pd.DataFrame,
@@ -386,10 +417,10 @@ def run_backtest(
 
     # ── Résolution params v5 (priorité : params > config) ─────────────────────
     p = params or {}
-    f1_min     = p.get("f1_min",     OPR_V5_F1_MIN.get(ticker))
-    f1_max     = p.get("f1_max",     OPR_V5_F1_MAX.get(ticker))
+    f1_min = p.get("f1_min", OPR_V5_F1_MIN.get(ticker))
+    f1_max = p.get("f1_max", OPR_V5_F1_MAX.get(ticker))
     f2_max_atr = p.get("f2_max_atr", OPR_V5_F2_MAX_ATR.get(ticker))
-    f3_max     = p.get("f3_max",     OPR_V5_F3_MAX.get(ticker))
+    f3_max = p.get("f3_max", OPR_V5_F3_MAX.get(ticker))
 
     # ── Surcharge SL/TP v4 (optionnel) ────────────────────────────────────────
     sl_orig = OPR_SL_ATR_MULT[ticker]
@@ -404,6 +435,7 @@ def run_backtest(
         cfg.OPR_SL_ATR_MULT[ticker] = sl_new
         cfg.OPR_TP_ATR_MULT[ticker] = tp_new
         from core import opr as _opr
+
         _opr.OPR_SL_ATR_MULT[ticker] = sl_new
         _opr.OPR_TP_ATR_MULT[ticker] = tp_new
 
@@ -426,9 +458,7 @@ def run_backtest(
                 continue
 
             if topstep_guard:
-                allowed, _ = trade_allowed(
-                    day_pnl=0.0, cum_pnl=cum_pnl, peak_pnl=peak_pnl
-                )
+                allowed, _ = trade_allowed(day_pnl=0.0, cum_pnl=cum_pnl, peak_pnl=peak_pnl)
                 if not allowed:
                     continue
 
@@ -444,7 +474,7 @@ def run_backtest(
                 # Edge case impossible si signals non vide, mais sécurité
                 continue
             opr_high = float(opr_bar["high"])
-            opr_low  = float(opr_bar["low"])
+            opr_low = float(opr_bar["low"])
             opr_ts_ny = opr_bar.name  # tz-aware NY
             atr_daily = _compute_atr_daily(df_15m, day_ny, OPR_ATR_PERIOD)
             if atr_daily is None:
@@ -452,32 +482,34 @@ def run_backtest(
                 continue
 
             # ── Enrichir chaque trade des features v5 ─────────────────────────
-            day_trades: List[Dict] = []
+            day_trades: list[dict] = []
             for sig, res in zip(signals, sim_results):
                 trade_row = {
-                    "date":         ds,
-                    "strategy":     "OPR_V5",
-                    "dir":          sig["direction"],
-                    "entry":        sig["entry"],
-                    "sl":           sig["sl"],
-                    "tp":           sig["tp"],
-                    "sl_dist":      sig["sl_dist"],
-                    "tp_dist":      sig["tp_dist"],
-                    "rr":           sig["rr"],
-                    "n_ct":         sig["n_ct"],
-                    "risk_$":       sig["risk"],
-                    "regime":       sig.get("regime") or "OPR_V5",
-                    "zone_low":     sig["zone_low"],
-                    "zone_high":    sig["zone_high"],
+                    "date": ds,
+                    "strategy": "OPR_V5",
+                    "dir": sig["direction"],
+                    "entry": sig["entry"],
+                    "sl": sig["sl"],
+                    "tp": sig["tp"],
+                    "sl_dist": sig["sl_dist"],
+                    "tp_dist": sig["tp_dist"],
+                    "rr": sig["rr"],
+                    "n_ct": sig["n_ct"],
+                    "risk_$": sig["risk"],
+                    "regime": sig.get("regime") or "OPR_V5",
+                    "zone_low": sig["zone_low"],
+                    "zone_high": sig["zone_high"],
                     "trigger_time": sig.get("trigger_time"),
                     **res,
                 }
 
                 features = _compute_features_for_signal(
-                    sig=sig, trade_res=res,
+                    sig=sig,
+                    trade_res=res,
                     df_session_ny=df_session_ny,
                     opr_ts_ny=opr_ts_ny,
-                    opr_high=opr_high, opr_low=opr_low,
+                    opr_high=opr_high,
+                    opr_low=opr_low,
                     atr_daily=atr_daily,
                     tz=tz,
                 )
@@ -489,38 +521,50 @@ def run_backtest(
                 trade_row, reject_reason = _apply_v5_filters(
                     trade_row=trade_row,
                     features=features,
-                    f1_min=f1_min, f1_max=f1_max,
-                    f2_max_atr=f2_max_atr, f3_max=f3_max,
+                    f1_min=f1_min,
+                    f1_max=f1_max,
+                    f2_max_atr=f2_max_atr,
+                    f3_max=f3_max,
                 )
                 trade_row["v5_reject_reason"] = reject_reason
 
                 day_trades.append(trade_row)
 
             # ── Circuit breakers daily (identique à strategies/opr.py) ────────
-            filled     = [t for t in day_trades if t["result"] != "NOT_FILLED"]
+            filled = [t for t in day_trades if t["result"] != "NOT_FILLED"]
             not_filled = [t for t in day_trades if t["result"] == "NOT_FILLED"]
             filled.sort(key=lambda t: t.get("fill_time") or "")
 
             kept = []
             breaker_armed = False
-            running_pnl   = 0.0
-            cancelled_cb  = []
+            running_pnl = 0.0
+            cancelled_cb = []
             for t in filled:
                 if breaker_armed:
                     cancelled_cb.append(t)
                     continue
                 kept.append(t)
                 running_pnl += t["pnl"]
-                if DAILY_STOP_AFTER_SL and t["result"] == "SL":
-                    breaker_armed = True
-                elif DAILY_LOCKIN_THRESHOLD > 0 and running_pnl >= DAILY_LOCKIN_THRESHOLD:
+                if (
+                    DAILY_STOP_AFTER_SL
+                    and t["result"] == "SL"
+                    or DAILY_LOCKIN_THRESHOLD > 0
+                    and running_pnl >= DAILY_LOCKIN_THRESHOLD
+                ):
                     breaker_armed = True
 
             for t in cancelled_cb:
                 # NB : on garde le v5_reject_reason existant (None ou rejet)
                 # et on annule simplement le fill (breaker daily, pas filtre v5).
-                t.update({"result": "NOT_FILLED", "pnl": 0,
-                          "fill_time": None, "exit_time": None, "exit": None})
+                t.update(
+                    {
+                        "result": "NOT_FILLED",
+                        "pnl": 0,
+                        "fill_time": None,
+                        "exit_time": None,
+                        "exit": None,
+                    }
+                )
 
             trades_out.extend(kept + not_filled + cancelled_cb)
 
@@ -539,6 +583,7 @@ def run_backtest(
             cfg.OPR_SL_ATR_MULT[ticker] = sl_orig
             cfg.OPR_TP_ATR_MULT[ticker] = tp_orig
             from core import opr as _opr
+
             _opr.OPR_SL_ATR_MULT[ticker] = sl_orig
             _opr.OPR_TP_ATR_MULT[ticker] = tp_orig
 
@@ -548,6 +593,7 @@ def run_backtest(
 # ═════════════════════════════════════════════════════════════════════════════
 # Chart d'une journée (réutilise plot_day_analysis comme strategies/opr.py)
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def plot_day(
     df_15m: pd.DataFrame,
@@ -559,27 +605,32 @@ def plot_day(
     """Génère le chart OPR v5 d'une journée (identique au layout OPR v4)."""
     from core.analysis_chart import plot_day_analysis
 
-    tz     = ZoneInfo(OPR_TIMEZONE)
+    tz = ZoneInfo(OPR_TIMEZONE)
     day_ny = pd.Timestamp(date_str).tz_localize(tz)
 
     df_session = _ny_session_view(df_15m, day_ny, tz)
     opr_bar = _opr_bar(df_session) if df_session is not None else None
 
     cutoff = pd.Timestamp(f"{date_str} {CUTOFF_HOUR_UTC:02d}:00:00")
-    us_end = (day_ny.replace(hour=16, minute=30)
-              .tz_convert("UTC").tz_localize(None))
+    us_end = day_ny.replace(hour=16, minute=30).tz_convert("UTC").tz_localize(None)
 
     zones_for_chart = []
     if opr_bar is not None:
         opr_high = float(opr_bar["high"])
-        opr_low  = float(opr_bar["low"])
-        zones_for_chart.append({
-            "low": opr_low, "high": opr_high,
-            "mid": (opr_high + opr_low) / 2.0,
-            "quality": 100.0, "n_tf": 1, "touches": 1,
-            "tfs": ["OPR_V5"], "dominant_tf": "OPR_V5",
-            "start_time": opr_bar.name.tz_convert("UTC").tz_localize(None),
-        })
+        opr_low = float(opr_bar["low"])
+        zones_for_chart.append(
+            {
+                "low": opr_low,
+                "high": opr_high,
+                "mid": (opr_high + opr_low) / 2.0,
+                "quality": 100.0,
+                "n_tf": 1,
+                "touches": 1,
+                "tfs": ["OPR_V5"],
+                "dominant_tf": "OPR_V5",
+                "start_time": opr_bar.name.tz_convert("UTC").tz_localize(None),
+            }
+        )
 
     # plot_day_analysis attend la clé `direction` (non `dir`). On enrichit
     # les trades avec ce mapping pour rester compatible avec le format
@@ -595,15 +646,18 @@ def plot_day(
         return out
 
     plot_day_analysis(
-        df_15m=df_15m, ticker=ticker, date_str=date_str,
-        cutoff=cutoff, us_end=us_end,
+        df_15m=df_15m,
+        ticker=ticker,
+        date_str=date_str,
+        cutoff=cutoff,
+        us_end=us_end,
         zones=zones_for_chart,
-        signals=_enrich_for_chart(
-            [t for t in day_trades if t.get("result") != "NOT_FILLED"]
-        ),
+        signals=_enrich_for_chart([t for t in day_trades if t.get("result") != "NOT_FILLED"]),
         trades=_enrich_for_chart(day_trades),
-        regime=None, alignment_score=None,
-        pm_features=None, vol_features=None,
+        regime=None,
+        alignment_score=None,
+        pm_features=None,
+        vol_features=None,
         output_path=output_path,
     )
 
@@ -621,7 +675,8 @@ if __name__ == "__main__":
         python -m strategies.opr_v5
     """
     import sys
-    from core.data import load_csv, build_timeframes
+
+    from core.data import build_timeframes, load_csv
     from strategies import opr as v4
     from strategies import opr_v5 as v5
 
@@ -638,8 +693,10 @@ if __name__ == "__main__":
     # ces valeurs et activerait les filtres. Le test ci-dessous reste
     # invariant en court-circuitant explicitement.
     explicit_none = {
-        "f1_min": None, "f1_max": None,
-        "f2_max_atr": None, "f3_max": None,
+        "f1_min": None,
+        "f1_max": None,
+        "f2_max_atr": None,
+        "f3_max": None,
     }
 
     for ticker in TICKERS:
@@ -648,8 +705,7 @@ if __name__ == "__main__":
         tf = build_timeframes(df)
 
         t4 = v4.run_backtest(df, ticker, tf=tf, params=None, topstep_guard=False)
-        t5 = v5.run_backtest(df, ticker, tf=tf, params=explicit_none,
-                             topstep_guard=False)
+        t5 = v5.run_backtest(df, ticker, tf=tf, params=explicit_none, topstep_guard=False)
 
         # Aligner colonnes
         t4_aligned = t4[common_cols].reset_index(drop=True)

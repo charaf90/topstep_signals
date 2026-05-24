@@ -8,15 +8,16 @@ overfit du grid search global.
 
 Usage : python scripts/research_pivot_validate.py
 """
+
 from __future__ import annotations
 
 import sys
 import warnings
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -32,8 +33,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import research_pivot_nq1 as base  # noqa: E402
+from research_pivot_divergence import (  # noqa: E402
+    BASELINE_FEATURES,
+    OOS_HORIZON_DAYS,
+    ORDER,
+    SPLITS,
+)
+
 from core.data import load_csv  # noqa: E402
-from research_pivot_divergence import BASELINE_FEATURES, SPLITS, OOS_HORIZON_DAYS, ORDER  # noqa: E402
 
 OUT_DIR = ROOT / "output" / "pivot_research_combo" / "validation"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,9 +59,14 @@ COMBOS = {
         ("baseline (proba ≥ p10%)", None),
         ("vol_rel ≥ 1.734", [("vol_rel", "ge", 1.734)]),
         ("vol_rel ≥ 2.5", [("vol_rel", "ge", 2.5)]),
-        ("vol_rel ≥ 2.5 AND range_atr_ratio ≥ 2", [("vol_rel", "ge", 2.5), ("range_atr_ratio", "ge", 2.0)]),
-        ("vol_rel ≥ 2.5 AND range_atr_ratio ≥ 1.5 AND hour_ny ≥ 6",
-         [("vol_rel", "ge", 2.5), ("range_atr_ratio", "ge", 1.5), ("hour_ny", "ge", 6)]),
+        (
+            "vol_rel ≥ 2.5 AND range_atr_ratio ≥ 2",
+            [("vol_rel", "ge", 2.5), ("range_atr_ratio", "ge", 2.0)],
+        ),
+        (
+            "vol_rel ≥ 2.5 AND range_atr_ratio ≥ 1.5 AND hour_ny ≥ 6",
+            [("vol_rel", "ge", 2.5), ("range_atr_ratio", "ge", 1.5), ("hour_ny", "ge", 6)],
+        ),
     ],
 }
 
@@ -102,8 +114,12 @@ def validate_ticker(ticker: str):
         X_oos = df_oos[BASELINE_FEATURES].to_numpy(dtype=np.float32)
         y_oos = df_oos["is_pivot_any"].to_numpy(dtype=np.int32)
         rf = RandomForestClassifier(
-            n_estimators=300, max_depth=8, class_weight="balanced",
-            random_state=42, n_jobs=-1, min_samples_leaf=20,
+            n_estimators=300,
+            max_depth=8,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+            min_samples_leaf=20,
         )
         rf.fit(X_is, y_is)
         p_oos = rf.predict_proba(X_oos)[:, 1]
@@ -120,12 +136,14 @@ def validate_ticker(ticker: str):
         sub["proba"] = p_oos
         signals = sub[sub["proba"] >= thr_10]
         n_pivots_total = int((sub["is_pivot_any"] == 1).sum())
-        split_data.append({
-            "split": i,
-            "signals": signals,
-            "n_pivots_total": n_pivots_total,
-            "n_oos": len(df_oos),
-        })
+        split_data.append(
+            {
+                "split": i,
+                "signals": signals,
+                "n_pivots_total": n_pivots_total,
+                "n_oos": len(df_oos),
+            }
+        )
 
     # Pour chaque combo, calculer perf par split
     print(f"  • {len(split_data)} splits évalués")
@@ -142,7 +160,9 @@ def validate_ticker(ticker: str):
             n_tp = int((sel["is_pivot_any"] == 1).sum())
             row[f"s{sd['split']}_n"] = n
             row[f"s{sd['split']}_prec"] = n_tp / n if n > 0 else np.nan
-            row[f"s{sd['split']}_recall"] = n_tp / sd["n_pivots_total"] if sd["n_pivots_total"] > 0 else np.nan
+            row[f"s{sd['split']}_recall"] = (
+                n_tp / sd["n_pivots_total"] if sd["n_pivots_total"] > 0 else np.nan
+            )
             if n > 0:
                 precs.append(n_tp / n)
                 n_signals_list.append(n)
@@ -169,7 +189,14 @@ def format_report(ticker: str, res: pd.DataFrame):
     show_cols.extend(["mean_prec", "std_prec", "min_prec", "max_prec", "mean_recall"])
     show = res[show_cols].copy()
     for c in show.columns:
-        if c.endswith("_prec") or c.startswith("mean_") or c.startswith("min_") or c.startswith("max_") or c == "std_prec" or c == "mean_recall":
+        if (
+            c.endswith("_prec")
+            or c.startswith("mean_")
+            or c.startswith("min_")
+            or c.startswith("max_")
+            or c == "std_prec"
+            or c == "mean_recall"
+        ):
             show[c] = show[c].map(lambda x: f"{x:.2%}" if pd.notna(x) else "—")
         if c.endswith("_n"):
             show[c] = show[c].astype(int)
@@ -177,9 +204,11 @@ def format_report(ticker: str, res: pd.DataFrame):
 
     w("\n## Lecture\n")
     baseline_row = res[res["combo"].str.startswith("baseline")].iloc[0]
-    w(f"- **Baseline** : précision moyenne {baseline_row['mean_prec']:.2%}, std {baseline_row['std_prec']:.2%}")
-    w(f"- Mesure de stabilité : combo solide si `std_prec` ≤ 5 % et `min_prec` ≥ baseline_mean.")
-    w(f"- Combo suspect d'overfit si `max_prec - min_prec` > 15 pp ou `min_prec` < baseline_mean.")
+    w(
+        f"- **Baseline** : précision moyenne {baseline_row['mean_prec']:.2%}, std {baseline_row['std_prec']:.2%}"
+    )
+    w("- Mesure de stabilité : combo solide si `std_prec` ≤ 5 % et `min_prec` ≥ baseline_mean.")
+    w("- Combo suspect d'overfit si `max_prec - min_prec` > 15 pp ou `min_prec` < baseline_mean.")
     return "\n".join(lines)
 
 
@@ -193,9 +222,11 @@ def main():
         # Print summary
         print(f"\n=== {ticker} ===")
         for _, r in res.iterrows():
-            print(f"  {r['combo'][:50]:50s}  mean={r['mean_prec']:.2%}  "
-                  f"std={r['std_prec']:.2%}  min={r['min_prec']:.2%}  "
-                  f"max={r['max_prec']:.2%}  recall={r['mean_recall']:.2%}")
+            print(
+                f"  {r['combo'][:50]:50s}  mean={r['mean_prec']:.2%}  "
+                f"std={r['std_prec']:.2%}  min={r['min_prec']:.2%}  "
+                f"max={r['max_prec']:.2%}  recall={r['mean_recall']:.2%}"
+            )
 
     # Plot
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
@@ -207,16 +238,26 @@ def main():
         stds = res["std_prec"].values
         mins = res["min_prec"].values
         maxs = res["max_prec"].values
-        ax.errorbar(x, means, yerr=stds, fmt="o", color="steelblue",
-                    capsize=4, markersize=8, label="moyenne ± std")
+        ax.errorbar(
+            x,
+            means,
+            yerr=stds,
+            fmt="o",
+            color="steelblue",
+            capsize=4,
+            markersize=8,
+            label="moyenne ± std",
+        )
         ax.scatter(x, mins, marker="v", color="firebrick", label="min")
         ax.scatter(x, maxs, marker="^", color="seagreen", label="max")
         ax.set_xticks(x)
-        ax.set_xticklabels([r["combo"][:30] for _, r in res.iterrows()],
-                           rotation=30, ha="right", fontsize=8)
+        ax.set_xticklabels(
+            [r["combo"][:30] for _, r in res.iterrows()], rotation=30, ha="right", fontsize=8
+        )
         ax.set_ylabel("Précision OOS")
         ax.set_title(f"{ticker} — précision par split (4 splits WF)")
-        ax.legend(); ax.grid(alpha=0.3, axis="y")
+        ax.legend()
+        ax.grid(alpha=0.3, axis="y")
     fig.tight_layout()
     fig.savefig(OUT_DIR / "validation_split_by_split.png", dpi=110)
     plt.close(fig)

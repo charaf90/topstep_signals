@@ -7,30 +7,32 @@ Interface plug-and-play :
 Production : core/strategy_fib_v4.py
 Ce module est le wrapper backtest/recherche uniquement.
 """
+
 import pandas as pd
 
 from config import (
-    FIB_V4_STRATEGY_VERSION,
-    FIB_V4_TICKERS,
+    FIB_MIN_IMPULSE_ATR_PER_TICKER,
+    FIB_SL_ATR_MULT_PER_TICKER,
+    FIB_TP_ATR_MULT_PER_TICKER,
     FIB_V4_LEVEL_PER_TICKER,
     FIB_V4_PIVOT_BREAK_BUFFER_ATR_PER_TICKER,
+    FIB_V4_STRATEGY_VERSION,
+    FIB_V4_TICKERS,
     FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER,
-    FIB_SL_ATR_MULT_PER_TICKER, FIB_TP_ATR_MULT_PER_TICKER,
-    FIB_MIN_IMPULSE_ATR_PER_TICKER,
 )
 from core.strategy_fib_v4 import run_fib_v4_backtest
 
 # ── Identité de la stratégie ──────────────────────────────────────────────
-STRATEGY_ID = FIB_V4_STRATEGY_VERSION   # "fib-v4"
-TICKERS     = FIB_V4_TICKERS            # ["MES1", "NQ1", "MGC1"]
-CSV_SUFFIX  = "_fib_v4"
+STRATEGY_ID = FIB_V4_STRATEGY_VERSION  # "fib-v4"
+TICKERS = FIB_V4_TICKERS  # ["MES1", "NQ1", "MGC1"]
+CSV_SUFFIX = "_fib_v4"
 
 # Grille d'optimisation (utilisable via optimize.py — recherche uniquement)
 PARAM_GRID = {
-    "sl_mult":                 [0.50, 0.75, 1.00, 1.50, 2.00],
-    "tp_mult":                 [1.00, 1.50, 2.00, 2.50, 3.00],
-    "wick_max_atr":            [0.05, 0.10, 0.20, 0.40, 0.80],
-    "pivot_break_buffer_atr":  [0.00, 0.10, 0.20],
+    "sl_mult": [0.50, 0.75, 1.00, 1.50, 2.00],
+    "tp_mult": [1.00, 1.50, 2.00, 2.50, 3.00],
+    "wick_max_atr": [0.05, 0.10, 0.20, 0.40, 0.80],
+    "pivot_break_buffer_atr": [0.00, 0.10, 0.20],
 }
 
 

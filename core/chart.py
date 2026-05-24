@@ -2,18 +2,20 @@
 Graphiques de signaux style TradingView.
 """
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch
 
 from config import (
-    INSTRUMENTS, CHART_STYLE, CHART_CANDLES,
-    BACKTEST_CHART_CONTEXT_BEFORE, BACKTEST_CHART_CONTEXT_AFTER,
+    BACKTEST_CHART_CONTEXT_AFTER,
+    BACKTEST_CHART_CONTEXT_BEFORE,
+    CHART_CANDLES,
+    CHART_STYLE,
+    INSTRUMENTS,
 )
-
 
 TV_GREEN = "#26a69a"
 TV_RED = "#ef5350"
@@ -25,6 +27,7 @@ TV_BG = "#131722"
 # ─────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────
+
 
 def _draw_candles(ax, data, x=None):
     """Dessine les bougies OHLCV sur l'axe."""
@@ -43,8 +46,7 @@ def _draw_candles(ax, data, x=None):
         ax.plot([x[i], x[i]], [l[i], h[i]], color=clr, lw=0.6, alpha=0.9)
         body = max(o[i], c[i]) - min(o[i], c[i])
         if body > 0:
-            ax.bar(x[i], body, bottom=min(o[i], c[i]),
-                   width=bw, color=clr, edgecolor=clr, lw=0)
+            ax.bar(x[i], body, bottom=min(o[i], c[i]), width=bw, color=clr, edgecolor=clr, lw=0)
 
 
 def _draw_x_axis(ax, data, n):
@@ -66,6 +68,7 @@ def _draw_x_axis(ax, data, n):
 # ─────────────────────────────────────────────────────────────
 # Signal chart (mode live / pré-trade)
 # ─────────────────────────────────────────────────────────────
+
 
 def plot_signal(
     df_15m: pd.DataFrame,
@@ -119,23 +122,48 @@ def plot_signal(
     lx = n + 2
     gain = signal["n_ct"] * signal["tp_dist"] * dpp
 
-    ax.text(lx, entry, f"  ► ENTRY {entry:.2f}", fontsize=8, color=TV_BLUE,
-            va="center", fontweight="bold",
-            bbox=dict(fc=TV_BG, ec=TV_BLUE, alpha=0.9, pad=3, boxstyle="round,pad=0.3"))
-    ax.text(lx, sl,
-            f"  ✗ SL {sl:.2f}\n    {signal['sl_dist']:.1f}pts | -${signal['risk']:.0f}",
-            fontsize=7.5, color=TV_RED, va="center",
-            bbox=dict(fc=TV_BG, ec=TV_RED, alpha=0.9, pad=3, boxstyle="round,pad=0.3"))
-    ax.text(lx, tp,
-            f"  ✓ TP {tp:.2f}\n    {signal['tp_dist']:.1f}pts | +${gain:.0f}",
-            fontsize=7.5, color=TV_GREEN, va="center",
-            bbox=dict(fc=TV_BG, ec=TV_GREEN, alpha=0.9, pad=3, boxstyle="round,pad=0.3"))
+    ax.text(
+        lx,
+        entry,
+        f"  ► ENTRY {entry:.2f}",
+        fontsize=8,
+        color=TV_BLUE,
+        va="center",
+        fontweight="bold",
+        bbox=dict(fc=TV_BG, ec=TV_BLUE, alpha=0.9, pad=3, boxstyle="round,pad=0.3"),
+    )
+    ax.text(
+        lx,
+        sl,
+        f"  ✗ SL {sl:.2f}\n    {signal['sl_dist']:.1f}pts | -${signal['risk']:.0f}",
+        fontsize=7.5,
+        color=TV_RED,
+        va="center",
+        bbox=dict(fc=TV_BG, ec=TV_RED, alpha=0.9, pad=3, boxstyle="round,pad=0.3"),
+    )
+    ax.text(
+        lx,
+        tp,
+        f"  ✓ TP {tp:.2f}\n    {signal['tp_dist']:.1f}pts | +${gain:.0f}",
+        fontsize=7.5,
+        color=TV_GREEN,
+        va="center",
+        bbox=dict(fc=TV_BG, ec=TV_GREEN, alpha=0.9, pad=3, boxstyle="round,pad=0.3"),
+    )
 
     # Prix actuel
     price_now = data["close"].iloc[-1]
     ax.axhline(price_now, color="#ffffff", ls=":", lw=0.8, alpha=0.4)
-    ax.text(n - 1, price_now, f" {price_now:.2f}", fontsize=7, color="#ffffff",
-            va="bottom", ha="right", alpha=0.5)
+    ax.text(
+        n - 1,
+        price_now,
+        f" {price_now:.2f}",
+        fontsize=7,
+        color="#ffffff",
+        va="bottom",
+        ha="right",
+        alpha=0.5,
+    )
 
     # Axe X
     _draw_x_axis(ax, data, n)
@@ -149,11 +177,22 @@ def plot_signal(
         f"{ticker}  •  15min  •  {arrow}  •  "
         f"Q={signal['quality']:.0f} ({signal['n_tf']}TF, {signal['touches']}t)  •  "
         f"{signal['regime']}  •  RR={signal['rr']}",
-        fontsize=11, pad=10, loc="left", color="#d1d4dc", fontweight="bold",
+        fontsize=11,
+        pad=10,
+        loc="left",
+        color="#d1d4dc",
+        fontweight="bold",
     )
-    ax.text(0.99, 0.97,
-            f"{signal['n_ct']} micro(s)  •  risque ${signal['risk']:.0f}",
-            transform=ax.transAxes, fontsize=8, ha="right", va="top", color="#787b86")
+    ax.text(
+        0.99,
+        0.97,
+        f"{signal['n_ct']} micro(s)  •  risque ${signal['risk']:.0f}",
+        transform=ax.transAxes,
+        fontsize=8,
+        ha="right",
+        va="top",
+        color="#787b86",
+    )
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=180, bbox_inches="tight", facecolor=TV_BG)
@@ -163,6 +202,7 @@ def plot_signal(
 # ─────────────────────────────────────────────────────────────
 # Backtest trade chart (post-trade, avec exécution)
 # ─────────────────────────────────────────────────────────────
+
 
 def plot_backtest_trade(
     df_15m: pd.DataFrame,
@@ -225,8 +265,7 @@ def plot_backtest_trade(
     ax.set_ylim(chart_min - margin, chart_max + margin)
 
     # ── Zone S/R ─────────────────────────────────────────────
-    ax.axhspan(trade["zone_low"], trade["zone_high"],
-               color=TV_BLUE, alpha=0.12, zorder=0)
+    ax.axhspan(trade["zone_low"], trade["zone_high"], color=TV_BLUE, alpha=0.12, zorder=0)
 
     # ── Région du trade (fill → exit) ────────────────────────
     trade_color = TV_GREEN if pnl > 0 else TV_RED
@@ -234,12 +273,23 @@ def plot_backtest_trade(
         y_low = min(entry, exit_price)
         y_high = max(entry, exit_price)
         ax.fill_between(
-            [fill_x, exit_x], y_low, y_high,
-            color=trade_color, alpha=0.08, zorder=1,
+            [fill_x, exit_x],
+            y_low,
+            y_high,
+            color=trade_color,
+            alpha=0.08,
+            zorder=1,
         )
         # Ligne de position (entry → exit)
-        ax.plot([fill_x, exit_x], [entry, entry],
-                color=trade_color, ls="--", lw=1.0, alpha=0.5, zorder=2)
+        ax.plot(
+            [fill_x, exit_x],
+            [entry, entry],
+            color=trade_color,
+            ls="--",
+            lw=1.0,
+            alpha=0.5,
+            zorder=2,
+        )
 
     # ── Niveaux SL / TP (lignes horizontales) ────────────────
     ax.axhline(entry, color=TV_BLUE, ls="-", lw=1.8, alpha=0.9, zorder=3)
@@ -256,41 +306,81 @@ def plot_backtest_trade(
 
     # ── Marqueur FILL (triangle) ─────────────────────────────
     fill_marker = "^" if direction == "long" else "v"
-    ax.scatter(fill_x, entry, marker=fill_marker, s=120, color=TV_BLUE,
-               edgecolors="white", linewidths=0.8, zorder=5)
+    ax.scatter(
+        fill_x,
+        entry,
+        marker=fill_marker,
+        s=120,
+        color=TV_BLUE,
+        edgecolors="white",
+        linewidths=0.8,
+        zorder=5,
+    )
 
     # ── Marqueur EXIT (cercle) ───────────────────────────────
     if exit_price is not None:
         exit_colors = {"TP": TV_GREEN, "SL": TV_RED, "TE": TV_ORANGE}
         exit_clr = exit_colors.get(result, "#ffffff")
-        ax.scatter(exit_x, exit_price, marker="o", s=100, color=exit_clr,
-                   edgecolors="white", linewidths=0.8, zorder=5)
+        ax.scatter(
+            exit_x,
+            exit_price,
+            marker="o",
+            s=100,
+            color=exit_clr,
+            edgecolors="white",
+            linewidths=0.8,
+            zorder=5,
+        )
 
     # ── Labels prix (côté droit) ─────────────────────────────
     lx = n + 2
     gain_pot = trade["n_ct"] * trade["tp_dist"] * dpp
 
-    ax.text(lx, entry, f"  ► ENTRY {entry:.2f}", fontsize=8, color=TV_BLUE,
-            va="center", fontweight="bold",
-            bbox=dict(fc=TV_BG, ec=TV_BLUE, alpha=0.9, pad=3, boxstyle="round,pad=0.3"))
-    ax.text(lx, sl,
-            f"  ✗ SL {sl:.2f}  ({trade['sl_dist']:.1f}pts | -${trade['risk_$']:.0f})",
-            fontsize=7.5, color=TV_RED, va="center",
-            bbox=dict(fc=TV_BG, ec=TV_RED, alpha=0.9, pad=3, boxstyle="round,pad=0.3"))
-    ax.text(lx, tp,
-            f"  ✓ TP {tp:.2f}  ({trade['tp_dist']:.1f}pts | +${gain_pot:.0f})",
-            fontsize=7.5, color=TV_GREEN, va="center",
-            bbox=dict(fc=TV_BG, ec=TV_GREEN, alpha=0.9, pad=3, boxstyle="round,pad=0.3"))
+    ax.text(
+        lx,
+        entry,
+        f"  ► ENTRY {entry:.2f}",
+        fontsize=8,
+        color=TV_BLUE,
+        va="center",
+        fontweight="bold",
+        bbox=dict(fc=TV_BG, ec=TV_BLUE, alpha=0.9, pad=3, boxstyle="round,pad=0.3"),
+    )
+    ax.text(
+        lx,
+        sl,
+        f"  ✗ SL {sl:.2f}  ({trade['sl_dist']:.1f}pts | -${trade['risk_$']:.0f})",
+        fontsize=7.5,
+        color=TV_RED,
+        va="center",
+        bbox=dict(fc=TV_BG, ec=TV_RED, alpha=0.9, pad=3, boxstyle="round,pad=0.3"),
+    )
+    ax.text(
+        lx,
+        tp,
+        f"  ✓ TP {tp:.2f}  ({trade['tp_dist']:.1f}pts | +${gain_pot:.0f})",
+        fontsize=7.5,
+        color=TV_GREEN,
+        va="center",
+        bbox=dict(fc=TV_BG, ec=TV_GREEN, alpha=0.9, pad=3, boxstyle="round,pad=0.3"),
+    )
 
     # ── Badge résultat (coin supérieur droit) ────────────────
     result_colors = {"TP": TV_GREEN, "SL": TV_RED, "TE": TV_ORANGE}
     result_clr = result_colors.get(result, "#ffffff")
     badge = f"{result}  ${pnl:+.0f}"
-    ax.text(0.99, 0.97, badge,
-            transform=ax.transAxes, fontsize=13, ha="right", va="top",
-            color=result_clr, fontweight="bold",
-            bbox=dict(fc=TV_BG, ec=result_clr, alpha=0.9, pad=5,
-                      boxstyle="round,pad=0.4"))
+    ax.text(
+        0.99,
+        0.97,
+        badge,
+        transform=ax.transAxes,
+        fontsize=13,
+        ha="right",
+        va="top",
+        color=result_clr,
+        fontweight="bold",
+        bbox=dict(fc=TV_BG, ec=result_clr, alpha=0.9, pad=5, boxstyle="round,pad=0.4"),
+    )
 
     # ── Axe X ────────────────────────────────────────────────
     _draw_x_axis(ax, data, n)
@@ -304,16 +394,27 @@ def plot_backtest_trade(
         f"{ticker}  •  15min  •  {arrow}  •  "
         f"Q={trade['quality']:.0f} ({trade['n_tf']}TF, {trade['touches']}t)  •  "
         f"{trade['regime']}  •  RR={trade['rr']}  •  {trade['date']}",
-        fontsize=11, pad=10, loc="left", color="#d1d4dc", fontweight="bold",
+        fontsize=11,
+        pad=10,
+        loc="left",
+        color="#d1d4dc",
+        fontweight="bold",
     )
 
     # Sous-titre : contrats, risque, horaires fill/exit
     fill_h = fill_ts.strftime("%H:%M")
     exit_h = exit_ts.strftime("%H:%M")
-    ax.text(0.99, 0.91,
-            f"{trade['n_ct']} micro(s)  •  risque ${trade['risk_$']:.0f}"
-            f"  •  fill {fill_h} → exit {exit_h}",
-            transform=ax.transAxes, fontsize=8, ha="right", va="top", color="#787b86")
+    ax.text(
+        0.99,
+        0.91,
+        f"{trade['n_ct']} micro(s)  •  risque ${trade['risk_$']:.0f}"
+        f"  •  fill {fill_h} → exit {exit_h}",
+        transform=ax.transAxes,
+        fontsize=8,
+        ha="right",
+        va="top",
+        color="#787b86",
+    )
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=180, bbox_inches="tight", facecolor=TV_BG)

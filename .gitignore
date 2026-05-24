@@ -18,3 +18,11 @@ logs/
 .claude/scheduled_tasks.lock
 .claude/projects/
 .claude/commands/
+
+# Test & lint artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

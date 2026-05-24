@@ -12,21 +12,22 @@ Approche : aucun a priori sur les filtres. Laisser les données identifier les p
 
 Pas de sklearn (non installé). Pandas + numpy + scipy + matplotlib uniquement.
 """
+
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import stats
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, export_text
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier, export_text
 
 np.random.seed(42)
 
@@ -112,7 +113,7 @@ def pf_safe(x):
 w("# Analyse data science — OPR v5 features (F1, F2, F3)")
 w()
 w(f"Dataset : `output/opr_v5_features.csv` — {len(df)} trades v4 enrichis.")
-w(f"Filled : {len(df_filled)} ({len(df_filled)/len(df):.1%}). Not filled : {len(df_unfilled)}.")
+w(f"Filled : {len(df_filled)} ({len(df_filled) / len(df):.1%}). Not filled : {len(df_unfilled)}.")
 w()
 w("**Approche** : aucun a priori sur les filtres. Laisser les données parler.")
 w()
@@ -122,7 +123,8 @@ w("## 1. Stats descriptives par ticker (filled only)")
 w()
 
 stats_tbl = (
-    df_filled.groupby("ticker").agg(
+    df_filled.groupby("ticker")
+    .agg(
         n=("pnl", "count"),
         wr=("is_winner", lambda x: 100 * x.mean()),
         pnl_total=("pnl", "sum"),
@@ -158,14 +160,16 @@ def correlations(df_sub, label):
             continue
         pr, pp = stats.pearsonr(sub[f], sub["pnl"])
         sr, sp = stats.spearmanr(sub[f], sub["pnl"])
-        rows.append({
-            "feature": f,
-            "n": len(sub),
-            "pearson_r": round(pr, 3),
-            "pearson_p": f"{pp:.2e}",
-            "spearman_r": round(sr, 3),
-            "spearman_p": f"{sp:.2e}",
-        })
+        rows.append(
+            {
+                "feature": f,
+                "n": len(sub),
+                "pearson_r": round(pr, 3),
+                "pearson_p": f"{pp:.2e}",
+                "spearman_r": round(sr, 3),
+                "spearman_p": f"{sp:.2e}",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -191,13 +195,17 @@ def deciles(df_sub, feature):
         sub["q"] = pd.qcut(sub[feature], 10, duplicates="drop")
     except ValueError:
         return None
-    grp = sub.groupby("q", observed=True).agg(
-        n=("pnl", "count"),
-        wr_pct=("is_winner", lambda x: round(100 * x.mean(), 1)),
-        pf=("pnl", pf_safe),
-        pnl_mean=("pnl", "mean"),
-        pnl_sum=("pnl", "sum"),
-    ).round(2)
+    grp = (
+        sub.groupby("q", observed=True)
+        .agg(
+            n=("pnl", "count"),
+            wr_pct=("is_winner", lambda x: round(100 * x.mean(), 1)),
+            pf=("pnl", pf_safe),
+            pnl_mean=("pnl", "mean"),
+            pnl_sum=("pnl", "sum"),
+        )
+        .round(2)
+    )
     grp["bin"] = [str(idx) for idx in grp.index]
     return grp.reset_index(drop=True)[["bin", "n", "wr_pct", "pf", "pnl_mean", "pnl_sum"]]
 
@@ -217,7 +225,9 @@ for feature in FEATURES:
 # ============================================================================
 w("## 4. Grid search univarié — meilleur seuil de filtrage par feature")
 w()
-w("Question : pour chaque feature, quel seuil optimise le PnL conservé (sum si on rejette > seuil OU < seuil) ?")
+w(
+    "Question : pour chaque feature, quel seuil optimise le PnL conservé (sum si on rejette > seuil OU < seuil) ?"
+)
 w()
 
 
@@ -244,17 +254,19 @@ def grid_univariate(df_sub, feature, direction="upper", min_n=50):
             kept = sub[sub[feature] >= t]
         if len(kept) < min_n:
             continue
-        rows.append({
-            "direction": direction,
-            "threshold": round(t, 3),
-            "kept_n": len(kept),
-            "rejected_n": base_n - len(kept),
-            "kept_pnl": round(kept["pnl"].sum(), 2),
-            "kept_pf": round(pf_safe(kept["pnl"]), 2),
-            "kept_pnl_mean": round(kept["pnl"].mean(), 2),
-            "delta_pnl_vs_base": round(kept["pnl"].sum() - base_pnl, 2),
-            "delta_pf_vs_base": round(pf_safe(kept["pnl"]) - base_pf, 2),
-        })
+        rows.append(
+            {
+                "direction": direction,
+                "threshold": round(t, 3),
+                "kept_n": len(kept),
+                "rejected_n": base_n - len(kept),
+                "kept_pnl": round(kept["pnl"].sum(), 2),
+                "kept_pf": round(pf_safe(kept["pnl"]), 2),
+                "kept_pnl_mean": round(kept["pnl"].mean(), 2),
+                "delta_pnl_vs_base": round(kept["pnl"].sum() - base_pnl, 2),
+                "delta_pf_vs_base": round(pf_safe(kept["pnl"]) - base_pf, 2),
+            }
+        )
     if not rows:
         return None
     return pd.DataFrame(rows).sort_values("kept_pf", ascending=False).head(5)
@@ -302,15 +314,19 @@ def grid_bivariate(df_sub, fx, fy, min_n=50):
             kept = sub[(sub[fx] <= tx) & (sub[fy] <= ty)]
             if len(kept) < min_n:
                 continue
-            rows.append({
-                "fx": fx, "tx_max": round(tx, 3),
-                "fy": fy, "ty_max": round(ty, 3),
-                "kept_n": len(kept),
-                "kept_pnl": round(kept["pnl"].sum(), 2),
-                "kept_pf": round(pf_safe(kept["pnl"]), 2),
-                "delta_pnl_vs_base": round(kept["pnl"].sum() - base_pnl, 2),
-                "delta_pf_vs_base": round(pf_safe(kept["pnl"]) - base_pf, 2),
-            })
+            rows.append(
+                {
+                    "fx": fx,
+                    "tx_max": round(tx, 3),
+                    "fy": fy,
+                    "ty_max": round(ty, 3),
+                    "kept_n": len(kept),
+                    "kept_pnl": round(kept["pnl"].sum(), 2),
+                    "kept_pf": round(pf_safe(kept["pnl"]), 2),
+                    "delta_pnl_vs_base": round(kept["pnl"].sum() - base_pnl, 2),
+                    "delta_pf_vs_base": round(pf_safe(kept["pnl"]) - base_pf, 2),
+                }
+            )
     if not rows:
         return None
     df_r = pd.DataFrame(rows).sort_values("kept_pf", ascending=False)
@@ -321,7 +337,11 @@ for ticker in ["ALL", "MES1", "NQ1", "YM1"]:
     w(f"### {ticker}")
     w()
     sub = df_filled if ticker == "ALL" else df_filled[df_filled["ticker"] == ticker]
-    for (fx, fy) in [("f1_bars", "f2_excursion_atr"), ("f2_excursion_atr", "f3_bars"), ("f1_bars", "f3_bars")]:
+    for fx, fy in [
+        ("f1_bars", "f2_excursion_atr"),
+        ("f2_excursion_atr", "f3_bars"),
+        ("f1_bars", "f3_bars"),
+    ]:
         res = grid_bivariate(sub, fx, fy)
         if res is None:
             continue
@@ -351,7 +371,11 @@ def interaction(df_sub, fx, fy):
     return mp, cp
 
 
-for (fx, fy) in [("f1_bars", "f2_excursion_atr"), ("f1_bars", "f3_bars"), ("f2_excursion_atr", "f3_bars")]:
+for fx, fy in [
+    ("f1_bars", "f2_excursion_atr"),
+    ("f1_bars", "f3_bars"),
+    ("f2_excursion_atr", "f3_bars"),
+]:
     w(f"### `{fx}` × `{fy}` — portfolio")
     w()
     res = interaction(df_filled, fx, fy)
@@ -386,17 +410,19 @@ def best_worst(df_sub):
         (sub[(sub["pnl"] > q20) & (sub["pnl"] < q80)], "Mid 60%"),
         (sub[sub["pnl"] <= q20], "Worst 20%"),
     ]:
-        rows.append({
-            "tier": name,
-            "n": len(tier),
-            "pnl_mean": round(tier["pnl"].mean(), 2),
-            "f1_mean": round(tier["f1_bars"].mean(), 2),
-            "f1_p50": tier["f1_bars"].median(),
-            "f2_atr_mean": round(tier["f2_excursion_atr"].mean(), 2),
-            "f2_atr_p50": round(tier["f2_excursion_atr"].median(), 2),
-            "f3_mean": round(tier["f3_bars"].mean(), 2),
-            "f3_p50": tier["f3_bars"].median(),
-        })
+        rows.append(
+            {
+                "tier": name,
+                "n": len(tier),
+                "pnl_mean": round(tier["pnl"].mean(), 2),
+                "f1_mean": round(tier["f1_bars"].mean(), 2),
+                "f1_p50": tier["f1_bars"].median(),
+                "f2_atr_mean": round(tier["f2_excursion_atr"].mean(), 2),
+                "f2_atr_p50": round(tier["f2_excursion_atr"].median(), 2),
+                "f3_mean": round(tier["f3_bars"].mean(), 2),
+                "f3_p50": tier["f3_bars"].median(),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -419,21 +445,29 @@ w()
 
 
 def time_patterns(df_sub):
-    wd = df_sub.groupby("weekday").agg(
-        n=("pnl", "count"),
-        wr_pct=("is_winner", lambda x: round(100 * x.mean(), 1)),
-        pf=("pnl", pf_safe),
-        pnl_mean=("pnl", "mean"),
-        pnl_sum=("pnl", "sum"),
-    ).round(2)
+    wd = (
+        df_sub.groupby("weekday")
+        .agg(
+            n=("pnl", "count"),
+            wr_pct=("is_winner", lambda x: round(100 * x.mean(), 1)),
+            pf=("pnl", pf_safe),
+            pnl_mean=("pnl", "mean"),
+            pnl_sum=("pnl", "sum"),
+        )
+        .round(2)
+    )
     wd = wd.reindex(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
-    mo = df_sub.groupby("month").agg(
-        n=("pnl", "count"),
-        wr_pct=("is_winner", lambda x: round(100 * x.mean(), 1)),
-        pf=("pnl", pf_safe),
-        pnl_mean=("pnl", "mean"),
-        pnl_sum=("pnl", "sum"),
-    ).round(2)
+    mo = (
+        df_sub.groupby("month")
+        .agg(
+            n=("pnl", "count"),
+            wr_pct=("is_winner", lambda x: round(100 * x.mean(), 1)),
+            pf=("pnl", pf_safe),
+            pnl_mean=("pnl", "mean"),
+            pnl_sum=("pnl", "sum"),
+        )
+        .round(2)
+    )
     return wd, mo
 
 
@@ -498,7 +532,11 @@ rows = [evaluate(df_filled, "v4 (no filter)")]
 
 # v5 actuel : appliquer par ticker
 v5_sub_list = []
-for ticker, params in [("MES1", {}), ("NQ1", {"f2_max": 0.5}), ("YM1", {"f1_max": 10, "f2_max": 1.0})]:
+for ticker, params in [
+    ("MES1", {}),
+    ("NQ1", {"f2_max": 0.5}),
+    ("YM1", {"f1_max": 10, "f2_max": 1.0}),
+]:
     s = df_filled[df_filled["ticker"] == ticker]
     s = apply_filter(s, **params)
     v5_sub_list.append(s)
@@ -508,9 +546,22 @@ rows.append(evaluate(v5_total, "v5 actuel"))
 # Candidats data-driven : tester quelques bornes obtenues du grid univarié
 # (à adapter en fonction des résultats observés — placeholder ici)
 for candidate_name, params_per_ticker in [
-    ("Hypothèse A : f2_max=0.5 sur les 3 tickers", {"MES1": {"f2_max": 0.5}, "NQ1": {"f2_max": 0.5}, "YM1": {"f2_max": 0.5}}),
-    ("Hypothèse B : f2_max=0.75 sur les 3 tickers", {"MES1": {"f2_max": 0.75}, "NQ1": {"f2_max": 0.75}, "YM1": {"f2_max": 0.75}}),
-    ("Hypothèse C : f1_max=12 + f2_max=1.0 sur les 3", {"MES1": {"f1_max": 12, "f2_max": 1.0}, "NQ1": {"f1_max": 12, "f2_max": 1.0}, "YM1": {"f1_max": 12, "f2_max": 1.0}}),
+    (
+        "Hypothèse A : f2_max=0.5 sur les 3 tickers",
+        {"MES1": {"f2_max": 0.5}, "NQ1": {"f2_max": 0.5}, "YM1": {"f2_max": 0.5}},
+    ),
+    (
+        "Hypothèse B : f2_max=0.75 sur les 3 tickers",
+        {"MES1": {"f2_max": 0.75}, "NQ1": {"f2_max": 0.75}, "YM1": {"f2_max": 0.75}},
+    ),
+    (
+        "Hypothèse C : f1_max=12 + f2_max=1.0 sur les 3",
+        {
+            "MES1": {"f1_max": 12, "f2_max": 1.0},
+            "NQ1": {"f1_max": 12, "f2_max": 1.0},
+            "YM1": {"f1_max": 12, "f2_max": 1.0},
+        },
+    ),
 ]:
     parts = []
     for ticker, params in params_per_ticker.items():
@@ -542,7 +593,9 @@ def scatter_feature_vs_pnl(feature, fname):
         ax.axhline(0, color="black", lw=0.6)
         sub_sorted = sub.sort_values(feature).reset_index(drop=True)
         sub_sorted["pnl_med"] = sub_sorted["pnl"].rolling(40, min_periods=10, center=True).median()
-        ax.plot(sub_sorted[feature], sub_sorted["pnl_med"], "b-", lw=2.0, label="rolling median (40)")
+        ax.plot(
+            sub_sorted[feature], sub_sorted["pnl_med"], "b-", lw=2.0, label="rolling median (40)"
+        )
         ax.set_title(f"{ticker} : {feature} vs PnL (n={len(sub)})")
         ax.set_xlabel(feature)
         ax.set_ylabel("PnL ($)")
@@ -573,36 +626,56 @@ def heatmap_interaction(fx, fy, fname, ticker=None):
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
     ax = axes[0]
-    im = ax.imshow(pivot.values, cmap="RdYlGn", aspect="auto",
-                    vmin=-50, vmax=50)
-    ax.set_xticks(range(pivot.shape[1])); ax.set_xticklabels(pivot.columns)
-    ax.set_yticks(range(pivot.shape[0])); ax.set_yticklabels(pivot.index)
+    im = ax.imshow(pivot.values, cmap="RdYlGn", aspect="auto", vmin=-50, vmax=50)
+    ax.set_xticks(range(pivot.shape[1]))
+    ax.set_xticklabels(pivot.columns)
+    ax.set_yticks(range(pivot.shape[0]))
+    ax.set_yticklabels(pivot.index)
     ax.set_xlabel(f"{fx} quintile (0=bas → 4=haut)")
     ax.set_ylabel(f"{fy} quintile (0=bas → 4=haut)")
     title = f"PnL moy : {fx} × {fy}"
-    if ticker: title += f" ({ticker})"
+    if ticker:
+        title += f" ({ticker})"
     ax.set_title(title)
     for i in range(pivot.shape[0]):
         for j in range(pivot.shape[1]):
             v = pivot.values[i, j]
             if not np.isnan(v):
-                ax.text(j, i, f"{v:.0f}", ha="center", va="center",
-                        color="white" if abs(v) > 30 else "black", fontsize=10, fontweight="bold")
+                ax.text(
+                    j,
+                    i,
+                    f"{v:.0f}",
+                    ha="center",
+                    va="center",
+                    color="white" if abs(v) > 30 else "black",
+                    fontsize=10,
+                    fontweight="bold",
+                )
     fig.colorbar(im, ax=ax)
 
     ax2 = axes[1]
     cnt = counts.fillna(0).values.astype(int)
     im2 = ax2.imshow(cnt, cmap="Blues", aspect="auto")
-    ax2.set_xticks(range(counts.shape[1])); ax2.set_xticklabels(counts.columns)
-    ax2.set_yticks(range(counts.shape[0])); ax2.set_yticklabels(counts.index)
+    ax2.set_xticks(range(counts.shape[1]))
+    ax2.set_xticklabels(counts.columns)
+    ax2.set_yticks(range(counts.shape[0]))
+    ax2.set_yticklabels(counts.index)
     ax2.set_xlabel(f"{fx} quintile")
     ax2.set_ylabel(f"{fy} quintile")
     ax2.set_title("Effectifs (n)")
     for i in range(cnt.shape[0]):
         for j in range(cnt.shape[1]):
             v = cnt[i, j]
-            ax2.text(j, i, f"{v}", ha="center", va="center",
-                     color="white" if v > cnt.max() / 2 else "black", fontsize=10, fontweight="bold")
+            ax2.text(
+                j,
+                i,
+                f"{v}",
+                ha="center",
+                va="center",
+                color="white" if v > cnt.max() / 2 else "black",
+                fontsize=10,
+                fontweight="bold",
+            )
     fig.colorbar(im2, ax=ax2)
     plt.tight_layout()
     plt.savefig(FIG_DIR / fname, dpi=110, bbox_inches="tight")
@@ -621,10 +694,12 @@ for t in ["MES1", "NQ1", "YM1"]:
 # ============================================================================
 w("## 10. Modèles supervisés — triangulation des patterns")
 w()
-w("Approche : confirmer (ou réfuter) les patterns identifiés en sections 2-9 "
-  "via des modèles supervisés. Si Random Forest / Decision Tree / Logistic "
-  "Regression convergent vers `f2_excursion_atr` comme feature dominante, "
-  "le pattern est robuste.")
+w(
+    "Approche : confirmer (ou réfuter) les patterns identifiés en sections 2-9 "
+    "via des modèles supervisés. Si Random Forest / Decision Tree / Logistic "
+    "Regression convergent vers `f2_excursion_atr` comme feature dominante, "
+    "le pattern est robuste."
+)
 w()
 
 FEATURES_SUP = ["f1_bars", "f2_excursion_atr", "f3_bars"]
@@ -643,24 +718,32 @@ def supervised_analysis(df_sub, label):
     baseline_acc = max(y_cls.mean(), 1 - y_cls.mean())
 
     # 1. Decision Tree (interpretable)
-    dt = DecisionTreeClassifier(max_depth=4, min_samples_leaf=max(20, len(sub)//40), random_state=42)
+    dt = DecisionTreeClassifier(
+        max_depth=4, min_samples_leaf=max(20, len(sub) // 40), random_state=42
+    )
     dt_scores = cross_val_score(dt, X, y_cls, cv=5, scoring="accuracy")
     dt.fit(X, y_cls)
     tree_rules = export_text(dt, feature_names=FEATURES_SUP, decimals=2)
 
     # 2. Random Forest Classifier
-    rf_cls = RandomForestClassifier(n_estimators=300, max_depth=6,
-                                     min_samples_leaf=10, random_state=42, n_jobs=-1)
+    rf_cls = RandomForestClassifier(
+        n_estimators=300, max_depth=6, min_samples_leaf=10, random_state=42, n_jobs=-1
+    )
     rf_cls_scores = cross_val_score(rf_cls, X, y_cls, cv=5, scoring="accuracy")
     rf_cls.fit(X, y_cls)
-    rf_cls_imp = pd.Series(rf_cls.feature_importances_, index=FEATURES_SUP).sort_values(ascending=False)
+    rf_cls_imp = pd.Series(rf_cls.feature_importances_, index=FEATURES_SUP).sort_values(
+        ascending=False
+    )
 
     # 3. Random Forest Regressor (predicting pnl)
-    rf_reg = RandomForestRegressor(n_estimators=300, max_depth=6,
-                                    min_samples_leaf=10, random_state=42, n_jobs=-1)
+    rf_reg = RandomForestRegressor(
+        n_estimators=300, max_depth=6, min_samples_leaf=10, random_state=42, n_jobs=-1
+    )
     rf_reg_scores = cross_val_score(rf_reg, X, y_reg, cv=5, scoring="r2")
     rf_reg.fit(X, y_reg)
-    rf_reg_imp = pd.Series(rf_reg.feature_importances_, index=FEATURES_SUP).sort_values(ascending=False)
+    rf_reg_imp = pd.Series(rf_reg.feature_importances_, index=FEATURES_SUP).sort_values(
+        ascending=False
+    )
 
     # 4. Logistic Regression (linear)
     scaler = StandardScaler()
@@ -703,20 +786,36 @@ for ticker in ["ALL", "MES1", "NQ1", "YM1"]:
         w("_n insuffisant_")
         continue
 
-    w(f"**Dataset** : n={info['n']}, baseline accuracy (majority class) = {info['baseline_acc']:.3f}")
+    w(
+        f"**Dataset** : n={info['n']}, baseline accuracy (majority class) = {info['baseline_acc']:.3f}"
+    )
     w()
 
     # Recap performance
-    perf = pd.DataFrame([
-        {"Model": "Decision Tree (depth=4)", "CV accuracy": f"{info['dt_acc_mean']:.3f} ± {info['dt_acc_std']:.3f}",
-         "Edge vs baseline": f"{info['dt_acc_mean'] - info['baseline_acc']:+.3f}"},
-        {"Model": "Random Forest (cls)", "CV accuracy": f"{info['rf_cls_acc_mean']:.3f} ± {info['rf_cls_acc_std']:.3f}",
-         "Edge vs baseline": f"{info['rf_cls_acc_mean'] - info['baseline_acc']:+.3f}"},
-        {"Model": "Logistic Regression", "CV accuracy": f"{info['lr_acc_mean']:.3f}",
-         "Edge vs baseline": f"{info['lr_acc_mean'] - info['baseline_acc']:+.3f}"},
-        {"Model": "Random Forest (reg, R²)", "CV accuracy": f"{info['rf_reg_r2_mean']:.3f} ± {info['rf_reg_r2_std']:.3f}",
-         "Edge vs baseline": "(R² vs 0)"},
-    ])
+    perf = pd.DataFrame(
+        [
+            {
+                "Model": "Decision Tree (depth=4)",
+                "CV accuracy": f"{info['dt_acc_mean']:.3f} ± {info['dt_acc_std']:.3f}",
+                "Edge vs baseline": f"{info['dt_acc_mean'] - info['baseline_acc']:+.3f}",
+            },
+            {
+                "Model": "Random Forest (cls)",
+                "CV accuracy": f"{info['rf_cls_acc_mean']:.3f} ± {info['rf_cls_acc_std']:.3f}",
+                "Edge vs baseline": f"{info['rf_cls_acc_mean'] - info['baseline_acc']:+.3f}",
+            },
+            {
+                "Model": "Logistic Regression",
+                "CV accuracy": f"{info['lr_acc_mean']:.3f}",
+                "Edge vs baseline": f"{info['lr_acc_mean'] - info['baseline_acc']:+.3f}",
+            },
+            {
+                "Model": "Random Forest (reg, R²)",
+                "CV accuracy": f"{info['rf_reg_r2_mean']:.3f} ± {info['rf_reg_r2_std']:.3f}",
+                "Edge vs baseline": "(R² vs 0)",
+            },
+        ]
+    )
     w("**Performance des modèles (5-fold CV)** :")
     w()
     wt(perf)
@@ -730,13 +829,15 @@ for ticker in ["ALL", "MES1", "NQ1", "YM1"]:
     w()
 
     # Importances - trois sources convergentes
-    imp_table = pd.DataFrame({
-        "Feature": FEATURES_SUP,
-        "RF Cls importance": [round(info["rf_cls_imp"].get(f, 0), 3) for f in FEATURES_SUP],
-        "RF Reg importance": [round(info["rf_reg_imp"].get(f, 0), 3) for f in FEATURES_SUP],
-        "Permutation importance": [round(info["perm_imp"].get(f, 0), 4) for f in FEATURES_SUP],
-        "LogReg |coef|": [round(abs(info["lr_coefs"].get(f, 0)), 3) for f in FEATURES_SUP],
-    })
+    imp_table = pd.DataFrame(
+        {
+            "Feature": FEATURES_SUP,
+            "RF Cls importance": [round(info["rf_cls_imp"].get(f, 0), 3) for f in FEATURES_SUP],
+            "RF Reg importance": [round(info["rf_reg_imp"].get(f, 0), 3) for f in FEATURES_SUP],
+            "Permutation importance": [round(info["perm_imp"].get(f, 0), 4) for f in FEATURES_SUP],
+            "LogReg |coef|": [round(abs(info["lr_coefs"].get(f, 0)), 3) for f in FEATURES_SUP],
+        }
+    )
     w("**Importance des features (3 sources convergentes)** :")
     w()
     wt(imp_table)
@@ -744,12 +845,16 @@ for ticker in ["ALL", "MES1", "NQ1", "YM1"]:
     # Linear sign : direction de l'effet
     w("**Logistic Regression — coefficients (signe = direction de l'effet sur P(win))** :")
     w()
-    coef_df = pd.DataFrame({
-        "Feature": FEATURES_SUP,
-        "Coef (standardized)": [round(info["lr_coefs"].get(f, 0), 4) for f in FEATURES_SUP],
-        "Direction": ["augmente P(win)" if info["lr_coefs"].get(f, 0) > 0
-                       else "diminue P(win)" for f in FEATURES_SUP],
-    })
+    coef_df = pd.DataFrame(
+        {
+            "Feature": FEATURES_SUP,
+            "Coef (standardized)": [round(info["lr_coefs"].get(f, 0), 4) for f in FEATURES_SUP],
+            "Direction": [
+                "augmente P(win)" if info["lr_coefs"].get(f, 0) > 0 else "diminue P(win)"
+                for f in FEATURES_SUP
+            ],
+        }
+    )
     wt(coef_df)
 
 
@@ -758,9 +863,11 @@ for ticker in ["ALL", "MES1", "NQ1", "YM1"]:
 # ============================================================================
 w("## 11. Validation supervisée — test du filtre f2_min_atr")
 w()
-w("Hypothèse : le filtre `f2_min_atr ≥ 0.15` rejette les trades sous-performants. "
-  "Vérifions via classification : un modèle peut-il prédire `pnl > 0` à partir de "
-  "f2_excursion_atr seul ?")
+w(
+    "Hypothèse : le filtre `f2_min_atr ≥ 0.15` rejette les trades sous-performants. "
+    "Vérifions via classification : un modèle peut-il prédire `pnl > 0` à partir de "
+    "f2_excursion_atr seul ?"
+)
 w()
 
 
@@ -772,7 +879,9 @@ def f2_only_model(df_sub, label):
     y = (sub["pnl"] > 0).astype(int).values
 
     # Simple shallow tree to find threshold
-    dt = DecisionTreeClassifier(max_depth=2, min_samples_leaf=max(30, len(sub)//30), random_state=42)
+    dt = DecisionTreeClassifier(
+        max_depth=2, min_samples_leaf=max(30, len(sub) // 30), random_state=42
+    )
     scores = cross_val_score(dt, X, y, cv=5, scoring="accuracy")
     dt.fit(X, y)
     rules = export_text(dt, feature_names=["f2_excursion_atr"], decimals=3)
@@ -802,7 +911,9 @@ for ticker in ["ALL", "MES1", "NQ1", "YM1"]:
         continue
     w(f"### {ticker}")
     w()
-    w(f"- Decision Tree (depth=2, f2 seul) — accuracy CV : {info['dt_acc']:.3f} (baseline {info['baseline']:.3f}, edge {info['dt_acc'] - info['baseline']:+.3f})")
+    w(
+        f"- Decision Tree (depth=2, f2 seul) — accuracy CV : {info['dt_acc']:.3f} (baseline {info['baseline']:.3f}, edge {info['dt_acc'] - info['baseline']:+.3f})"
+    )
     w()
     w("Règle apprise par l'arbre (seuil que l'algorithme trouve sans qu'on lui dise) :")
     w("```")
@@ -811,15 +922,17 @@ for ticker in ["ALL", "MES1", "NQ1", "YM1"]:
     w()
     w("Test manuel du seuil 0.15 :")
     w()
-    comparison_rows.append({
-        "ticker": ticker,
-        "n_above_0.15": info["above_0.15_n"],
-        "wr_above_0.15": f"{info['above_0.15_wr']:.1%}",
-        "pnl_mean_above": round(info["above_0.15_pnl_mean"], 2),
-        "n_below_0.15": info["below_0.15_n"],
-        "wr_below_0.15": f"{info['below_0.15_wr']:.1%}",
-        "pnl_mean_below": round(info["below_0.15_pnl_mean"], 2),
-    })
+    comparison_rows.append(
+        {
+            "ticker": ticker,
+            "n_above_0.15": info["above_0.15_n"],
+            "wr_above_0.15": f"{info['above_0.15_wr']:.1%}",
+            "pnl_mean_above": round(info["above_0.15_pnl_mean"], 2),
+            "n_below_0.15": info["below_0.15_n"],
+            "wr_below_0.15": f"{info['below_0.15_wr']:.1%}",
+            "pnl_mean_below": round(info["below_0.15_pnl_mean"], 2),
+        }
+    )
 
 if comparison_rows:
     w("### Tableau de synthèse — seuil 0.15 ATR")
@@ -832,11 +945,15 @@ if comparison_rows:
 # ============================================================================
 w("## 12. Test de permutation — significativité statistique du seuil F2=0.15")
 w()
-w("Question : la différence de PnL moyen entre f2_atr ≥ 0.15 vs < 0.15 "
-  "est-elle significative, ou pourrait-elle résulter du hasard ?")
+w(
+    "Question : la différence de PnL moyen entre f2_atr ≥ 0.15 vs < 0.15 "
+    "est-elle significative, ou pourrait-elle résulter du hasard ?"
+)
 w()
-w("Méthode : permuter aléatoirement les valeurs f2_excursion_atr 10 000 fois, "
-  "recalculer la différence de PnL moyen, comparer à la valeur observée.")
+w(
+    "Méthode : permuter aléatoirement les valeurs f2_excursion_atr 10 000 fois, "
+    "recalculer la différence de PnL moyen, comparer à la valeur observée."
+)
 w()
 
 
@@ -879,18 +996,20 @@ for ticker in ["ALL", "MES1", "NQ1", "YM1"]:
     info = permutation_test(sub)
     if info is None:
         continue
-    rows.append({
-        "ticker": ticker,
-        "n_above": info["n_above"],
-        "n_below": info["n_below"],
-        "pnl_mean_above": round(info["mean_above"], 2),
-        "pnl_mean_below": round(info["mean_below"], 2),
-        "observed_diff": round(info["observed_diff"], 2),
-        "perm_p5": round(info["perm_p5"], 2),
-        "perm_p95": round(info["perm_p95"], 2),
-        "p_value": f"{info['p_value']:.4f}",
-        "significant_5pct": "✅" if info["p_value"] < 0.05 else "❌",
-    })
+    rows.append(
+        {
+            "ticker": ticker,
+            "n_above": info["n_above"],
+            "n_below": info["n_below"],
+            "pnl_mean_above": round(info["mean_above"], 2),
+            "pnl_mean_below": round(info["mean_below"], 2),
+            "observed_diff": round(info["observed_diff"], 2),
+            "perm_p5": round(info["perm_p5"], 2),
+            "perm_p95": round(info["perm_p95"], 2),
+            "p_value": f"{info['p_value']:.4f}",
+            "significant_5pct": "✅" if info["p_value"] < 0.05 else "❌",
+        }
+    )
 
 if rows:
     w("Résultats du test de permutation (seuil f2_atr=0.15, 10 000 permutations) :")
@@ -903,17 +1022,23 @@ if rows:
 # ============================================================================
 w("## 13. Synthèse — patterns identifiés et règles candidates")
 w()
-w("Cette section sera complétée à la lecture manuelle du rapport. Les sections "
-  "précédentes contiennent les observations brutes — pas de conclusion automatique pour éviter le biais de surinterprétation.")
+w(
+    "Cette section sera complétée à la lecture manuelle du rapport. Les sections "
+    "précédentes contiennent les observations brutes — pas de conclusion automatique pour éviter le biais de surinterprétation."
+)
 w()
 w("**À examiner attentivement** :")
 w()
 w("- Section 2 : signe et significativité des corrélations Pearson/Spearman par ticker")
 w("- Section 3 : monotonie des déciles (un décile clairement à exclure ?)")
 w("- Section 4 : seuils univariés qui maximisent PF — comparer à v5 actuel")
-w("- Section 5 : combinaisons bivariées — y a-t-il une cellule (tx_max, ty_max) qui domine clairement ?")
+w(
+    "- Section 5 : combinaisons bivariées — y a-t-il une cellule (tx_max, ty_max) qui domine clairement ?"
+)
 w("- Section 6 : pattern visuel sur les heatmaps — quintiles clairement perdants ?")
-w("- Section 7 : différence de moyenne F1/F2/F3 entre Best 20% et Worst 20% — si différence forte = pattern exploitable")
+w(
+    "- Section 7 : différence de moyenne F1/F2/F3 entre Best 20% et Worst 20% — si différence forte = pattern exploitable"
+)
 w("- Section 9 : comparaison brute des scénarios — quel scénario optimise PnL ET PF ?")
 w()
 

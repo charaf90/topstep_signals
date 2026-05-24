@@ -26,10 +26,11 @@ Schéma de colonnes du DataFrame de trades : identique à fib-v3 + features
 fib-v4 (bars_to_fill, pivot_break_atr, mae_pending_atr, wick_through_atr,
 is_macro_day, dist_to_ema_fast_atr, bar_color_streak_pre, volume_at_arm_norm).
 """
+
 from __future__ import annotations
 
-from datetime import timedelta
-from typing import Optional, Dict, List, TYPE_CHECKING
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 
@@ -37,38 +38,50 @@ if TYPE_CHECKING:
     from broker.m1_buffer import M1Buffer
 
 from config import (
-    INSTRUMENTS, RISK_PER_TRADE_USD,
-    FIB_V4_ENABLED, FIB_V4_STRATEGY_VERSION,
+    FIB_ADX_PERIOD,
+    FIB_ADX_TREND_THRESHOLD,
+    FIB_ATR_PERIOD,
+    FIB_EMA_FAST_PERIOD,
+    FIB_EMA_SLOW_PERIOD,
+    FIB_IMPULSE_LOOKBACK,
+    FIB_MAX_HOLD_BARS,
+    FIB_MAX_IMPULSE_BARS,
+    FIB_MIN_IMPULSE_ATR,
+    FIB_MIN_IMPULSE_ATR_PER_TICKER,
+    FIB_ORDER_TIMEOUT_BARS,
+    FIB_PIVOT_LEFT,
+    FIB_PIVOT_RIGHT,
+    FIB_SESSION_PER_TICKER,
+    FIB_SL_ATR_MULT_PER_TICKER,
+    FIB_TP_ATR_MULT_PER_TICKER,
+    FIB_V4_ENABLED,
     FIB_V4_LEVEL_PER_TICKER,
     FIB_V4_PIVOT_BREAK_BUFFER_ATR_PER_TICKER,
-    FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER,
     FIB_V4_SKIP_MACRO_PER_TICKER,
-    FIB_SL_ATR_MULT_PER_TICKER, FIB_TP_ATR_MULT_PER_TICKER,
-    FIB_MIN_IMPULSE_ATR_PER_TICKER,
-    FIB_ATR_PERIOD, FIB_EMA_FAST_PERIOD, FIB_EMA_SLOW_PERIOD,
-    FIB_ADX_PERIOD, FIB_ADX_TREND_THRESHOLD,
-    FIB_PIVOT_LEFT, FIB_PIVOT_RIGHT,
-    FIB_MAX_IMPULSE_BARS, FIB_IMPULSE_LOOKBACK,
-    FIB_ORDER_TIMEOUT_BARS, FIB_MAX_HOLD_BARS,
-    FIB_MIN_IMPULSE_ATR,
-    US_SESSION_START_UTC, US_SESSION_END_UTC,
-    FIB_SESSION_PER_TICKER,
+    FIB_V4_WICK_THROUGH_MAX_ATR_PER_TICKER,
+    INSTRUMENTS,
     MACRO_EVENT_DATES,
+    US_SESSION_END_UTC,
+    US_SESSION_START_UTC,
 )
 
 # Helpers Fib partagés (extrait de strategy_fib.py vers fib_helpers.py
 # lors du nettoyage 2026-05-19 — fib-v3 supprimée du code prod).
 from core.fib_helpers import (
-    compute_atr, compute_ema, compute_adx,
-    detect_pivots, detect_trend,
-    find_last_impulse, build_signal,
+    build_signal,
+    compute_adx,
+    compute_atr,
+    compute_ema,
+    detect_pivots,
+    detect_trend,
+    find_last_impulse,
 )
 
 _SESSION_WINDOWS = {
     "us_session": (US_SESSION_START_UTC, US_SESSION_END_UTC),
-    "no_nuit":    (0,  21),
-    "europe_us":  (7,  17),
-    "all":        (0,  24),
+    "no_nuit": (0, 21),
+    "europe_us": (7, 17),
+    "all": (0, 24),
 }
 _MACRO_DATES_SET = set(MACRO_EVENT_DATES)
 
@@ -76,13 +89,13 @@ _MACRO_DATES_SET = set(MACRO_EVENT_DATES)
 def run_fib_v4_backtest(
     df: pd.DataFrame,
     ticker: str,
-    fib_level: Optional[float] = None,
-    sl_mult: Optional[float] = None,
-    tp_mult: Optional[float] = None,
-    min_imp: Optional[float] = None,
-    pivot_break_buffer_atr: Optional[float] = None,
-    wick_max_atr: Optional[float] = None,
-    skip_macro: Optional[bool] = None,
+    fib_level: float | None = None,
+    sl_mult: float | None = None,
+    tp_mult: float | None = None,
+    min_imp: float | None = None,
+    pivot_break_buffer_atr: float | None = None,
+    wick_max_atr: float | None = None,
+    skip_macro: bool | None = None,
 ) -> pd.DataFrame:
     """
     Backtest fib-v4 (avec invalidation pivot break + wick excess).
@@ -111,23 +124,22 @@ def run_fib_v4_backtest(
         skip_macro = FIB_V4_SKIP_MACRO_PER_TICKER.get(ticker, False)
 
     df = df.copy()
-    df["atr"]      = compute_atr(df, FIB_ATR_PERIOD)
+    df["atr"] = compute_atr(df, FIB_ATR_PERIOD)
     df["ema_fast"] = compute_ema(df["close"], FIB_EMA_FAST_PERIOD)
     df["ema_slow"] = compute_ema(df["close"], FIB_EMA_SLOW_PERIOD)
-    df["adx"]      = compute_adx(df, FIB_ADX_PERIOD)
+    df["adx"] = compute_adx(df, FIB_ADX_PERIOD)
 
     pivot_highs, pivot_lows = detect_pivots(df, FIB_PIVOT_LEFT, FIB_PIVOT_RIGHT)
 
-    sess_key  = FIB_SESSION_PER_TICKER.get(ticker, "us_session")
-    s_h, e_h  = _SESSION_WINDOWS.get(sess_key,
-                                       (US_SESSION_START_UTC, US_SESSION_END_UTC))
-    hours      = df.index.hour
+    sess_key = FIB_SESSION_PER_TICKER.get(ticker, "us_session")
+    s_h, e_h = _SESSION_WINDOWS.get(sess_key, (US_SESSION_START_UTC, US_SESSION_END_UTC))
+    hours = df.index.hour
     in_session = (hours >= s_h) & (hours < e_h)
 
     n = len(df)
-    trades: List[Dict] = []
-    pending: Optional[Dict] = None
-    position: Optional[Dict] = None
+    trades: list[dict] = []
+    pending: dict | None = None
+    position: dict | None = None
     last_impulse_key = None
     warmup = max(FIB_EMA_SLOW_PERIOD, 250)
 
@@ -138,11 +150,11 @@ def run_fib_v4_backtest(
         if position is not None:
             exit_price, exit_reason = None, None
             if position["direction"] == "long":
-                hit_sl = bar["low"]  <= position["sl"]
+                hit_sl = bar["low"] <= position["sl"]
                 hit_tp = bar["high"] >= position["tp"]
             else:
                 hit_sl = bar["high"] >= position["sl"]
-                hit_tp = bar["low"]  <= position["tp"]
+                hit_tp = bar["low"] <= position["tp"]
             if hit_sl and hit_tp:
                 bull_bar = bar["close"] >= bar["open"]
                 if position["direction"] == "long":
@@ -164,28 +176,31 @@ def run_fib_v4_backtest(
 
             if exit_reason is not None:
                 pnl_pts = (
-                    (exit_price - position["entry"]) if position["direction"] == "long"
+                    (exit_price - position["entry"])
+                    if position["direction"] == "long"
                     else (position["entry"] - exit_price)
                 )
                 dpp = INSTRUMENTS[position["ticker"]]["dollar_per_point"]
                 pnl = position["n_ct"] * pnl_pts * dpp
-                trades.append({
-                    **{k: v for k, v in position.items() if k != "pending_idx"},
-                    "exit": float(exit_price),
-                    "exit_idx": int(i),
-                    "exit_time": str(df.index[i]),
-                    "result": exit_reason,
-                    "pnl": float(pnl),
-                    "bars_held": int(bars_held),
-                    "date": df.index[i].strftime("%Y-%m-%d"),
-                })
+                trades.append(
+                    {
+                        **{k: v for k, v in position.items() if k != "pending_idx"},
+                        "exit": float(exit_price),
+                        "exit_idx": int(i),
+                        "exit_time": str(df.index[i]),
+                        "result": exit_reason,
+                        "pnl": float(pnl),
+                        "bars_held": int(bars_held),
+                        "date": df.index[i].strftime("%Y-%m-%d"),
+                    }
+                )
                 position = None
             continue
 
         # ── 2. Gestion ordre limite pending ──────────────────────────────
         if pending is not None:
             # Update trackers excursion adverse
-            pending["low_min_pending"]  = min(pending["low_min_pending"],  float(bar["low"]))
+            pending["low_min_pending"] = min(pending["low_min_pending"], float(bar["low"]))
             pending["high_max_pending"] = max(pending["high_max_pending"], float(bar["high"]))
             atr_arm = pending.get("atr", float("nan"))
 
@@ -195,7 +210,9 @@ def run_fib_v4_backtest(
                 if pending["direction"] == "long":
                     pivot_break_now = (pending["low_min_pending"] - pending["swing_low"]) / atr_arm
                 else:
-                    pivot_break_now = (pending["swing_high"] - pending["high_max_pending"]) / atr_arm
+                    pivot_break_now = (
+                        pending["swing_high"] - pending["high_max_pending"]
+                    ) / atr_arm
                 if pivot_break_now < -pivot_break_buffer_atr:
                     pending = None
                     continue
@@ -219,10 +236,14 @@ def run_fib_v4_backtest(
 
                 # Calcul features finales au fill
                 if pending["direction"] == "long":
-                    pivot_break_final = (pending["low_min_pending"] - pending["swing_low"]) / atr_arm
+                    pivot_break_final = (
+                        pending["low_min_pending"] - pending["swing_low"]
+                    ) / atr_arm
                     mae = (pending["entry"] - pending["low_min_pending"]) / atr_arm
                 else:
-                    pivot_break_final = (pending["swing_high"] - pending["high_max_pending"]) / atr_arm
+                    pivot_break_final = (
+                        pending["swing_high"] - pending["high_max_pending"]
+                    ) / atr_arm
                     mae = (pending["high_max_pending"] - pending["entry"]) / atr_arm
                 fill_day = df.index[i].strftime("%Y-%m-%d")
 
@@ -230,20 +251,20 @@ def run_fib_v4_backtest(
                     **{k: v for k, v in pending.items() if k != "pending_idx"},
                     "fill_idx": int(i),
                     "fill_time": str(df.index[i]),
-                    "bars_to_fill":     int(i - pending["pending_idx"]),
-                    "pivot_break_atr":  float(pivot_break_final),
-                    "mae_pending_atr":  float(mae),
+                    "bars_to_fill": int(i - pending["pending_idx"]),
+                    "pivot_break_atr": float(pivot_break_final),
+                    "mae_pending_atr": float(mae),
                     "wick_through_atr": float(wick),
-                    "is_macro_day":     bool(fill_day in _MACRO_DATES_SET),
+                    "is_macro_day": bool(fill_day in _MACRO_DATES_SET),
                 }
                 pending = None
                 # Check immédiat SL/TP sur la barre de fill
                 if position["direction"] == "long":
-                    hit_sl = bar["low"]  <= position["sl"]
+                    hit_sl = bar["low"] <= position["sl"]
                     hit_tp = bar["high"] >= position["tp"]
                 else:
                     hit_sl = bar["high"] >= position["sl"]
-                    hit_tp = bar["low"]  <= position["tp"]
+                    hit_tp = bar["low"] <= position["tp"]
                 exit_price, exit_reason = None, None
                 if hit_sl and hit_tp:
                     exit_price, exit_reason = position["sl"], "SL"  # conservateur
@@ -253,21 +274,24 @@ def run_fib_v4_backtest(
                     exit_price, exit_reason = position["tp"], "TP"
                 if exit_reason is not None:
                     pnl_pts = (
-                        (exit_price - position["entry"]) if position["direction"] == "long"
+                        (exit_price - position["entry"])
+                        if position["direction"] == "long"
                         else (position["entry"] - exit_price)
                     )
                     dpp = INSTRUMENTS[position["ticker"]]["dollar_per_point"]
                     pnl = position["n_ct"] * pnl_pts * dpp
-                    trades.append({
-                        **position,
-                        "exit": float(exit_price),
-                        "exit_idx": int(i),
-                        "exit_time": str(df.index[i]),
-                        "result": exit_reason,
-                        "pnl": float(pnl),
-                        "bars_held": 0,
-                        "date": df.index[i].strftime("%Y-%m-%d"),
-                    })
+                    trades.append(
+                        {
+                            **position,
+                            "exit": float(exit_price),
+                            "exit_idx": int(i),
+                            "exit_time": str(df.index[i]),
+                            "result": exit_reason,
+                            "pnl": float(pnl),
+                            "bars_held": 0,
+                            "date": df.index[i].strftime("%Y-%m-%d"),
+                        }
+                    )
                     position = None
                 continue
 
@@ -289,7 +313,9 @@ def run_fib_v4_backtest(
             continue
 
         trend = detect_trend(
-            float(bar["close"]), float(bar["ema_fast"]), float(bar["ema_slow"]),
+            float(bar["close"]),
+            float(bar["ema_fast"]),
+            float(bar["ema_slow"]),
             float(bar["adx"]) if not pd.isna(bar["adx"]) else np.nan,
             FIB_ADX_TREND_THRESHOLD,
         )
@@ -297,15 +323,22 @@ def run_fib_v4_backtest(
             continue
 
         impulse = find_last_impulse(
-            df, i, pivot_highs, pivot_lows, df["atr"], trend,
-            FIB_PIVOT_RIGHT, min_imp, FIB_MAX_IMPULSE_BARS, FIB_IMPULSE_LOOKBACK,
+            df,
+            i,
+            pivot_highs,
+            pivot_lows,
+            df["atr"],
+            trend,
+            FIB_PIVOT_RIGHT,
+            min_imp,
+            FIB_MAX_IMPULSE_BARS,
+            FIB_IMPULSE_LOOKBACK,
             fib_level=fib_level,
         )
         if impulse is None:
             continue
 
-        impulse_key = (impulse["direction"], impulse["pivot_low_idx"],
-                       impulse["pivot_high_idx"])
+        impulse_key = (impulse["direction"], impulse["pivot_low_idx"], impulse["pivot_high_idx"])
         if impulse_key == last_impulse_key:
             continue
 
@@ -328,7 +361,7 @@ def run_fib_v4_backtest(
         sig["trend"] = trend
         sig["impulse_confirm_idx"] = impulse["confirm_idx"]
         # Trackers excursion (init avec la barre d'armement)
-        sig["low_min_pending"]  = float(bar["low"])
+        sig["low_min_pending"] = float(bar["low"])
         sig["high_max_pending"] = float(bar["high"])
         last_impulse_key = impulse_key
         pending = sig
@@ -340,11 +373,12 @@ def run_fib_v4_backtest(
 # État live — utilisé par broker/live_runner.py
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _current_m15_extrema_from_m1(
-    m1_buffer: "M1Buffer",
+    m1_buffer: M1Buffer,
     contract_id: str,
     last_close_m15_ts: pd.Timestamp,
-) -> Optional[Dict]:
+) -> dict | None:
     """Agrège les bars M1 (closed + forming) appartenant à la M15 EN COURS
     pour reconstituer le low/high COURANT de cette M15.
 
@@ -366,7 +400,7 @@ def _current_m15_extrema_from_m1(
     if not bars:
         return None
     return {
-        "low":  float(min(b.low for b in bars)),
+        "low": float(min(b.low for b in bars)),
         "high": float(max(b.high for b in bars)),
         "n_m1": len(bars),
     }
@@ -375,9 +409,9 @@ def _current_m15_extrema_from_m1(
 def get_fib_v4_live_signal(
     df_15m: pd.DataFrame,
     ticker: str,
-    m1_buffer: Optional["M1Buffer"] = None,
-    contract_id: Optional[str] = None,
-) -> Optional[Dict]:
+    m1_buffer: M1Buffer | None = None,
+    contract_id: str | None = None,
+) -> dict | None:
     """État live courant de la stratégie fib-v4.
 
     Différences vs `core.strategy_fib.get_fib_live_signal` (fib-v3) :
@@ -430,23 +464,22 @@ def get_fib_v4_live_signal(
     skip_macro = FIB_V4_SKIP_MACRO_PER_TICKER.get(ticker, False)
 
     df = df_15m.copy()
-    df["atr"]      = compute_atr(df, FIB_ATR_PERIOD)
+    df["atr"] = compute_atr(df, FIB_ATR_PERIOD)
     df["ema_fast"] = compute_ema(df["close"], FIB_EMA_FAST_PERIOD)
     df["ema_slow"] = compute_ema(df["close"], FIB_EMA_SLOW_PERIOD)
-    df["adx"]      = compute_adx(df, FIB_ADX_PERIOD)
+    df["adx"] = compute_adx(df, FIB_ADX_PERIOD)
 
     pivot_highs, pivot_lows = detect_pivots(df, FIB_PIVOT_LEFT, FIB_PIVOT_RIGHT)
 
     sess_key = FIB_SESSION_PER_TICKER.get(ticker, "us_session")
-    s_h, e_h = _SESSION_WINDOWS.get(sess_key,
-                                      (US_SESSION_START_UTC, US_SESSION_END_UTC))
+    s_h, e_h = _SESSION_WINDOWS.get(sess_key, (US_SESSION_START_UTC, US_SESSION_END_UTC))
     hours = df.index.hour
     in_session = (hours >= s_h) & (hours < e_h)
 
     n = len(df)
     warmup = max(FIB_EMA_SLOW_PERIOD, 250)
-    pending: Optional[Dict] = None
-    position: Optional[Dict] = None
+    pending: dict | None = None
+    position: dict | None = None
     last_impulse_key = None
 
     for i in range(warmup, n):
@@ -455,11 +488,11 @@ def get_fib_v4_live_signal(
         # ── 1. Position ouverte ────────────────────────────────────────────
         if position is not None:
             if position["direction"] == "long":
-                hit_sl = bar["low"]  <= position["sl"]
+                hit_sl = bar["low"] <= position["sl"]
                 hit_tp = bar["high"] >= position["tp"]
             else:
                 hit_sl = bar["high"] >= position["sl"]
-                hit_tp = bar["low"]  <= position["tp"]
+                hit_tp = bar["low"] <= position["tp"]
             if hit_sl or hit_tp:
                 position = None
                 continue
@@ -470,7 +503,7 @@ def get_fib_v4_live_signal(
         # ── 2. Ordre limite pending ────────────────────────────────────────
         if pending is not None:
             # Trackers excursion sur les M15 closes
-            pending["low_min_pending"]  = min(pending["low_min_pending"],  float(bar["low"]))
+            pending["low_min_pending"] = min(pending["low_min_pending"], float(bar["low"]))
             pending["high_max_pending"] = max(pending["high_max_pending"], float(bar["high"]))
             atr_arm = pending.get("atr", float("nan"))
 
@@ -497,16 +530,15 @@ def get_fib_v4_live_signal(
                         pending = None
                         continue
                 # Fill validé → position active
-                position = {**pending, "fill_idx": int(i),
-                            "fill_time": str(df.index[i])}
+                position = {**pending, "fill_idx": int(i), "fill_time": str(df.index[i])}
                 pending = None
                 # Check immédiat SL/TP sur la bougie de fill
                 if position["direction"] == "long":
-                    hit_sl = bar["low"]  <= position["sl"]
+                    hit_sl = bar["low"] <= position["sl"]
                     hit_tp = bar["high"] >= position["tp"]
                 else:
                     hit_sl = bar["high"] >= position["sl"]
-                    hit_tp = bar["low"]  <= position["tp"]
+                    hit_tp = bar["low"] <= position["tp"]
                 if hit_sl or hit_tp:
                     position = None
                 continue
@@ -525,36 +557,45 @@ def get_fib_v4_live_signal(
         if pd.isna(atr_now) or atr_now <= 0:
             continue
         trend = detect_trend(
-            float(bar["close"]), float(bar["ema_fast"]), float(bar["ema_slow"]),
+            float(bar["close"]),
+            float(bar["ema_fast"]),
+            float(bar["ema_slow"]),
             float(bar["adx"]) if not pd.isna(bar["adx"]) else np.nan,
             FIB_ADX_TREND_THRESHOLD,
         )
         if trend == "RANGE":
             continue
         impulse = find_last_impulse(
-            df, i, pivot_highs, pivot_lows, df["atr"], trend,
-            FIB_PIVOT_RIGHT, min_imp, FIB_MAX_IMPULSE_BARS, FIB_IMPULSE_LOOKBACK,
+            df,
+            i,
+            pivot_highs,
+            pivot_lows,
+            df["atr"],
+            trend,
+            FIB_PIVOT_RIGHT,
+            min_imp,
+            FIB_MAX_IMPULSE_BARS,
+            FIB_IMPULSE_LOOKBACK,
             fib_level=fib_level,
         )
         if impulse is None:
             continue
-        imp_key = (impulse["direction"], impulse["pivot_low_idx"],
-                   impulse["pivot_high_idx"])
+        imp_key = (impulse["direction"], impulse["pivot_low_idx"], impulse["pivot_high_idx"])
         if imp_key == last_impulse_key:
             continue
-        if impulse["direction"] == "long"  and bar["close"] <= impulse["fib_50"]:
+        if impulse["direction"] == "long" and bar["close"] <= impulse["fib_50"]:
             continue
         if impulse["direction"] == "short" and bar["close"] >= impulse["fib_50"]:
             continue
         sig = build_signal(impulse, float(atr_now), ticker, sl_mult, tp_mult)
         if sig is None:
             continue
-        sig["pending_idx"]  = int(i)
+        sig["pending_idx"] = int(i)
         sig["pending_time"] = str(df.index[i])
-        sig["fib_level"]    = float(fib_level)
-        sig["trend"]        = trend
+        sig["fib_level"] = float(fib_level)
+        sig["trend"] = trend
         sig["impulse_confirm_idx"] = impulse["confirm_idx"]
-        sig["low_min_pending"]  = float(bar["low"])
+        sig["low_min_pending"] = float(bar["low"])
         sig["high_max_pending"] = float(bar["high"])
         last_impulse_key = imp_key
         pending = sig
@@ -562,11 +603,13 @@ def get_fib_v4_live_signal(
     # ── 4. État final + évaluation intra-bar M15 EN COURS ─────────────────
     if position is not None:
         return {
-            "state":  "ACTIVE",
+            "state": "ACTIVE",
             "signal": position,
-            "impulse_key": (f"{position['direction']}"
-                             f"_{position.get('swing_low', 0)}"
-                             f"_{position.get('swing_high', 0)}"),
+            "impulse_key": (
+                f"{position['direction']}"
+                f"_{position.get('swing_low', 0)}"
+                f"_{position.get('swing_high', 0)}"
+            ),
         }
 
     if pending is None:
@@ -580,22 +623,18 @@ def get_fib_v4_live_signal(
             last_m15_ts = df.index[-1]
             if not isinstance(last_m15_ts, pd.Timestamp):
                 last_m15_ts = pd.Timestamp(last_m15_ts)
-            extrema = _current_m15_extrema_from_m1(
-                m1_buffer, contract_id, last_m15_ts
-            )
+            extrema = _current_m15_extrema_from_m1(m1_buffer, contract_id, last_m15_ts)
             if extrema is not None:
-                current_low  = extrema["low"]
+                current_low = extrema["low"]
                 current_high = extrema["high"]
         except Exception:
             current_low = current_high = None  # défensif — on retombe en mode bar-close
 
     atr_arm = pending.get("atr", float("nan"))
-    impulse_key = (f"{pending['direction']}"
-                   f"_{pending.get('swing_low', 0)}"
-                   f"_{pending.get('swing_high', 0)}")
-    bars_remaining = FIB_ORDER_TIMEOUT_BARS - (
-        (n - 1) - pending["pending_idx"]
+    impulse_key = (
+        f"{pending['direction']}_{pending.get('swing_low', 0)}_{pending.get('swing_high', 0)}"
     )
+    bars_remaining = FIB_ORDER_TIMEOUT_BARS - ((n - 1) - pending["pending_idx"])
 
     # Si on a une vue intra-bar, vérifier pivot break + wick courants
     if current_low is not None and current_high is not None and atr_arm and not pd.isna(atr_arm):
@@ -603,14 +642,16 @@ def get_fib_v4_live_signal(
         if pending["direction"] == "long":
             pb_now = (min(pending["low_min_pending"], current_low) - pending["swing_low"]) / atr_arm
         else:
-            pb_now = (pending["swing_high"] - max(pending["high_max_pending"], current_high)) / atr_arm
+            pb_now = (
+                pending["swing_high"] - max(pending["high_max_pending"], current_high)
+            ) / atr_arm
         if pb_now < -pivot_break_buffer_atr:
             return {
-                "state":  "CANCEL",
+                "state": "CANCEL",
                 "signal": pending,
                 "impulse_key": impulse_key,
                 "reason": f"pivot_break_intra_bar (pb_now={pb_now:.3f} < {-pivot_break_buffer_atr})",
-                "current_m15_low":  current_low,
+                "current_m15_low": current_low,
                 "current_m15_high": current_high,
             }
         # 2) Wick courant si le niveau a déjà été touché intra-bar
@@ -622,20 +663,21 @@ def get_fib_v4_live_signal(
                 wick = (current_high - level) / atr_arm
             if wick > wick_max_atr:
                 return {
-                    "state":  "CANCEL_FILL",
+                    "state": "CANCEL_FILL",
                     "signal": pending,
                     "impulse_key": impulse_key,
-                    "reason": (f"wick_through_atr={wick:.3f} > {wick_max_atr} "
-                               f"intra-bar (M1 reconstructed)"),
-                    "current_m15_low":  current_low,
+                    "reason": (
+                        f"wick_through_atr={wick:.3f} > {wick_max_atr} intra-bar (M1 reconstructed)"
+                    ),
+                    "current_m15_low": current_low,
                     "current_m15_high": current_high,
                 }
 
     return {
-        "state":  "PENDING",
+        "state": "PENDING",
         "signal": pending,
         "impulse_key": impulse_key,
         "bars_remaining": int(max(0, bars_remaining)),
-        "current_m15_low":  current_low,
+        "current_m15_low": current_low,
         "current_m15_high": current_high,
     }

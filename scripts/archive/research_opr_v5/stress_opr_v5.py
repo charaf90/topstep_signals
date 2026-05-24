@@ -24,9 +24,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.data import load_csv, build_timeframes
-from strategies import opr_v5
 from config import MACRO_EVENT_DATES
+from core.data import build_timeframes, load_csv
+from strategies import opr_v5
 
 TICKERS = ["MES1", "NQ1", "YM1"]
 
@@ -47,15 +47,18 @@ def _compute_adx_at_entry(df_15m: pd.DataFrame, ts_str: str, period: int = 14) -
     df = df.tail(period * 10).copy()
     high, low, close = df["high"], df["low"], df["close"]
     prev_close = close.shift(1)
-    tr = pd.concat([high - low, (high - prev_close).abs(),
-                    (low - prev_close).abs()], axis=1).max(axis=1)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(
+        axis=1
+    )
     atr = tr.ewm(alpha=1.0 / period, adjust=False).mean()
     up_move = high.diff()
     down_move = low.shift(1) - low
     plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
     minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
     plus_di = 100.0 * plus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / atr.replace(0, np.nan)
-    minus_di = 100.0 * minus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / atr.replace(0, np.nan)
+    minus_di = (
+        100.0 * minus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / atr.replace(0, np.nan)
+    )
     dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     adx = dx.ewm(alpha=1.0 / period, adjust=False).mean()
     val = adx.iloc[-1] if len(adx) > 0 else np.nan
@@ -75,14 +78,18 @@ def _atr_pct(df_15m: pd.DataFrame, ts_str: str, period: int = 14, window_days: i
     before = df_15m[df_15m.index < ts]
     if before.empty:
         return np.nan
-    daily = before.resample("D").agg({"open": "first", "high": "max",
-                                       "low": "min", "close": "last"}).dropna()
+    daily = (
+        before.resample("D")
+        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+        .dropna()
+    )
     if len(daily) < period + 5:
         return np.nan
     high, low, close = daily["high"], daily["low"], daily["close"]
     prev_close = close.shift(1)
-    tr = pd.concat([high - low, (high - prev_close).abs(),
-                    (low - prev_close).abs()], axis=1).max(axis=1)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(
+        axis=1
+    )
     atr = tr.rolling(period).mean().dropna()
     if len(atr) < window_days:
         return np.nan
@@ -107,9 +114,12 @@ def _stats(df: pd.DataFrame) -> dict:
     pnl = float(f["pnl"].sum())
     pf = _pf(df)
     wr = 100.0 * (f["pnl"] > 0).sum() / n if n > 0 else np.nan
-    return {"n": n, "PF": round(pf, 2) if np.isfinite(pf) else "inf",
-            "pnl": round(pnl, 2),
-            "WR_pct": round(wr, 1) if np.isfinite(wr) else np.nan}
+    return {
+        "n": n,
+        "PF": round(pf, 2) if np.isfinite(pf) else "inf",
+        "pnl": round(pnl, 2),
+        "WR_pct": round(wr, 1) if np.isfinite(wr) else np.nan,
+    }
 
 
 def main() -> int:
@@ -156,7 +166,9 @@ def main() -> int:
     # ── Stats par régime ────────────────────────────────────────────────────
     rows = ["# Stress tests opr-v5 (OOS portfolio — oct 2025 → mai 2026)"]
     rows.append("")
-    rows.append("Régimes calculés au moment du trigger : ADX(14) M15, ATR daily percentile rolling 30j.")
+    rows.append(
+        "Régimes calculés au moment du trigger : ADX(14) M15, ATR daily percentile rolling 30j."
+    )
     rows.append("Cible (SKILL.md PHASE 5a) : PF ≥ 1.0 sur chaque régime, PF ≥ 1.3 sur ≥ 2 régimes.")
     rows.append("")
     rows.append("| Régime | Définition | n | PF | P&L | WR % | Verdict |")
@@ -169,23 +181,21 @@ def main() -> int:
         verdict = "🟢" if pf_num >= 1.3 else ("🟡" if pf_num >= 1.0 else "🔴")
         if not np.isfinite(pf_num):
             verdict = "—"
-        print(f"  {label:<14}  n={s['n']:>3}  PF={pf}  P&L={s['pnl']:+8.2f}  WR={s['WR_pct']}%  {verdict}")
-        rows.append(f"| {label} | {definition} | {s['n']} | {pf} | "
-                    f"{s['pnl']:+.2f} | {s['WR_pct']} | {verdict} |")
+        print(
+            f"  {label:<14}  n={s['n']:>3}  PF={pf}  P&L={s['pnl']:+8.2f}  WR={s['WR_pct']}%  {verdict}"
+        )
+        rows.append(
+            f"| {label} | {definition} | {s['n']} | {pf} | "
+            f"{s['pnl']:+.2f} | {s['WR_pct']} | {verdict} |"
+        )
 
     print("\n  Décomposition par régime OOS :")
-    _row("Trending",   "ADX > 25 au trigger",
-         df_oos[df_oos["adx_at_entry"] > 25])
-    _row("Ranging",    "ADX < 20 au trigger",
-         df_oos[df_oos["adx_at_entry"] < 20])
-    _row("Vol haute",  "ATR daily pct > 0.75",
-         df_oos[df_oos["atr_pct"] > 0.75])
-    _row("Vol basse",  "ATR daily pct < 0.25",
-         df_oos[df_oos["atr_pct"] < 0.25])
-    _row("Macro day",  "Date ∈ MACRO_EVENT_DATES",
-         df_oos[df_oos["is_macro"]])
-    _row("Non-macro",  "Date ∉ MACRO_EVENT_DATES",
-         df_oos[~df_oos["is_macro"]])
+    _row("Trending", "ADX > 25 au trigger", df_oos[df_oos["adx_at_entry"] > 25])
+    _row("Ranging", "ADX < 20 au trigger", df_oos[df_oos["adx_at_entry"] < 20])
+    _row("Vol haute", "ATR daily pct > 0.75", df_oos[df_oos["atr_pct"] > 0.75])
+    _row("Vol basse", "ATR daily pct < 0.25", df_oos[df_oos["atr_pct"] < 0.25])
+    _row("Macro day", "Date ∈ MACRO_EVENT_DATES", df_oos[df_oos["is_macro"]])
+    _row("Non-macro", "Date ∉ MACRO_EVENT_DATES", df_oos[~df_oos["is_macro"]])
 
     # ── Comparaison v4 vs v5 par régime (lite) ──
     rows.append("")
@@ -194,9 +204,11 @@ def main() -> int:
     rows.append("Référence : v4 OOS portfolio PF=1.64, P&L=+$10 580, DD=-$1 111 (n=405)")
     rows.append("v5 OOS portfolio : PF=1.63, P&L=+$9 267, DD=-$826 (n=353)")
     rows.append("")
-    rows.append("v5 conserve la profitabilité de v4 (PF similaire) avec un DD réduit "
-                "(-25 %) et un n légèrement plus faible (-13 %). L'avantage de v5 est "
-                "qualitatif (moins de drawdown, plus régulier).")
+    rows.append(
+        "v5 conserve la profitabilité de v4 (PF similaire) avec un DD réduit "
+        "(-25 %) et un n légèrement plus faible (-13 %). L'avantage de v5 est "
+        "qualitatif (moins de drawdown, plus régulier)."
+    )
 
     out = PROJECT_ROOT / "output" / "stress_opr_v5.md"
     out.write_text("\n".join(rows))

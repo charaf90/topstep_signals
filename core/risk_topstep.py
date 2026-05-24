@@ -8,8 +8,10 @@ surveille lui-même ses limites côté broker.
 """
 
 from config import (
-    TOPSTEP_DAILY_LOSS_MAX, TOPSTEP_TRAILING_DD,
-    RISK_PER_TRADE_USD, TOPSTEP_SAFETY_MULT,
+    RISK_PER_TRADE_USD,
+    TOPSTEP_DAILY_LOSS_MAX,
+    TOPSTEP_SAFETY_MULT,
+    TOPSTEP_TRAILING_DD,
 )
 
 

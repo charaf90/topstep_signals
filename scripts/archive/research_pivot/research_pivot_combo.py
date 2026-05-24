@@ -7,6 +7,7 @@ discriminantes) pour trouver la meilleure précision avec recall ≥ 50%.
 
 Usage : python scripts/research_pivot_combo.py --ticker MCL1
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,9 +16,9 @@ import sys
 import warnings
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -33,12 +34,18 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import research_pivot_nq1 as base  # noqa: E402
+from research_pivot_divergence import (  # noqa: E402
+    BASELINE_FEATURES,
+    OOS_HORIZON_DAYS,
+    ORDER,
+    SPLITS,
+)
+
 from core.data import load_csv  # noqa: E402
-from research_pivot_divergence import BASELINE_FEATURES, SPLITS, OOS_HORIZON_DAYS, ORDER  # noqa: E402
 
 OUT_ROOT = ROOT / "output" / "pivot_research_combo"
 MIN_RECALL = 0.30  # on garde les combos avec recall conservé ≥ 30 %
-MIN_SIGNALS = 80   # minimum d'échantillons pour que la précision ait du sens
+MIN_SIGNALS = 80  # minimum d'échantillons pour que la précision ait du sens
 
 # Atomic filters par actif — on définit des seuils candidats raisonnables
 ATOMIC_FILTERS = {
@@ -69,8 +76,12 @@ def compute_oos_predictions(df, feature_cols, label_col="is_pivot_any"):
         y_is = df_is[label_col].to_numpy(dtype=np.int32)
         X_oos = df_oos[feature_cols].to_numpy(dtype=np.float32)
         rf = RandomForestClassifier(
-            n_estimators=300, max_depth=8, class_weight="balanced",
-            random_state=42, n_jobs=-1, min_samples_leaf=20,
+            n_estimators=300,
+            max_depth=8,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+            min_samples_leaf=20,
         )
         rf.fit(X_is, y_is)
         p_oos = rf.predict_proba(X_oos)[:, 1]
@@ -142,15 +153,17 @@ def search_combos(signals, atomics):
             recall_kept = sc["n_TP"] / n_pivots_total
             if recall_kept < MIN_RECALL:
                 continue
-            rows.append({
-                "k": k,
-                "rule": " AND ".join(fmt_atomic(*c) for c in combo),
-                "n_signaux": sc["n_signaux"],
-                "n_TP": sc["n_TP"],
-                "n_FP": sc["n_FP"],
-                "precision": sc["precision"],
-                "recall_kept": recall_kept,
-            })
+            rows.append(
+                {
+                    "k": k,
+                    "rule": " AND ".join(fmt_atomic(*c) for c in combo),
+                    "n_signaux": sc["n_signaux"],
+                    "n_TP": sc["n_TP"],
+                    "n_FP": sc["n_FP"],
+                    "precision": sc["precision"],
+                    "recall_kept": recall_kept,
+                }
+            )
     return pd.DataFrame(rows).sort_values("precision", ascending=False)
 
 
@@ -193,12 +206,16 @@ def main():
     thr_10 = float(thr[best_idx])
     prec_baseline = float(prec[best_idx])
     recall_baseline = float(rec[best_idx])
-    print(f"  • Seuil RF : {thr_10:.3f} → précision baseline = {prec_baseline:.2%} "
-          f"(recall {recall_baseline:.2%})")
+    print(
+        f"  • Seuil RF : {thr_10:.3f} → précision baseline = {prec_baseline:.2%} "
+        f"(recall {recall_baseline:.2%})"
+    )
 
     signals = pred[pred["proba"] >= thr_10].copy()
     n_pivots = int((signals["is_pivot_any"] == 1).sum())
-    print(f"  • Signaux à filtrer : {len(signals)} (TP : {n_pivots} | FP : {len(signals) - n_pivots})")
+    print(
+        f"  • Signaux à filtrer : {len(signals)} (TP : {n_pivots} | FP : {len(signals) - n_pivots})"
+    )
 
     print("  • Grid search combos (k=1,2,3)…")
     atomics = ATOMIC_FILTERS[ticker]
@@ -209,9 +226,9 @@ def main():
     lines = [f"# Grid search combos — {ticker} order={ORDER}\n"]
     w = lines.append
     w(f"- Signaux baseline (seuil RF {thr_10:.3f}) : **{len(signals):,}**")
-    w(f"- Précision baseline : **{prec_baseline:.2%}**  (lift ×{prec_baseline/base_rate:.2f})")
+    w(f"- Précision baseline : **{prec_baseline:.2%}**  (lift ×{prec_baseline / base_rate:.2f})")
     w(f"- Contraintes : recall conservé ≥ {MIN_RECALL:.0%}, n_signaux ≥ {MIN_SIGNALS}")
-    w(f"- Atomic filters testés :")
+    w("- Atomic filters testés :")
     for feat, conds in atomics.items():
         for op, val in conds:
             w(f"  - {fmt_atomic(feat, op, val)}")
@@ -223,9 +240,13 @@ def main():
         top["precision"] = top["precision"].map(lambda x: f"{x:.2%}")
         top["recall_kept"] = top["recall_kept"].map(lambda x: f"{x:.2%}")
         top["lift_vs_base"] = combos.head(15).apply(
-            lambda r: f"×{r['precision']/prec_baseline:.2f}", axis=1)
-        w(top[["k", "rule", "n_signaux", "n_TP", "precision",
-               "recall_kept", "lift_vs_base"]].to_markdown(index=False))
+            lambda r: f"×{r['precision'] / prec_baseline:.2f}", axis=1
+        )
+        w(
+            top[
+                ["k", "rule", "n_signaux", "n_TP", "precision", "recall_kept", "lift_vs_base"]
+            ].to_markdown(index=False)
+        )
     else:
         w("_aucun combo ne respecte les contraintes_")
     w("")
@@ -242,20 +263,26 @@ def main():
                 best_prec_so_far = r["precision"]
         if pareto:
             par = pd.DataFrame(pareto)
-            w(f"\n## Frontière de Pareto (precision vs recall conservé)\n")
+            w("\n## Frontière de Pareto (precision vs recall conservé)\n")
             par_show = par.copy()
             par_show["precision"] = par_show["precision"].map(lambda x: f"{x:.2%}")
             par_show["recall_kept"] = par_show["recall_kept"].map(lambda x: f"{x:.2%}")
-            w(par_show[["k", "rule", "n_signaux", "precision", "recall_kept"]].to_markdown(index=False))
+            w(
+                par_show[["k", "rule", "n_signaux", "precision", "recall_kept"]].to_markdown(
+                    index=False
+                )
+            )
 
     # Plot Pareto
     if len(combos) > 0:
         fig, ax = plt.subplots(figsize=(8, 6))
         for k_val, sub in combos.groupby("k"):
-            ax.scatter(sub["recall_kept"], sub["precision"],
-                       label=f"{k_val} filtre(s)", alpha=0.6, s=40)
-        ax.axhline(prec_baseline, color="gray", linestyle="--",
-                   label=f"baseline ({prec_baseline:.2%})")
+            ax.scatter(
+                sub["recall_kept"], sub["precision"], label=f"{k_val} filtre(s)", alpha=0.6, s=40
+            )
+        ax.axhline(
+            prec_baseline, color="gray", linestyle="--", label=f"baseline ({prec_baseline:.2%})"
+        )
         ax.set_xlabel("Recall conservé (vs baseline)")
         ax.set_ylabel("Précision")
         ax.set_title(f"{ticker} — combos de filtres (k=1,2,3)")
@@ -271,8 +298,10 @@ def main():
     if len(combos) > 0:
         best = combos.iloc[0]
         print(f"\n🏆 Meilleur combo : {best['rule']}")
-        print(f"   → précision {best['precision']:.2%} (×{best['precision']/prec_baseline:.2f}), "
-              f"recall {best['recall_kept']:.2%}, n={best['n_signaux']}")
+        print(
+            f"   → précision {best['precision']:.2%} (×{best['precision'] / prec_baseline:.2f}), "
+            f"recall {best['recall_kept']:.2%}, n={best['n_signaux']}"
+        )
 
 
 if __name__ == "__main__":

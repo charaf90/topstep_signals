@@ -27,6 +27,7 @@ But du script :
 Usage :
   python -m scripts.live_eq_v5_1 --csv-dir ./data
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,28 +40,27 @@ import pandas as pd
 
 np.random.seed(42)
 
-import config as cfg
 from config import (
+    COMMISSION_RT_PER_CONTRACT,
     OPR_TIMEZONE,
     OPR_V5_1_F2_MIN_ATR,
     SLIPPAGE_TICKS_PER_TICKER,
-    COMMISSION_RT_PER_CONTRACT,
 )
-from core.data import load_csv, build_timeframes
-from core.opr import _compute_atr_daily, OPR_ATR_PERIOD
-from core.optimizer import OOS_START
+from core.data import build_timeframes, load_csv
 from core.metrics import compute_stats
+from core.opr import OPR_ATR_PERIOD, _compute_atr_daily
+from core.optimizer import OOS_START
 from strategies import opr_v5_1 as v51
 
-
 SELECTED_TICKERS = ["NQ1", "YM1"]
-TICK_VALUE = {"MES1": 0.25, "NQ1": 0.25, "YM1": 1.0}      # $ per tick (1 contrat)
+TICK_VALUE = {"MES1": 0.25, "NQ1": 0.25, "YM1": 1.0}  # $ per tick (1 contrat)
 DOLLARS_PER_TICK = {"MES1": 1.25, "NQ1": 0.50, "YM1": 0.50}  # $ par tick (ratio standard projet)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Recalcul F2 pre-fill (schéma cancel-before-fill)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def compute_f2_pre_fill(
     df_15m_ny: pd.DataFrame,
@@ -98,6 +98,7 @@ def compute_f2_pre_fill(
 # Friction nette par trade (slippage + commission)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def friction_per_trade(ticker: str, n_ct: int) -> float:
     slip_ticks = SLIPPAGE_TICKS_PER_TICKER.get(ticker, 1)
     dollars_per_tick = DOLLARS_PER_TICK.get(ticker, 0.50)
@@ -113,8 +114,11 @@ def add_net_pnl(trades: pd.DataFrame) -> pd.DataFrame:
         out["pnl_net"] = pd.Series(dtype=float)
         return out
     out["friction"] = out.apply(
-        lambda r: friction_per_trade(r.get("ticker", "?"), int(r.get("n_ct", 1) or 1))
-        if r.get("result", "NOT_FILLED") != "NOT_FILLED" else 0.0,
+        lambda r: (
+            friction_per_trade(r.get("ticker", "?"), int(r.get("n_ct", 1) or 1))
+            if r.get("result", "NOT_FILLED") != "NOT_FILLED"
+            else 0.0
+        ),
         axis=1,
     )
     out["pnl_net"] = out["pnl"] - out["friction"]
@@ -124,6 +128,7 @@ def add_net_pnl(trades: pd.DataFrame) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline principal
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def run_live_eq(csv_dir: str, oos_start: str = OOS_START) -> dict:
     tz = ZoneInfo(OPR_TIMEZONE)
@@ -147,8 +152,7 @@ def run_live_eq(csv_dir: str, oos_start: str = OOS_START) -> dict:
             df_15m_ny.index = df_15m_ny.index.tz_convert(tz)
 
         # 1. Run v5.1 backtest (post-fill, params optima config par défaut)
-        trades_post = v51.run_backtest(df_15m, ticker, tf=tf, params=None,
-                                       topstep_guard=False)
+        trades_post = v51.run_backtest(df_15m, ticker, tf=tf, params=None, topstep_guard=False)
         trades_post["ticker"] = ticker
 
         # Filtrer OOS uniquement
@@ -226,6 +230,7 @@ def run_live_eq(csv_dir: str, oos_start: str = OOS_START) -> dict:
 # Reporting
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def fmt_money(x):
     return f"${x:+,.0f}"
 
@@ -268,9 +273,7 @@ def print_report(results: dict, output_dir: str):
         lost = n_post - n_live
         fidelity = (n_live / n_post * 100) if n_post > 0 else float("nan")
 
-        md_lines.append(
-            f"| {ticker} | {n_post} | {n_live} | {lost} | {fidelity:.1f} % |"
-        )
+        md_lines.append(f"| {ticker} | {n_post} | {n_live} | {lost} | {fidelity:.1f} % |")
 
         total_post_filled += n_post
         total_live_filled += n_live
@@ -286,7 +289,9 @@ def print_report(results: dict, output_dir: str):
         all_post.append(post)
         all_live.append(live)
 
-    fidelity_total = (total_live_filled / total_post_filled * 100) if total_post_filled > 0 else float("nan")
+    fidelity_total = (
+        (total_live_filled / total_post_filled * 100) if total_post_filled > 0 else float("nan")
+    )
     md_lines.append(
         f"| **Portfolio** | **{total_post_filled}** | **{total_live_filled}** | "
         f"**{total_post_filled - total_live_filled}** | **{fidelity_total:.1f} %** |"
@@ -312,15 +317,18 @@ def print_report(results: dict, output_dir: str):
         f"{fmt_money(total_pnl_live_net - total_pnl_post_net)} |",
         f"| PF brut | {stats_post.get('pf', float('nan')):.2f} | {stats_live.get('pf', float('nan')):.2f} | "
         f"{stats_live.get('pf', 0) - stats_post.get('pf', 0):+.2f} |",
-        f"| WR | {stats_post.get('wr', 0)*100:.1f} % | {stats_live.get('wr', 0)*100:.1f} % | "
-        f"{(stats_live.get('wr', 0) - stats_post.get('wr', 0))*100:+.1f} pp |",
+        f"| WR | {stats_post.get('wr', 0) * 100:.1f} % | {stats_live.get('wr', 0) * 100:.1f} % | "
+        f"{(stats_live.get('wr', 0) - stats_post.get('wr', 0)) * 100:+.1f} pp |",
         f"| DD max | {fmt_money(stats_post.get('dd', 0))} | {fmt_money(stats_live.get('dd', 0))} | "
         f"{fmt_money(stats_live.get('dd', 0) - stats_post.get('dd', 0))} |",
     ]
 
     # Critères auditor
-    pf_live_net = (total_pnl_live_net / max(abs(stats_live.get('losses_sum', 1)), 1)) \
-                  if stats_live.get('losses_sum') else float('nan')
+    pf_live_net = (
+        (total_pnl_live_net / max(abs(stats_live.get("losses_sum", 1)), 1))
+        if stats_live.get("losses_sum")
+        else float("nan")
+    )
     md_lines += [
         "",
         "## Critères auditor",
@@ -333,10 +341,15 @@ def print_report(results: dict, output_dir: str):
 
     # Verdict final
     verdict_fidelity = fidelity_total >= 95.0
-    verdict_pf = stats_live.get('pf', 0) >= 1.8
-    verdict = "🟢 DÉPLOYABLE" if (verdict_fidelity and verdict_pf) else (
-        "🟡 ACCEPTABLE (un critère manqué)" if (verdict_fidelity or verdict_pf)
-        else "🔴 NON DÉPLOYABLE (re-design du filtre nécessaire)"
+    verdict_pf = stats_live.get("pf", 0) >= 1.8
+    verdict = (
+        "🟢 DÉPLOYABLE"
+        if (verdict_fidelity and verdict_pf)
+        else (
+            "🟡 ACCEPTABLE (un critère manqué)"
+            if (verdict_fidelity or verdict_pf)
+            else "🔴 NON DÉPLOYABLE (re-design du filtre nécessaire)"
+        )
     )
     md_lines += [
         "",
@@ -373,8 +386,8 @@ def print_report(results: dict, output_dir: str):
             f"| min | {f2_post_dist['min']:.3f} | {f2_pre_dist['min']:.3f} |",
             f"| max | {f2_post_dist['max']:.3f} | {f2_pre_dist['max']:.3f} |",
             f"| % below seuil | "
-            f"{(filled_post['f2_excursion_atr'] < threshold).mean()*100:.1f} % | "
-            f"{(filled_post['f2_pre_fill_atr'] < threshold).mean()*100:.1f} % |",
+            f"{(filled_post['f2_excursion_atr'] < threshold).mean() * 100:.1f} % | "
+            f"{(filled_post['f2_pre_fill_atr'] < threshold).mean() * 100:.1f} % |",
             "",
         ]
 
@@ -400,8 +413,12 @@ def print_report(results: dict, output_dir: str):
         "pf_pass": verdict_pf,
         "per_ticker": {
             t: {
-                "n_post_filled": int(len(r["trades_post"][r["trades_post"]["result"] != "NOT_FILLED"])),
-                "n_live_filled": int(len(r["trades_live"][r["trades_live"]["result"] != "NOT_FILLED"])),
+                "n_post_filled": int(
+                    len(r["trades_post"][r["trades_post"]["result"] != "NOT_FILLED"])
+                ),
+                "n_live_filled": int(
+                    len(r["trades_live"][r["trades_live"]["result"] != "NOT_FILLED"])
+                ),
                 "n_live_rejected": int(r["trades_live"]["live_rejected"].sum()),
                 "threshold": r["f2_min_threshold"],
             }
@@ -418,9 +435,7 @@ def print_report(results: dict, output_dir: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Live-equivalence backtest opr-v5.1 (NQ1+YM1)"
-    )
+    parser = argparse.ArgumentParser(description="Live-equivalence backtest opr-v5.1 (NQ1+YM1)")
     parser.add_argument("--csv-dir", type=str, required=True)
     parser.add_argument("--oos-start", type=str, default=OOS_START)
     parser.add_argument("--output-dir", type=str, default="output/no_mes1")
@@ -428,7 +443,7 @@ def main():
 
     print("=" * 70)
     print("  LIVE-EQUIVALENCE BACKTEST — opr-v5.1 (NQ1+YM1)")
-    print(f"  Schéma : cancel-before-fill (F2 exclut bougie de fill)")
+    print("  Schéma : cancel-before-fill (F2 exclut bougie de fill)")
     print(f"  OOS    : {args.oos_start} → end")
     print("=" * 70)
 

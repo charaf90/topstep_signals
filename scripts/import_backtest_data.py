@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 TICKER_MAPPING = {
     "MES1": "MES1",
     "MNQ1": "NQ1",
@@ -118,7 +117,9 @@ def main():
     for r in sorted(resultats, key=lambda x: (x["ticker"], x["tf"])):
         debut = pd.Timestamp(r["debut"]).strftime("%Y-%m-%d")
         fin = pd.Timestamp(r["fin"]).strftime("%Y-%m-%d")
-        print(f"  {r['ticker']:<6} {r['tf']:<4}  {r['lignes']:>8} lignes  {debut} → {fin}  →  {r['dst']}")
+        print(
+            f"  {r['ticker']:<6} {r['tf']:<4}  {r['lignes']:>8} lignes  {debut} → {fin}  →  {r['dst']}"
+        )
         tickers_ecrits.add(r["ticker"])
 
     if erreurs:

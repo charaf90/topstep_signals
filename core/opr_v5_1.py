@@ -55,7 +55,7 @@ pass-through vers `core.opr.run_opr_day` (v4). Aujourd'hui :
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -66,10 +66,10 @@ np.random.seed(42)
 
 from config import (
     OPR_TIMEZONE,
-    OPR_V5_1_LIVE_TICKERS,
     OPR_V5_1_F2_MIN_ATR,
+    OPR_V5_1_LIVE_TICKERS,
 )
-from core.opr import run_opr_day, _ny_session_view
+from core.opr import _ny_session_view, run_opr_day
 
 if TYPE_CHECKING:
     # Couplage faible : on n'importe le type qu'à la vérif statique.
@@ -81,9 +81,9 @@ def get_opr_v5_1_live_signals(
     df_15m: pd.DataFrame,
     ticker: str,
     day_ny: pd.Timestamp,
-    m1_buffer: Optional["M1Buffer"] = None,
-    contract_id: Optional[str] = None,
-) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
+    m1_buffer: M1Buffer | None = None,
+    contract_id: str | None = None,
+) -> tuple[list[dict], list[dict], dict | None]:
     """
     Variante live d'OPR v5.1 avec schéma A (entrée différée).
 
@@ -133,13 +133,13 @@ def get_opr_v5_1_live_signals(
         return [], [], opr_zone
 
     # 4. Filtrer chaque signal selon le running F2
-    filtered_signals: List[Dict] = []
-    filtered_trades: List[Dict] = []
+    filtered_signals: list[dict] = []
+    filtered_trades: list[dict] = []
 
     for sig, trade in zip(signals, trades):
         trigger_ts_raw = sig.get("trigger_time")
         if not trigger_ts_raw:
-            continue   # signal sans trigger_time — skip (ne devrait pas arriver)
+            continue  # signal sans trigger_time — skip (ne devrait pas arriver)
 
         trigger_ts = pd.Timestamp(trigger_ts_raw)
         if trigger_ts.tz is None:
@@ -157,12 +157,12 @@ def get_opr_v5_1_live_signals(
             continue
 
         opr_high = float(sig["opr_high"])
-        opr_low  = float(sig["opr_low"])
+        opr_low = float(sig["opr_low"])
         atr_daily = float(sig["atr_daily"])
         direction = sig["direction"]
 
         if atr_daily <= 0:
-            continue   # protection division par zéro
+            continue  # protection division par zéro
 
         # Source des extrêmes pour F2 running : M1 buffer si dispo + ≥1 bar
         # depuis le trigger, sinon fallback M15 strict (comportement initial).
@@ -171,7 +171,8 @@ def get_opr_v5_1_live_signals(
         m1_bars = None
         if m1_buffer is not None and contract_id is not None:
             bars = m1_buffer.get_bars_since(
-                contract_id, trigger_ts.to_pydatetime(),
+                contract_id,
+                trigger_ts.to_pydatetime(),
                 include_forming=True,
             )
             if bars:
@@ -195,7 +196,7 @@ def get_opr_v5_1_live_signals(
         if f2_running >= threshold:
             # Push confirmé → on peut placer le LIMIT
             # Annoter le signal pour traçabilité (utile au logging)
-            sig = dict(sig)   # copie pour éviter mutation cross-call
+            sig = dict(sig)  # copie pour éviter mutation cross-call
             sig["v5_1_f2_running_at_emit"] = float(f2_running)
             sig["v5_1_f2_threshold"] = float(threshold)
             sig["v5_1_f2_source"] = "M1_buffer" if m1_bars is not None else "M15"

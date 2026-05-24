@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.data import load_csv, build_timeframes
+from core.data import build_timeframes, load_csv
 from strategies import opr as v4
 from strategies import opr_v5 as v5
 from strategies import opr_v5_1 as v51
@@ -36,8 +36,15 @@ OOS_START = "2025-10-01"
 
 def _stats(df_trades: pd.DataFrame, label: str) -> dict:
     if df_trades is None or df_trades.empty:
-        return {"label": label, "n_filled": 0, "n_signals": 0,
-                "pnl": 0.0, "PF": np.nan, "WR_pct": np.nan, "DD": 0.0}
+        return {
+            "label": label,
+            "n_filled": 0,
+            "n_signals": 0,
+            "pnl": 0.0,
+            "PF": np.nan,
+            "WR_pct": np.nan,
+            "DD": 0.0,
+        }
     filled = df_trades[df_trades["result"] != "NOT_FILLED"]
     n_filled = len(filled)
     n_signals = len(df_trades)
@@ -108,8 +115,10 @@ def main() -> int:
     rows: list[str] = []
     rows.append("# Comparaison opr-v4 vs opr-v5 vs opr-v5.1 — apples-to-apples")
     rows.append("")
-    rows.append("Période : sept 2024 → mai 2026 (full), avec split walk-forward "
-                "IS=avant 2025-10-01 / OOS=après.")
+    rows.append(
+        "Période : sept 2024 → mai 2026 (full), avec split walk-forward "
+        "IS=avant 2025-10-01 / OOS=après."
+    )
     rows.append("")
     rows.append("opr-v5 et opr-v5.1 utilisent les params optimaux config (PHASE 4 walk-forward).")
     rows.append("")
@@ -122,15 +131,21 @@ def main() -> int:
     rows.append("| Ticker | Stratégie | Filled | PF | P&L | WR % | DD |")
     rows.append("|---|---|---:|---:|---:|---:|---:|")
     for ticker, (t4, t5, t51) in per_ticker_data.items():
-        s4  = _stats(t4,  f"{ticker} v4")
-        s5  = _stats(t5,  f"{ticker} v5")
+        s4 = _stats(t4, f"{ticker} v4")
+        s5 = _stats(t5, f"{ticker} v5")
         s51 = _stats(t51, f"{ticker} v5.1")
-        rows.append(f"| {ticker} | opr-v4   | {s4['n_filled']} | {s4['PF']} | "
-                    f"{s4['pnl']:+.2f} | {s4['WR_pct']} | {s4['DD']:+.2f} |")
-        rows.append(f"| {ticker} | opr-v5   | {s5['n_filled']} | {s5['PF']} | "
-                    f"{s5['pnl']:+.2f} | {s5['WR_pct']} | {s5['DD']:+.2f} |")
-        rows.append(f"| {ticker} | opr-v5.1 | {s51['n_filled']} | {s51['PF']} | "
-                    f"{s51['pnl']:+.2f} | {s51['WR_pct']} | {s51['DD']:+.2f} |")
+        rows.append(
+            f"| {ticker} | opr-v4   | {s4['n_filled']} | {s4['PF']} | "
+            f"{s4['pnl']:+.2f} | {s4['WR_pct']} | {s4['DD']:+.2f} |"
+        )
+        rows.append(
+            f"| {ticker} | opr-v5   | {s5['n_filled']} | {s5['PF']} | "
+            f"{s5['pnl']:+.2f} | {s5['WR_pct']} | {s5['DD']:+.2f} |"
+        )
+        rows.append(
+            f"| {ticker} | opr-v5.1 | {s51['n_filled']} | {s51['PF']} | "
+            f"{s51['pnl']:+.2f} | {s51['WR_pct']} | {s51['DD']:+.2f} |"
+        )
 
     rows.append("")
     rows.append("### Période OOS (oct 2025 → mai 2026)")
@@ -138,18 +153,24 @@ def main() -> int:
     rows.append("| Ticker | Stratégie | Filled | PF | P&L | WR % | DD |")
     rows.append("|---|---|---:|---:|---:|---:|---:|")
     for ticker, (t4, t5, t51) in per_ticker_data.items():
-        t4_oos  = _mask_oos(t4)
-        t5_oos  = _mask_oos(t5)
+        t4_oos = _mask_oos(t4)
+        t5_oos = _mask_oos(t5)
         t51_oos = _mask_oos(t51)
-        s4  = _stats(t4_oos,  f"{ticker} v4 OOS")
-        s5  = _stats(t5_oos,  f"{ticker} v5 OOS")
+        s4 = _stats(t4_oos, f"{ticker} v4 OOS")
+        s5 = _stats(t5_oos, f"{ticker} v5 OOS")
         s51 = _stats(t51_oos, f"{ticker} v5.1 OOS")
-        rows.append(f"| {ticker} | opr-v4   | {s4['n_filled']} | {s4['PF']} | "
-                    f"{s4['pnl']:+.2f} | {s4['WR_pct']} | {s4['DD']:+.2f} |")
-        rows.append(f"| {ticker} | opr-v5   | {s5['n_filled']} | {s5['PF']} | "
-                    f"{s5['pnl']:+.2f} | {s5['WR_pct']} | {s5['DD']:+.2f} |")
-        rows.append(f"| {ticker} | opr-v5.1 | {s51['n_filled']} | {s51['PF']} | "
-                    f"{s51['pnl']:+.2f} | {s51['WR_pct']} | {s51['DD']:+.2f} |")
+        rows.append(
+            f"| {ticker} | opr-v4   | {s4['n_filled']} | {s4['PF']} | "
+            f"{s4['pnl']:+.2f} | {s4['WR_pct']} | {s4['DD']:+.2f} |"
+        )
+        rows.append(
+            f"| {ticker} | opr-v5   | {s5['n_filled']} | {s5['PF']} | "
+            f"{s5['pnl']:+.2f} | {s5['WR_pct']} | {s5['DD']:+.2f} |"
+        )
+        rows.append(
+            f"| {ticker} | opr-v5.1 | {s51['n_filled']} | {s51['PF']} | "
+            f"{s51['pnl']:+.2f} | {s51['WR_pct']} | {s51['DD']:+.2f} |"
+        )
 
     # ── Portfolio ──
     rows.append("")
@@ -159,18 +180,24 @@ def main() -> int:
     rows.append("|---|---|---:|---:|---:|---:|")
     for label, df4, df5, df51 in [
         ("Full", df_v4, df_v5, df_v51),
-        ("IS",   _mask_is(df_v4),  _mask_is(df_v5),  _mask_is(df_v51)),
-        ("OOS",  _mask_oos(df_v4), _mask_oos(df_v5), _mask_oos(df_v51)),
+        ("IS", _mask_is(df_v4), _mask_is(df_v5), _mask_is(df_v51)),
+        ("OOS", _mask_oos(df_v4), _mask_oos(df_v5), _mask_oos(df_v51)),
     ]:
-        s4  = _stats(df4,  f"v4 {label}")
-        s5  = _stats(df5,  f"v5 {label}")
+        s4 = _stats(df4, f"v4 {label}")
+        s5 = _stats(df5, f"v5 {label}")
         s51 = _stats(df51, f"v5.1 {label}")
-        rows.append(f"| {label} | opr-v4   | {s4['n_filled']} | {s4['PF']} | "
-                    f"{s4['pnl']:+.2f} | {s4['DD']:+.2f} |")
-        rows.append(f"| {label} | opr-v5   | {s5['n_filled']} | {s5['PF']} | "
-                    f"{s5['pnl']:+.2f} | {s5['DD']:+.2f} |")
-        rows.append(f"| {label} | opr-v5.1 | {s51['n_filled']} | {s51['PF']} | "
-                    f"{s51['pnl']:+.2f} | {s51['DD']:+.2f} |")
+        rows.append(
+            f"| {label} | opr-v4   | {s4['n_filled']} | {s4['PF']} | "
+            f"{s4['pnl']:+.2f} | {s4['DD']:+.2f} |"
+        )
+        rows.append(
+            f"| {label} | opr-v5   | {s5['n_filled']} | {s5['PF']} | "
+            f"{s5['pnl']:+.2f} | {s5['DD']:+.2f} |"
+        )
+        rows.append(
+            f"| {label} | opr-v5.1 | {s51['n_filled']} | {s51['PF']} | "
+            f"{s51['pnl']:+.2f} | {s51['DD']:+.2f} |"
+        )
 
     # ── Corrélation P&L daily ──
     rows.append("")
@@ -190,10 +217,10 @@ def main() -> int:
     rows.append("|---|---|---:|---:|")
     for label, df4, df5, df51 in [
         ("Full", df_v4, df_v5, df_v51),
-        ("OOS",  _mask_oos(df_v4), _mask_oos(df_v5), _mask_oos(df_v51)),
+        ("OOS", _mask_oos(df_v4), _mask_oos(df_v5), _mask_oos(df_v51)),
     ]:
-        s4  = _daily_pnl(df4)
-        s5  = _daily_pnl(df5)
+        s4 = _daily_pnl(df4)
+        s5 = _daily_pnl(df5)
         s51 = _daily_pnl(df51)
         for (lhs_name, lhs), (rhs_name, rhs) in [
             (("v4", s4), ("v5", s5)),
@@ -206,7 +233,9 @@ def main() -> int:
                 continue
             corr = df_join["a"].corr(df_join["b"])
             rows.append(f"| {label} | {lhs_name} ↔ {rhs_name} | {corr:.3f} | {len(df_join)} |")
-            print(f"  Corrélation daily P&L {label} {lhs_name}↔{rhs_name} : {corr:.3f} ({len(df_join)} jours)")
+            print(
+                f"  Corrélation daily P&L {label} {lhs_name}↔{rhs_name} : {corr:.3f} ({len(df_join)} jours)"
+            )
 
     # ── Distribution v5_reject_reason ──
     rows.append("")
@@ -224,8 +253,11 @@ def main() -> int:
             for reason, c in counts.items():
                 rows.append(f"| {ticker} | {reason} | {int(c)} |")
 
-    all_reject = df_v51["v5_reject_reason"].fillna("NO_REJECT").value_counts() \
-        if "v5_reject_reason" in df_v51.columns else pd.Series()
+    all_reject = (
+        df_v51["v5_reject_reason"].fillna("NO_REJECT").value_counts()
+        if "v5_reject_reason" in df_v51.columns
+        else pd.Series()
+    )
     rows.append("")
     rows.append("### Total portfolio v5.1")
     rows.append("")
