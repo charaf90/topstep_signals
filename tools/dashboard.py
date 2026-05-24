@@ -70,6 +70,17 @@ BG = "#0e1117"
 BG2 = "#1a1d24"
 
 
+def with_alpha(hex_color: str, alpha: float) -> str:
+    """Convertit '#RRGGBB' + alpha float [0..1] en 'rgba(r,g,b,a)' pour Plotly.
+
+    Plotly n'accepte pas le format hex 8 caractères (#RRGGBBAA). On convertit
+    explicitement en rgba(...).
+    """
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r}, {g}, {b}, {alpha:.2f})"
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Lecture sources
 # ──────────────────────────────────────────────────────────────────────────────
@@ -301,25 +312,30 @@ def distances_topstep(pnl: dict) -> list[dict]:
 
 
 def horizontal_gauge(value: float, max_value: float, label: str, color: str) -> go.Figure:
-    """Barre horizontale type fuel gauge — mobile friendly."""
-    ratio = min(1.0, max(0.0, value / max_value)) if max_value > 0 else 0
+    """Barre horizontale type fuel gauge — mobile friendly.
+
+    Le label est rendu en titre Streamlit (hors gauge), pour éviter de
+    voler de l'espace horizontal sur mobile. La gauge ne montre que la
+    barre + la valeur en USD à droite.
+    """
     fig = go.Figure()
-    # Barre fond
+    # Barre fond (capacité max)
     fig.add_trace(
         go.Bar(
             x=[max_value],
-            y=[label],
+            y=[""],
             orientation="h",
             marker_color=BG2,
             showlegend=False,
             hoverinfo="skip",
         )
     )
-    # Barre valeur
+    # Barre valeur (clampée à max pour éviter de déborder)
+    val_clamped = max(0.0, min(value, max_value))
     fig.add_trace(
         go.Bar(
-            x=[value],
-            y=[label],
+            x=[val_clamped],
+            y=[""],
             orientation="h",
             marker_color=color,
             showlegend=False,
@@ -331,10 +347,10 @@ def horizontal_gauge(value: float, max_value: float, label: str, color: str) -> 
     )
     fig.update_layout(
         barmode="overlay",
-        height=42,
-        margin={"l": 110, "r": 80, "t": 4, "b": 4},
+        height=36,
+        margin={"l": 0, "r": 75, "t": 2, "b": 2},
         xaxis={"visible": False, "range": [0, max_value * 1.15]},
-        yaxis={"tickfont": {"color": "#fafafa", "size": 12}},
+        yaxis={"visible": False},
         plot_bgcolor=BG,
         paper_bgcolor=BG,
     )
@@ -364,7 +380,7 @@ def equity_sparkline(dates: list[str], equity: list[float]) -> go.Figure:
                 mode="lines",
                 line={"color": color, "width": 2},
                 fill="tozeroy",
-                fillcolor=f"{color}33",
+                fillcolor=with_alpha(color, 0.20),
                 hovertemplate="$%{y:+,.0f}<extra></extra>",
             )
         )
@@ -391,7 +407,7 @@ def equity_curve_full(dates: list[str], equity: list[float], peak: float) -> go.
                 mode="lines",
                 line={"color": color, "width": 2.5},
                 fill="tozeroy",
-                fillcolor=f"{color}22",
+                fillcolor=with_alpha(color, 0.13),
                 name="Equity",
                 hovertemplate="%{x}<br>$%{y:+,.0f}<extra></extra>",
             )
@@ -438,7 +454,7 @@ def drawdown_underwater(dates: list[str], equity: list[float]) -> go.Figure:
                 mode="lines",
                 line={"color": RED, "width": 2},
                 fill="tozeroy",
-                fillcolor=f"{RED}33",
+                fillcolor=with_alpha(RED, 0.20),
                 hovertemplate="%{x}<br>DD: $%{y:+,.0f}<extra></extra>",
             )
         )
@@ -666,30 +682,33 @@ def render_pulse(state: dict, pnl: dict, trades: list[dict]) -> None:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 5 gauges horizontales
+    # 5 gauges horizontales — label rendu en titre Streamlit (hors gauge)
     st.markdown(
         f"<div style='color:{GREY};font-size:11px;text-transform:uppercase;"
-        f"letter-spacing:1px;'>Limites Topstep</div>",
+        f"letter-spacing:1px;margin-top:6px;'>Limites Topstep</div>",
         unsafe_allow_html=True,
     )
     distances = distances_topstep(pnl)
+    limit_map = {
+        f"DLL user ${USER_DAILY_LOSS_MAX}": USER_DAILY_LOSS_MAX,
+        f"DLL Topstep ${TOPSTEP_DAILY_LOSS_MAX}": TOPSTEP_DAILY_LOSS_MAX,
+        f"Trailing DD ${TOPSTEP_TRAILING_DD}": TOPSTEP_TRAILING_DD,
+        f"Consistency ${CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD}": CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+        f"Profit target ${TOPSTEP_PROFIT_TARGET}": TOPSTEP_PROFIT_TARGET,
+    }
     for d in distances:
-        # max_value = la valeur absolue de la limite (1000, 2000, etc.)
-        # Pour les "loss", on affiche la distance restante avant breach
-        # Pour les "gain", on affiche la distance restante vers l'objectif
-        if d["kind"] == "loss":
-            limit = {
-                "DLL user $950": USER_DAILY_LOSS_MAX,
-                "DLL Topstep $1000": TOPSTEP_DAILY_LOSS_MAX,
-                "Trailing DD $2000": TOPSTEP_TRAILING_DD,
-            }.get(d["label"], 1000.0)
-            fig = horizontal_gauge(d["distance"], limit, d["label"], d["color"])
-        else:
-            limit = {
-                "Consistency $1400": CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
-                "Profit target $3000": TOPSTEP_PROFIT_TARGET,
-            }.get(d["label"], 3000.0)
-            fig = horizontal_gauge(d["distance"], limit, d["label"], d["color"])
+        limit = limit_map.get(d["label"], 1000.0)
+        # Label compact + % utilisé au-dessus de la gauge
+        st.markdown(
+            f"<div style='display:flex;justify-content:space-between;"
+            f"font-size:12px;color:#fafafa;margin-top:8px;'>"
+            f"<span>{d['label']}</span>"
+            f"<span style='color:{d['color']};font-weight:600;'>"
+            f"{d['ratio_used'] * 100:.0f}% utilisé</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        fig = horizontal_gauge(d["distance"], limit, d["label"], d["color"])
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     # Sparkline equity
