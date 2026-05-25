@@ -67,16 +67,29 @@ def screenshot(
                 file=sys.stderr,
             )
 
-        # Clic sur un onglet si demandé
+        # Clic sur un onglet si demandé. Différents selectors selon le framework
+        # (Streamlit utilise [role="tab"], Dash utilise .dash-tab).
         if tab:
-            try:
-                page.click(f'[role="tab"]:has-text("{tab}")', timeout=3000)
-                page.wait_for_timeout(1500)  # laisser le tab se rendre
-            except Exception as exc:
-                print(f"⚠️  Onglet '{tab}' introuvable : {exc}", file=sys.stderr)
+            clicked = False
+            selectors = [
+                f'.dash-tab:has-text("{tab}")',
+                f'[role="tab"]:has-text("{tab}")',
+                f'div:has-text("{tab}")[data-rb-event-key]',
+            ]
+            for sel in selectors:
+                try:
+                    page.click(sel, timeout=2000)
+                    clicked = True
+                    break
+                except Exception:  # noqa: PERF203
+                    continue
+            if not clicked:
+                print(f"⚠️  Onglet '{tab}' introuvable", file=sys.stderr)
+            else:
+                page.wait_for_timeout(3000)  # Dash callbacks + Plotly render
 
         # Attendre 2s de plus pour Plotly charts (rendus async côté client)
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(2500)
 
         Path(output).parent.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=output, full_page=full_page)
