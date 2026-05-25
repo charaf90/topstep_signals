@@ -785,81 +785,122 @@ def build_trades(state: dict, trades: list[dict]) -> html.Div:
     broker = get_broker()
     acc = broker.account_summary()
 
-    # Source de vérité = broker. Si broker OK, on liste les trades du jour
-    # depuis l'API (avec PnL net). Fallback state local sinon.
+    today_section: list = []
+    today_count = 0
+
+    # Source de vérité = broker. On apparie OPENING+CLOSING par contractId LIFO
+    # pour avoir UNE ligne par trade complet (au lieu de 2 entries broker).
     if acc:
-        broker_trades = broker.trades_history(days_back=2)
-        today_t = [
-            {
-                "strategy": "—",
-                "ticker": (t.get("contractId", "?").split(".")[-2] or "?"),
-                "dir": "BUY" if t.get("side") == 0 else "SELL",
-                "n_ct": t.get("size", 0),
-                "entry": t.get("price"),
-                "exit": "",  # broker ne distingue pas dans get_trades
-                "close_pnl": float(t.get("profitAndLoss") or 0)
-                - float(t.get("fees", 0) or 0)
-                - float(t.get("commissions", 0) or 0),
-                "is_closing": t.get("profitAndLoss") is not None,
-            }
-            for t in broker_trades
-            if (t.get("creationTimestamp") or "").startswith(today_str)
-        ]
+        pairs = broker.paired_trades(days_back=2)
+        today_pairs = [p for p in pairs if (p.get("close_time") or "").startswith(today_str)]
+        today_count = len(today_pairs)
         positions = broker.positions()
         orders = broker.open_orders()
-    else:
-        # Fallback state local
-        today_t = [
-            {**t, "is_closing": True}
-            for t in trades
-            if (t["fill_time"] or "").startswith(today_str)
-        ]
-        positions = dt.open_positions(state)
-        orders = dt.open_orders(state)
 
-    today_section: list = []
-    if not today_t:
-        today_section.append(
-            html.Div("Aucun trade clos aujourd'hui.", style={"color": ch.GREY, "padding": "8px 0"})
-        )
-    else:
-        rows = []
-        for t in today_t:
-            pnl_cls = "pnl-pos" if t["close_pnl"] >= 0 else "pnl-neg"
-            rows.append(
-                html.Tr(
+        if today_pairs:
+            rows = []
+            for p in today_pairs:
+                pnl_net = p["pnl_net"]
+                pnl_cls = "pnl-pos" if pnl_net >= 0 else "pnl-neg"
+                ticker = (
+                    p["contract_id"].split(".")[-2] if "." in p["contract_id"] else p["contract_id"]
+                )
+                # Lookup stratégie côté state local par order_id ou par pnl match
+                strat = dt.lookup_strategy_for_pair(state, p)
+                rows.append(
+                    html.Tr(
+                        [
+                            html.Td(
+                                html.B(strat)
+                                if strat != "—"
+                                else html.Span(strat, style={"color": ch.GREY})
+                            ),
+                            html.Td(ticker),
+                            html.Td(p["direction"]),
+                            html.Td(str(p["n_ct"])),
+                            html.Td(f"{p['entry_price']:.2f}" if p["entry_price"] else "—"),
+                            html.Td(f"{p['exit_price']:.2f}" if p["exit_price"] else "—"),
+                            html.Td(f"${pnl_net:+,.0f}", className=pnl_cls),
+                        ]
+                    )
+                )
+            today_section.append(
+                html.Table(
                     [
-                        html.Td(t["strategy"]),
-                        html.Td(t["ticker"]),
-                        html.Td(t["dir"]),
-                        html.Td(str(t["n_ct"])),
-                        html.Td(str(t["entry"])),
-                        html.Td(str(t["exit"])),
-                        html.Td(f"${t['close_pnl']:+,.0f}", className=pnl_cls),
-                    ]
+                        html.Thead(
+                            html.Tr(
+                                [
+                                    html.Th("Strat"),
+                                    html.Th("Ticker"),
+                                    html.Th("Dir"),
+                                    html.Th("n"),
+                                    html.Th("Entry"),
+                                    html.Th("Exit"),
+                                    html.Th("P&L net"),
+                                ]
+                            )
+                        ),
+                        html.Tbody(rows),
+                    ],
+                    className="v3-table",
                 )
             )
-        today_section.append(
-            html.Table(
-                [
-                    html.Thead(
-                        html.Tr(
-                            [
-                                html.Th("Strat"),
-                                html.Th("Ticker"),
-                                html.Th("Dir"),
-                                html.Th("n"),
-                                html.Th("Entry"),
-                                html.Th("Exit"),
-                                html.Th("P&L"),
-                            ]
-                        )
-                    ),
-                    html.Tbody(rows),
-                ],
-                className="v3-table",
+        else:
+            today_section.append(
+                html.Div(
+                    "Aucun trade clos aujourd'hui.", style={"color": ch.GREY, "padding": "8px 0"}
+                )
             )
-        )
+    else:
+        # Fallback state local
+        today_local = [t for t in trades if (t["fill_time"] or "").startswith(today_str)]
+        today_count = len(today_local)
+        positions = dt.open_positions(state)
+        orders = dt.open_orders(state)
+        if today_local:
+            rows = []
+            for t in today_local:
+                pnl_cls = "pnl-pos" if t["close_pnl"] >= 0 else "pnl-neg"
+                rows.append(
+                    html.Tr(
+                        [
+                            html.Td(t.get("strategy", "—")),
+                            html.Td(t["ticker"]),
+                            html.Td(t["dir"]),
+                            html.Td(str(t["n_ct"])),
+                            html.Td(str(t.get("entry", "—"))),
+                            html.Td(str(t.get("exit", "—"))),
+                            html.Td(f"${t['close_pnl']:+,.0f}", className=pnl_cls),
+                        ]
+                    )
+                )
+            today_section.append(
+                html.Table(
+                    [
+                        html.Thead(
+                            html.Tr(
+                                [
+                                    html.Th("Strat"),
+                                    html.Th("Ticker"),
+                                    html.Th("Dir"),
+                                    html.Th("n"),
+                                    html.Th("Entry"),
+                                    html.Th("Exit"),
+                                    html.Th("P&L"),
+                                ]
+                            )
+                        ),
+                        html.Tbody(rows),
+                    ],
+                    className="v3-table",
+                )
+            )
+        else:
+            today_section.append(
+                html.Div(
+                    "Aucun trade clos aujourd'hui.", style={"color": ch.GREY, "padding": "8px 0"}
+                )
+            )
 
     pos_orders_section: list = []
     if positions or orders:
@@ -900,7 +941,7 @@ def build_trades(state: dict, trades: list[dict]) -> html.Div:
 
     return html.Div(
         [
-            section_title(f"Trades aujourd'hui ({len(today_t)})", emoji="📋"),
+            section_title(f"Trades aujourd'hui ({today_count})", emoji="📋"),
             *today_section,
             *pos_orders_section,
             section_title("Heatmap P&L journalier", emoji="🗓️"),

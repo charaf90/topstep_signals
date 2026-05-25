@@ -182,10 +182,14 @@ class BrokerData:
     def equity_curve_from_trades(self, days_back: int = 60) -> dict:
         """Reconstruit l'equity curve à partir des trades broker.
 
-        Retourne {timestamps, equity_net, equity_gross, total_fees, total_pnl_net}.
+        Un trade broker arrive en 2 entries : OPENING (profitAndLoss=None) et
+        CLOSING (profitAndLoss=valeur). On accumule les frais des deux mais on
+        ne crée un POINT sur la courbe que sur le closing — sinon la courbe
+        descend artificiellement quand un trade est ouvert (cum_fees augmente
+        avant que cum_gross n'augmente), créant des "dents" trompeuses.
 
-        - equity_gross = cumul `profitAndLoss` (somme profits réalisés bruts)
-        - equity_net   = equity_gross - cumul (fees + commissions)
+        Retourne {timestamps, equity_net, equity_gross, total_fees, n_trades}
+        où n_trades = nombre de TRADES CLOS (round-trips), pas d'entries broker.
         """
         trades = self.trades_history(days_back=days_back)
         if not trades:
@@ -205,13 +209,18 @@ class BrokerData:
         timestamps, eq_gross, eq_net = [], [], []
         cum_gross = 0.0
         cum_fees = 0.0
+        n_closing = 0
         for t in sorted_trades:
             pnl = t.get("profitAndLoss")
             fees = float(t.get("fees", 0) or 0)
             comm = float(t.get("commissions", 0) or 0)
+            # On accumule TOUJOURS les frais (opening + closing en payent chacun)
             cum_fees += fees + comm
-            if pnl is not None:
-                cum_gross += float(pnl)
+            if pnl is None:
+                continue  # OPENING : pas de point sur la courbe
+            # CLOSING : un point à ce timestamp
+            cum_gross += float(pnl)
+            n_closing += 1
             timestamps.append(t.get("creationTimestamp", ""))
             eq_gross.append(round(cum_gross, 2))
             eq_net.append(round(cum_gross - cum_fees, 2))
@@ -223,7 +232,7 @@ class BrokerData:
             "total_fees": round(cum_fees, 2),
             "total_pnl_gross": round(cum_gross, 2),
             "total_pnl_net": round(cum_gross - cum_fees, 2),
-            "n_trades": len(sorted_trades),
+            "n_trades": n_closing,  # round-trips, pas d'entries
         }
 
     def trades_aggregated_by_contract(self, days_back: int = 60) -> dict[str, dict]:
@@ -263,6 +272,68 @@ class BrokerData:
             d["wr_pct"] = (d["wins"] / d["n"] * 100) if d["n"] else 0.0
             d["avg_pnl_net"] = (d["pnl_net"] / d["n"]) if d["n"] else 0.0
         return by_contract
+
+    def paired_trades(self, days_back: int = 60) -> list[dict]:
+        """Apparie les OPENING + CLOSING par contractId en LIFO temporel.
+
+        Retourne une liste de trades complets [{opening, closing, direction,
+        n_ct, entry_price, exit_price, pnl_net, pnl_gross, fees}, ...].
+
+        Hypothèse : pour un même contractId, l'OPENING le plus récent est le
+        premier à se fermer (LIFO). Pour 1 broker open + 1 broker close c'est
+        évident ; pour des positions partielles ça peut être inexact mais le
+        broker ProjectX ne donne pas explicitement le mapping.
+        """
+        trades = self.trades_history(days_back=days_back)
+        if not trades:
+            return []
+        sorted_trades = sorted(trades, key=lambda t: t.get("creationTimestamp", ""))
+        open_stack: dict[str, list[dict]] = {}  # contractId → openings non closés
+        pairs: list[dict] = []
+        for t in sorted_trades:
+            cid = t.get("contractId", "?")
+            if t.get("profitAndLoss") is None:
+                open_stack.setdefault(cid, []).append(t)
+                continue
+            # CLOSING : dépile en LIFO
+            opens = open_stack.get(cid, [])
+            opening = opens.pop() if opens else None
+            fees = float(t.get("fees", 0) or 0) + float(t.get("commissions", 0) or 0)
+            opening_fees = (
+                (float(opening.get("fees", 0) or 0) + float(opening.get("commissions", 0) or 0))
+                if opening
+                else 0.0
+            )
+            pnl_gross = float(t["profitAndLoss"])
+            # Direction = celle de l'opening (BUY → LONG, SELL → SHORT)
+            if opening is not None:
+                direction = "LONG" if opening.get("side") == 0 else "SHORT"
+                entry_price = opening.get("price")
+                n_ct = opening.get("size") or t.get("size", 0)
+            else:
+                # Pas d'opening matché — on déduit de l'inverse du closing side
+                direction = "SHORT" if t.get("side") == 0 else "LONG"
+                entry_price = None
+                n_ct = t.get("size", 0)
+            pairs.append(
+                {
+                    "opening": opening,
+                    "closing": t,
+                    "contract_id": cid,
+                    "direction": direction,
+                    "n_ct": int(n_ct),
+                    "entry_price": entry_price,
+                    "exit_price": t.get("price"),
+                    "pnl_gross": pnl_gross,
+                    "fees": fees + opening_fees,
+                    "pnl_net": pnl_gross - fees - opening_fees,
+                    "open_time": opening.get("creationTimestamp") if opening else None,
+                    "close_time": t.get("creationTimestamp"),
+                    "order_id_open": opening.get("orderId") if opening else None,
+                    "order_id_close": t.get("orderId"),
+                }
+            )
+        return pairs
 
     def realized_day_pnl(self) -> dict:
         """P&L réalisé du jour UTC actuel (somme profitAndLoss + frais des trades aujourd'hui)."""

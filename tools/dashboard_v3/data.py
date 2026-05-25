@@ -224,3 +224,69 @@ def open_orders(state: dict) -> list[dict[str, Any]]:
         if info.get("status") in {"PLACED", "PENDING", "WORKING", "ARMED"}:
             out.append({"tag": tag, **info})
     return out
+
+
+def lookup_strategy_for_pair(state: dict, pair: dict) -> str:
+    """Cherche la stratégie d'un trade clos broker en parcourant state.placed_tags.
+
+    Stratégie : 3 niveaux de matching, du plus précis au moins précis.
+
+    1. Match par order_id_open : tag.order_id == pair.order_id_open
+    2. Match par contract_id + close_pnl approchant (à $1 près) + status FILLED
+    3. Inférence depuis le nom du tag (préfixe OPR / FIB / FIBV4 → OPR / FIB)
+
+    Retourne "OPR", "FIB" ou "—" si non trouvé.
+    """
+    tags = state.get("placed_tags", {})
+    cid = pair.get("contract_id")
+    pnl_net = pair.get("pnl_net", 0)
+    order_id_open = pair.get("order_id_open")
+
+    # Niveau 1 : match exact par order_id
+    if order_id_open:
+        for tag_name, info in tags.items():
+            if info.get("order_id") == order_id_open:
+                strat = info.get("strategy", "")
+                return _normalize_strategy(strat) or _infer_strategy_from_tag(tag_name)
+
+    # Niveau 2 : match par contract + pnl proche
+    for tag_name, info in tags.items():
+        if info.get("status") != "FILLED":
+            continue
+        if info.get("contract_id") != cid:
+            continue
+        cp = info.get("close_pnl")
+        if cp is None:
+            continue
+        # close_pnl du state est BRUT (sans frais broker)
+        # alors que pair.pnl_net inclut les frais (négatifs)
+        # → on compare cp avec pair.pnl_gross
+        if abs(float(cp) - pair.get("pnl_gross", 0)) < 5.0:
+            strat = info.get("strategy", "")
+            return _normalize_strategy(strat) or _infer_strategy_from_tag(tag_name)
+
+    return "—"
+
+
+def _normalize_strategy(s: str) -> str:
+    """Normalise une stratégie (OPR, FIB) — supprime versions/préfixes."""
+    if not s:
+        return ""
+    s_up = s.upper()
+    if s_up.startswith("FIB"):
+        return "FIB"
+    if s_up.startswith("OPR"):
+        return "OPR"
+    return s_up
+
+
+def _infer_strategy_from_tag(tag_name: str) -> str:
+    """Devine la stratégie depuis le préfixe d'un tag : OPR_NQ1_... → OPR."""
+    if not tag_name:
+        return "—"
+    first = tag_name.split("_")[0].upper()
+    if first.startswith("FIB"):
+        return "FIB"
+    if first.startswith("OPR"):
+        return "OPR"
+    return "—"
