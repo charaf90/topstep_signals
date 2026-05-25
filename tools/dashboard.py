@@ -141,19 +141,35 @@ def authoritative_pnl(state: dict) -> dict:
     """SOURCE DE VÉRITÉ — utilise risk_state du PortfolioRiskManager.
 
     Corrige le bug v1 qui sommait naïvement tous les close_pnl historiques.
+
+    Le risk_state.current_day n'est rollé qu'au prochain tick du live runner.
+    Si le daemon n'a pas tické depuis la dernière session (weekend, pré-open),
+    realized_day_pnl et daily_fills_count contiennent les valeurs de la
+    dernière session — on les neutralise pour ne pas afficher des chiffres
+    obsolètes comme "P&L Jour".
     """
     rs = state.get("risk_state", {}) or {}
     cum = float(rs.get("cum_pnl", 0.0))
     peak = float(rs.get("peak_pnl", 0.0))
-    rdp = float(rs.get("realized_day_pnl", 0.0))
+    rdp_raw = float(rs.get("realized_day_pnl", 0.0))
+    fills_raw = int(rs.get("daily_fills_count", 0))
     active_dd = max(0.0, peak - cum)
+
+    rs_day = rs.get("current_day")
+    today = _today_utc()
+    is_today = rs_day == today
+    rdp = rdp_raw if is_today else 0.0
+    fills = fills_raw if is_today else 0
+
     return {
         "cum_pnl": cum,
         "peak_pnl": peak,
         "realized_day_pnl": rdp,
+        "realized_day_pnl_stale": rdp_raw if not is_today else 0.0,
+        "stale_day": rs_day if not is_today else None,
         "active_drawdown": active_dd,
         "consec_loss_days": int(rs.get("consec_loss_days", 0)),
-        "daily_fills_count": int(rs.get("daily_fills_count", 0)),
+        "daily_fills_count": fills,
     }
 
 
@@ -687,12 +703,21 @@ def render_pulse(state: dict, pnl: dict, trades: list[dict]) -> None:
     # 2 KPI cards : P&L Jour + P&L Cumul Challenge
     c1, c2 = st.columns(2)
     with c1:
-        kpi_card(
-            "P&L Jour",
-            f"${pnl['realized_day_pnl']:+,.0f}",
-            subtitle=f"{pnl['daily_fills_count']} fills aujourd'hui",
-            color=pnl_color(pnl["realized_day_pnl"]),
-        )
+        if pnl["stale_day"]:
+            # Daemon n'a pas roulé sur aujourd'hui — affiche $0 + indique l'état
+            kpi_card(
+                "P&L Jour",
+                "$0",
+                subtitle=f"pas de session · dernière {pnl['stale_day']}",
+                color=GREY,
+            )
+        else:
+            kpi_card(
+                "P&L Jour",
+                f"${pnl['realized_day_pnl']:+,.0f}",
+                subtitle=f"{pnl['daily_fills_count']} fills aujourd'hui",
+                color=pnl_color(pnl["realized_day_pnl"]),
+            )
     with c2:
         cum = pnl["cum_pnl"]
         peak = pnl["peak_pnl"]
