@@ -34,6 +34,7 @@ from config import (  # noqa: E402
 )
 from tools.dashboard_v3 import charts as ch  # noqa: E402
 from tools.dashboard_v3 import data as dt  # noqa: E402
+from tools.dashboard_v3.broker import get_broker  # noqa: E402
 
 REFRESH_INTERVAL_MS = 30_000
 
@@ -338,8 +339,24 @@ def build_pulse(state: dict, pnl: dict, trades: list[dict]) -> html.Div:
     age = dt.last_event_age_seconds(dt.tail_log(n=10))
     comp = dt.temporal_comparisons(trades, pnl)
 
-    # KPI cards
-    if pnl["stale_day"]:
+    # SOURCE DE VÉRITÉ = API broker (balance + trades broker avec frais)
+    broker = get_broker()
+    acc = broker.account_summary()
+    day = broker.realized_day_pnl() if acc else None
+
+    # KPI 1 — P&L Jour
+    if acc and day and day["n_total"] == 0:
+        kpi_jour = kpi_card("P&L Jour", "$0", "Aucun trade aujourd'hui", "grey")
+    elif acc and day:
+        v = day["pnl_net"]
+        color = "green" if v > 0 else ("red" if v < 0 else "grey")
+        kpi_jour = kpi_card(
+            "P&L Jour (broker)",
+            f"${v:+,.0f}",
+            f"{day['n_closing']} trades · frais ${day['fees']:.0f}",
+            color,
+        )
+    elif pnl["stale_day"]:
         kpi_jour = kpi_card(
             "P&L Jour", "$0", f"pas de session · dernière {pnl['stale_day']}", "grey"
         )
@@ -347,15 +364,22 @@ def build_pulse(state: dict, pnl: dict, trades: list[dict]) -> html.Div:
         v = pnl["realized_day_pnl"]
         color = "green" if v > 0 else ("red" if v < 0 else "grey")
         kpi_jour = kpi_card(
-            "P&L Jour", f"${v:+,.0f}", f"{pnl['daily_fills_count']} fills aujourd'hui", color
+            "P&L Jour", f"${v:+,.0f}", f"{pnl['daily_fills_count']} fills (local)", color
         )
 
-    cum = pnl["cum_pnl"]
-    cum_color = "green" if cum > 0 else ("red" if cum < 0 else "grey")
-    cum_sub = f"Peak ${pnl['peak_pnl']:+,.0f}"
-    if pnl["active_drawdown"] > 0:
-        cum_sub += f" · DD ${pnl['active_drawdown']:.0f}"
-    kpi_cum = kpi_card("P&L Cumul Challenge", f"${cum:+,.0f}", cum_sub, cum_color)
+    # KPI 2 — P&L Cumul (broker absolu)
+    if acc:
+        cum = acc["cum_pnl_net"]
+        cum_color = "green" if cum > 0 else ("red" if cum < 0 else "grey")
+        cum_sub = f"Balance ${acc['balance']:,.0f} · start ${acc['starting_balance']:,.0f}"
+        kpi_cum = kpi_card("P&L Net (broker)", f"${cum:+,.0f}", cum_sub, cum_color)
+    else:
+        cum = pnl["cum_pnl"]
+        cum_color = "green" if cum > 0 else ("red" if cum < 0 else "grey")
+        cum_sub = f"Peak ${pnl['peak_pnl']:+,.0f} · state local (broker KO)"
+        if pnl["active_drawdown"] > 0:
+            cum_sub += f" · DD ${pnl['active_drawdown']:.0f}"
+        kpi_cum = kpi_card("P&L Cumul Challenge", f"${cum:+,.0f}", cum_sub, cum_color)
 
     # Badges comparaisons temporelles
     badges = []
@@ -372,14 +396,21 @@ def build_pulse(state: dict, pnl: dict, trades: list[dict]) -> html.Div:
     if comp["best_day"][0]:
         badges.append(badge("best day", f"${comp['best_day'][1]:+,.0f}"))
 
-    # Gauges Topstep (radial speedometer)
-    rdp = pnl["realized_day_pnl"]
+    # Gauges Topstep (radial speedometer) — utilise les valeurs broker si dispo
+    if acc and day:
+        rdp = day["pnl_net"]  # vrai P&L jour broker
+        cum_for_gauges = acc["cum_pnl_net"]  # vrai cumul net
+        peak_for_gauges = max(pnl["peak_pnl"], cum_for_gauges)  # peak >= cum
+    else:
+        rdp = pnl["realized_day_pnl"]
+        cum_for_gauges = cum
+        peak_for_gauges = pnl["peak_pnl"]
     gauges_data = [
         (f"DLL user ${USER_DAILY_LOSS_MAX}", max(0.0, -rdp), USER_DAILY_LOSS_MAX, "loss"),
         (f"DLL Topstep ${TOPSTEP_DAILY_LOSS_MAX}", max(0.0, -rdp), TOPSTEP_DAILY_LOSS_MAX, "loss"),
         (
             f"Trailing DD ${TOPSTEP_TRAILING_DD}",
-            max(0.0, pnl["peak_pnl"] - cum),
+            max(0.0, peak_for_gauges - cum_for_gauges),
             TOPSTEP_TRAILING_DD,
             "loss",
         ),
@@ -389,7 +420,12 @@ def build_pulse(state: dict, pnl: dict, trades: list[dict]) -> html.Div:
             CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
             "gain",
         ),
-        (f"Profit target ${TOPSTEP_PROFIT_TARGET}", max(0.0, cum), TOPSTEP_PROFIT_TARGET, "gain"),
+        (
+            f"Profit target ${TOPSTEP_PROFIT_TARGET}",
+            max(0.0, cum_for_gauges),
+            TOPSTEP_PROFIT_TARGET,
+            "gain",
+        ),
     ]
     gauges = []
     for label, used, limit, kind in gauges_data:
@@ -420,43 +456,150 @@ def build_pulse(state: dict, pnl: dict, trades: list[dict]) -> html.Div:
             html.Div(badges, className="v3-badges") if badges else html.Div(),
             section_title("Limites Topstep"),
             html.Div(gauges, className="v3-gauges-grid"),
-            section_title("Equity"),
+            section_title("Equity (broker net)" if acc else "Equity (state local)"),
             dcc.Graph(
-                figure=ch.equity_curve_pro(*dt.equity_series(trades), trades, pnl["peak_pnl"]),
+                figure=_pulse_equity_chart(acc, broker, pnl, trades),
                 config={"displayModeBar": False},
             ),
         ]
     )
 
 
+def _pulse_equity_chart(acc, broker, pnl, trades):
+    """Mini-chart equity pour le tab Pulse — broker si dispo, sinon state."""
+    if acc:
+        eq_data = broker.equity_curve_from_trades(days_back=60)
+        if eq_data and eq_data["n_trades"] > 0:
+            closing = [
+                t for t in broker.trades_history(days_back=60) if t.get("profitAndLoss") is not None
+            ]
+            closing.sort(key=lambda t: t.get("creationTimestamp", ""))
+            timestamps = [t.get("creationTimestamp", "") for t in closing]
+            equity_net = []
+            cum_eq = 0.0
+            hover_trades = []
+            for t in closing:
+                pnl_net = (
+                    float(t["profitAndLoss"])
+                    - float(t.get("fees", 0) or 0)
+                    - float(t.get("commissions", 0) or 0)
+                )
+                cum_eq += pnl_net
+                equity_net.append(round(cum_eq, 2))
+                hover_trades.append(
+                    {
+                        "ticker": (t.get("contractId", "?").split(".")[-2] or "?"),
+                        "dir": "BUY" if t.get("side") == 0 else "SELL",
+                        "n_ct": t.get("size", 0),
+                        "close_pnl": pnl_net,
+                    }
+                )
+            peak_net = max(equity_net) if equity_net else 0.0
+            return ch.equity_curve_pro(timestamps, equity_net, hover_trades, peak_net)
+    # Fallback state local
+    timestamps, equity = dt.equity_series(trades)
+    return ch.equity_curve_pro(timestamps, equity, trades, pnl["peak_pnl"])
+
+
 def build_strats(trades: list[dict]) -> html.Div:
+    """Stats par contrat broker (vraies données) + par stratégie (state local).
+
+    Le broker n'a pas la notion de "stratégie" (OPR/FIB) mais il a le
+    contrat exact (MNQ/MES/MYM/MGC). Le state local lui a la stratégie.
+    On affiche les deux tables côte à côte.
+    """
+    broker = get_broker()
+    acc = broker.account_summary()
+
+    # Table 1 — Par CONTRAT BROKER (vrai P&L net avec frais)
+    contract_section = []
+    if acc:
+        by_contract = broker.trades_aggregated_by_contract(days_back=60)
+        if by_contract:
+            # Tri par P&L décroissant pour mettre les gagnants en haut
+            sorted_cids = sorted(by_contract.items(), key=lambda kv: -kv[1]["pnl_net"])
+
+            # Mapping contractId → ticker court (CON.F.US.MNQ.M26 → NQ)
+            def short_name(cid: str) -> str:
+                parts = cid.split(".")
+                if len(parts) >= 4:
+                    s = parts[-2]  # MNQ / MES / MYM / MGC
+                    return s[1:] if s.startswith("M") else s
+                return cid[:5]
+
+            rows = []
+            for cid, d in sorted_cids:
+                pnl_cls = "pnl-pos" if d["pnl_net"] >= 0 else "pnl-neg"
+                avg_cls = "pnl-pos" if d["avg_pnl_net"] >= 0 else "pnl-neg"
+                rows.append(
+                    html.Tr(
+                        [
+                            html.Td(html.B(short_name(cid))),
+                            html.Td(str(d["n"])),
+                            html.Td(f"${d['pnl_net']:+,.0f}", className=pnl_cls),
+                            html.Td(f"{d['wr_pct']:.0f}%"),
+                            html.Td(f"${d['avg_pnl_net']:+,.0f}", className=avg_cls),
+                            html.Td(f"${d['fees']:,.0f}", style={"color": ch.GREY}),
+                        ]
+                    )
+                )
+            contract_section = [
+                section_title("Par contrat (broker, net)"),
+                html.Table(
+                    [
+                        html.Thead(
+                            html.Tr(
+                                [
+                                    html.Th("Ticker"),
+                                    html.Th("n"),
+                                    html.Th("P&L net"),
+                                    html.Th("WR"),
+                                    html.Th("Avg"),
+                                    html.Th("Frais"),
+                                ]
+                            )
+                        ),
+                        html.Tbody(rows),
+                    ],
+                    className="v3-table",
+                ),
+                # Bar chart par contrat
+                dcc.Graph(
+                    figure=ch.strategy_bars(
+                        {short_name(c): {"pnl": d["pnl_net"]} for c, d in by_contract.items()}
+                    ),
+                    config={"displayModeBar": False},
+                ),
+            ]
+
+    # Table 2 — Par STRATÉGIE (state local — pour info stratégie OPR/FIB)
+    strat_section = []
     stats = dt.strategy_stats(trades)
-    if not stats:
-        return html.Div("Pas encore de trades clos.", style={"color": ch.GREY, "padding": "20px"})
-
-    # Table
-    rows = []
-    for s in sorted(stats.keys()):
-        d = stats[s]
-        pnl_cls = "pnl-pos" if d["pnl"] >= 0 else "pnl-neg"
-        avg_cls = "pnl-pos" if d["avg_pnl"] >= 0 else "pnl-neg"
-        pf_str = "∞" if d["pf"] == float("inf") else f"{d['pf']:.2f}"
-        rows.append(
-            html.Tr(
-                [
-                    html.Td(html.B(s)),
-                    html.Td(str(d["n"])),
-                    html.Td(f"${d['pnl']:+,.0f}", className=pnl_cls),
-                    html.Td(f"{d['wr_pct']:.0f}%"),
-                    html.Td(pf_str),
-                    html.Td(f"${d['avg_pnl']:+,.0f}", className=avg_cls),
-                ]
+    if stats:
+        rows = []
+        for s in sorted(stats.keys()):
+            d = stats[s]
+            pnl_cls = "pnl-pos" if d["pnl"] >= 0 else "pnl-neg"
+            avg_cls = "pnl-pos" if d["avg_pnl"] >= 0 else "pnl-neg"
+            pf_str = "∞" if d["pf"] == float("inf") else f"{d['pf']:.2f}"
+            rows.append(
+                html.Tr(
+                    [
+                        html.Td(html.B(s)),
+                        html.Td(str(d["n"])),
+                        html.Td(f"${d['pnl']:+,.0f}", className=pnl_cls),
+                        html.Td(f"{d['wr_pct']:.0f}%"),
+                        html.Td(pf_str),
+                        html.Td(f"${d['avg_pnl']:+,.0f}", className=avg_cls),
+                    ]
+                )
             )
-        )
-
-    return html.Div(
-        [
-            section_title("Performance par stratégie"),
+        strat_section = [
+            section_title("Par stratégie (state local, brut)"),
+            html.Div(
+                "Note : ne tient pas compte des frais broker — utilisez 'Par contrat' pour le net réel.",
+                style={"color": ch.GREY, "fontSize": "10px", "marginBottom": "6px"},
+            ),
             html.Table(
                 [
                     html.Thead(
@@ -464,10 +607,10 @@ def build_strats(trades: list[dict]) -> html.Div:
                             [
                                 html.Th("Strat"),
                                 html.Th("n"),
-                                html.Th("P&L"),
+                                html.Th("P&L brut"),
                                 html.Th("WR"),
                                 html.Th("PF"),
-                                html.Th("Avg/trade"),
+                                html.Th("Avg"),
                             ]
                         )
                     ),
@@ -475,25 +618,100 @@ def build_strats(trades: list[dict]) -> html.Div:
                 ],
                 className="v3-table",
             ),
-            section_title("P&L par stratégie"),
-            dcc.Graph(figure=ch.strategy_bars(stats), config={"displayModeBar": False}),
         ]
-    )
+
+    if not contract_section and not strat_section:
+        return html.Div("Pas encore de trades.", style={"color": ch.GREY, "padding": "20px"})
+
+    return html.Div(contract_section + strat_section)
 
 
 def build_equity(trades: list[dict], pnl: dict) -> html.Div:
+    """Equity curve broker-first.
+
+    Source de vérité : trades broker (avec fees/commissions). Reconstruit
+    la courbe à partir de api.get_trades_since avec les vrais P&L net.
+    Fallback sur state local si broker indisponible.
+    """
+    broker = get_broker()
+    acc = broker.account_summary()
+    eq_data = broker.equity_curve_from_trades(days_back=60) if acc else None
+
+    if eq_data and eq_data["n_trades"] > 0:
+        # Construction des "pseudo-trades" pour le hover (1 par closing trade broker)
+        broker_trades_raw = broker.trades_history(days_back=60)
+        # Filtrer les closing trades (profitAndLoss not None) et trier
+        closing = [t for t in broker_trades_raw if t.get("profitAndLoss") is not None]
+        closing.sort(key=lambda t: t.get("creationTimestamp", ""))
+        # Map vers le format attendu par equity_curve_pro
+        timestamps = [t.get("creationTimestamp", "") for t in closing]
+        equity_net = []
+        cum = 0.0
+        for t in closing:
+            cum += (
+                float(t["profitAndLoss"])
+                - float(t.get("fees", 0) or 0)
+                - float(t.get("commissions", 0) or 0)
+            )
+            equity_net.append(round(cum, 2))
+        hover_trades = [
+            {
+                "ticker": (t.get("contractId", "?").split(".")[-2] or "?").replace("US/", "")[:4],
+                "dir": "BUY" if t.get("side") == 0 else "SELL",
+                "n_ct": t.get("size", 0),
+                "close_pnl": float(t["profitAndLoss"])
+                - float(t.get("fees", 0) or 0)
+                - float(t.get("commissions", 0) or 0),
+            }
+            for t in closing
+        ]
+        peak_net = max(equity_net) if equity_net else 0.0
+        peak_str = f"Peak ${peak_net:+,.0f}"
+        note = (
+            f"Source : <b>broker API</b> · {eq_data['n_trades']} trades · "
+            f"P&L net <b>${eq_data['total_pnl_net']:+,.0f}</b> · "
+            f"P&L brut ${eq_data['total_pnl_gross']:+,.0f} · "
+            f"frais ${eq_data['total_fees']:,.0f}"
+        )
+        if acc:
+            note += f" · Balance ${acc['balance']:,.0f}"
+
+        return html.Div(
+            [
+                section_title("Equity nette (broker)"),
+                html.Div(
+                    dcc.Markdown(note, dangerously_allow_html=True),
+                    style={"color": ch.GREY, "fontSize": "10px", "marginBottom": "8px"},
+                ),
+                dcc.Graph(
+                    figure=ch.equity_curve_pro(timestamps, equity_net, hover_trades, peak_net),
+                    config={"displayModeBar": False},
+                ),
+                section_title("Drawdown underwater"),
+                dcc.Graph(
+                    figure=ch.drawdown_underwater_pro(timestamps, equity_net),
+                    config={"displayModeBar": False},
+                ),
+                section_title("Distribution P&L par trade (net)"),
+                dcc.Graph(
+                    figure=ch.pnl_distribution_pro(hover_trades),
+                    config={"displayModeBar": False},
+                ),
+            ]
+        )
+
+    # Fallback state local
     timestamps, equity = dt.equity_series(trades)
     final_eq = equity[-1] if equity else 0.0
-    delta = final_eq - pnl["cum_pnl"]
-    note_parts = [f"Cum equity ${final_eq:+,.0f}", f"risk_state ${pnl['cum_pnl']:+,.0f}"]
-    if abs(delta) > 1.0:
-        note_parts.append(f"Δ ${delta:+,.0f} (frais / hors-flow)")
-
+    note = (
+        f"Source : <b>state local</b> (broker KO) · "
+        f"Cum equity ${final_eq:+,.0f} · risk_state ${pnl['cum_pnl']:+,.0f}"
+    )
     return html.Div(
         [
-            section_title("Equity historique tous trades"),
+            section_title("Equity historique (fallback local)"),
             html.Div(
-                " · ".join(note_parts),
+                dcc.Markdown(note, dangerously_allow_html=True),
                 style={"color": ch.GREY, "fontSize": "10px", "marginBottom": "8px"},
             ),
             dcc.Graph(
@@ -513,9 +731,40 @@ def build_equity(trades: list[dict], pnl: dict) -> html.Div:
 
 def build_trades(state: dict, trades: list[dict]) -> html.Div:
     today_str = dt.today_utc()
-    today_t = [t for t in trades if (t["fill_time"] or "").startswith(today_str)]
-    positions = dt.open_positions(state)
-    orders = dt.open_orders(state)
+    broker = get_broker()
+    acc = broker.account_summary()
+
+    # Source de vérité = broker. Si broker OK, on liste les trades du jour
+    # depuis l'API (avec PnL net). Fallback state local sinon.
+    if acc:
+        broker_trades = broker.trades_history(days_back=2)
+        today_t = [
+            {
+                "strategy": "—",
+                "ticker": (t.get("contractId", "?").split(".")[-2] or "?"),
+                "dir": "BUY" if t.get("side") == 0 else "SELL",
+                "n_ct": t.get("size", 0),
+                "entry": t.get("price"),
+                "exit": "",  # broker ne distingue pas dans get_trades
+                "close_pnl": float(t.get("profitAndLoss") or 0)
+                - float(t.get("fees", 0) or 0)
+                - float(t.get("commissions", 0) or 0),
+                "is_closing": t.get("profitAndLoss") is not None,
+            }
+            for t in broker_trades
+            if (t.get("creationTimestamp") or "").startswith(today_str)
+        ]
+        positions = broker.positions()
+        orders = broker.open_orders()
+    else:
+        # Fallback state local
+        today_t = [
+            {**t, "is_closing": True}
+            for t in trades
+            if (t["fill_time"] or "").startswith(today_str)
+        ]
+        positions = dt.open_positions(state)
+        orders = dt.open_orders(state)
 
     today_section: list = []
     if not today_t:
@@ -566,18 +815,35 @@ def build_trades(state: dict, trades: list[dict]) -> html.Div:
         if positions:
             pos_orders_section.append(section_title(f"Positions ouvertes ({len(positions)})"))
             for p in positions[:5]:
+                # Support broker (contractId/type/size) ET state local (ticker/direction/n_ct)
+                ticker = p.get("ticker") or (p.get("contractId", "?").split(".")[-2])
+                direction = p.get("direction") or ("LONG" if p.get("type") == 0 else "SHORT")
+                n_ct = p.get("n_ct") or p.get("size", 0)
+                entry = p.get("entry") or p.get("averagePrice", "?")
+                sl_str = f"SL {p['sl']}" if "sl" in p else ""
+                tp_str = f"TP {p['tp']}" if "tp" in p else ""
                 pos_orders_section.append(
                     html.Div(
                         [
-                            html.B(p["ticker"]),
-                            html.Span(f" {p['direction']} ×{p['n_ct']} @ {p.get('entry', '?')}"),
+                            html.B(ticker),
+                            html.Span(f" {direction} ×{n_ct} @ {entry}"),
                             html.Br(),
                             html.Small(
-                                f"SL {p.get('sl', '?')} · TP {p.get('tp', '?')}",
+                                " · ".join(s for s in [sl_str, tp_str] if s) or "broker",
                                 style={"color": ch.GREY},
                             ),
                         ],
                         style={"padding": "8px 0", "borderBottom": f"1px solid {ch.GREY_DIM}"},
+                    )
+                )
+        if orders:
+            pos_orders_section.append(section_title(f"Ordres ouverts ({len(orders)})"))
+            for o in orders[:5]:
+                ticker = o.get("ticker") or (o.get("contractId", "?").split(".")[-2])
+                pos_orders_section.append(
+                    html.Div(
+                        [html.B(ticker), html.Span(f" · order {o.get('id') or o.get('order_id')}")],
+                        style={"padding": "6px 0", "color": ch.GREY, "fontSize": "12px"},
                     )
                 )
 
@@ -743,6 +1009,21 @@ def render_tab(active_tab: str, _n: int) -> html.Div:
 
 
 def main():
+    # Pré-chargement broker (login + 1er fetch) pour éviter le fallback au 1er render
+    print("[v3] Pré-chargement broker ProjectX...")
+    broker = get_broker()
+    acc = broker.account_summary()
+    if acc:
+        print(
+            f"[v3] Broker OK : {acc['name']} · balance ${acc['balance']:,.2f} · P&L ${acc['cum_pnl_net']:+,.2f}"
+        )
+    else:
+        print(f"[v3] Broker KO : {broker.last_error} → fallback state local")
+    # Pré-fetch trades pour avoir le cache prêt au 1er render
+    if acc:
+        n = len(broker.trades_history(days_back=60))
+        print(f"[v3] {n} trades chargés depuis broker (60 jours)")
+
     app.run(host="0.0.0.0", port=8502, debug=False)
 
 
