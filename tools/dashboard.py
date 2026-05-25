@@ -55,6 +55,21 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# Cache le header Streamlit (hamburger + menu deploy) qui consomme ~80px
+# en haut pour rien sur mobile. + réduit le padding du body.
+st.markdown(
+    """
+    <style>
+        header[data-testid="stHeader"] { visibility: hidden; height: 0; }
+        [data-testid="stToolbar"] { visibility: hidden; }
+        .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+        /* Marqueurs h1 du Streamlit native — pas utilisés ici mais cohérence */
+        h1, h2, h3 { margin-top: 0.4rem; margin-bottom: 0.4rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 STATE_PATH = ROOT / "state" / "live_state.json"
 SHADOW_STATE_PATH = ROOT / "state" / "shadow_state.json"
 LOG_PATH = ROOT / "logs" / "trading_events.log"
@@ -143,16 +158,18 @@ def authoritative_pnl(state: dict) -> dict:
 
 
 def chronological_trades(state: dict) -> list[dict]:
-    """Trades clos triés par exit_time (ou fill_time) chronologique.
+    """Trades clos triés chronologiquement par fill_time (clé toujours présente).
 
-    Chaque entrée a : tag, strategy, ticker, dir, n_ct, fill_time, exit_time,
-    close_pnl. Sert à reconstruire l'equity curve.
+    `exit_time` est souvent None dans le state (le live_runner ne le set pas
+    systématiquement pour les trades fermés via WS). On utilise donc fill_time
+    qui est garanti rempli au moment du fill, puis placed_at en fallback.
     """
     rows = []
     for tag, info in state.get("placed_tags", {}).items():
         if info.get("close_pnl") is None:
             continue
-        t_exit = info.get("exit_time") or info.get("fill_time") or info.get("placed_at") or ""
+        # Clé de tri : fill_time > placed_at > tag (parse la date du tag en dernier recours)
+        sort_key = info.get("fill_time") or info.get("placed_at") or ""
         rows.append(
             {
                 "tag": tag,
@@ -161,29 +178,35 @@ def chronological_trades(state: dict) -> list[dict]:
                 "dir": info.get("direction", "?"),
                 "n_ct": int(info.get("n_ct", 0)),
                 "fill_time": info.get("fill_time", ""),
-                "exit_time": t_exit,
+                "exit_time": info.get("exit_time") or info.get("fill_time") or "",
                 "entry": info.get("entry"),
                 "exit": info.get("exit"),
                 "close_pnl": float(info["close_pnl"]),
+                "_sort_key": sort_key,
             }
         )
-    return sorted(rows, key=lambda r: r["exit_time"])
+    return sorted(rows, key=lambda r: r["_sort_key"])
 
 
 def equity_series(trades: list[dict], cum_offset: float = 0.0) -> tuple[list[str], list[float]]:
-    """Construit la série (dates, equity_cumulée) à partir des trades chrono.
+    """Construit la série (timestamps, equity_cumulée) à partir des trades chrono.
 
+    Utilise fill_time COMPLET (avec heure ISO) comme axe X — sinon les 8 trades
+    d'un même jour collapsent sur un seul point et créent des spikes verticaux
+    qui faussent la lecture de la courbe.
     cum_offset : valeur de départ (utile si on veut aligner avec risk_state.cum_pnl).
     """
     if not trades:
         return [], []
-    dates, equity = [], []
+    timestamps, equity = [], []
     cum = cum_offset
     for t in trades:
         cum += t["close_pnl"]
-        dates.append(t["exit_time"][:10] if t["exit_time"] else "?")
+        # Garder le timestamp ISO complet pour que Plotly trace une courbe lisse
+        ts = t["fill_time"] or t.get("_sort_key") or ""
+        timestamps.append(ts or "?")
         equity.append(round(cum, 2))
-    return dates, equity
+    return timestamps, equity
 
 
 def strategy_stats(trades: list[dict]) -> dict[str, dict]:
@@ -311,12 +334,13 @@ def distances_topstep(pnl: dict) -> list[dict]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def horizontal_gauge(value: float, max_value: float, label: str, color: str) -> go.Figure:
+def horizontal_gauge(value: float, max_value: float, color: str) -> go.Figure:
     """Barre horizontale type fuel gauge — mobile friendly.
 
-    Le label est rendu en titre Streamlit (hors gauge), pour éviter de
-    voler de l'espace horizontal sur mobile. La gauge ne montre que la
-    barre + la valeur en USD à droite.
+    Pas de texte intégré (provoquait des débordements et artefacts visuels).
+    Le label + la valeur sont rendus en markdown Streamlit AU-DESSUS via
+    render_pulse(), ce qui garantit un affichage propre quelle que soit
+    la largeur du viewport.
     """
     fig = go.Figure()
     # Barre fond (capacité max)
@@ -339,17 +363,14 @@ def horizontal_gauge(value: float, max_value: float, label: str, color: str) -> 
             orientation="h",
             marker_color=color,
             showlegend=False,
-            text=f"${value:+,.0f}",
-            textposition="outside",
-            textfont={"color": "#fafafa", "size": 13},
             hoverinfo="skip",
         )
     )
     fig.update_layout(
         barmode="overlay",
-        height=36,
-        margin={"l": 0, "r": 75, "t": 2, "b": 2},
-        xaxis={"visible": False, "range": [0, max_value * 1.15]},
+        height=22,
+        margin={"l": 0, "r": 0, "t": 2, "b": 2},
+        xaxis={"visible": False, "range": [0, max_value]},
         yaxis={"visible": False},
         plot_bgcolor=BG,
         paper_bgcolor=BG,
@@ -698,17 +719,19 @@ def render_pulse(state: dict, pnl: dict, trades: list[dict]) -> None:
     }
     for d in distances:
         limit = limit_map.get(d["label"], 1000.0)
-        # Label compact + % utilisé au-dessus de la gauge
+        # Label + % + marge restante au-dessus de la gauge (3 colonnes)
         st.markdown(
-            f"<div style='display:flex;justify-content:space-between;"
-            f"font-size:12px;color:#fafafa;margin-top:8px;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
+            f"font-size:12px;color:#fafafa;margin-top:10px;'>"
             f"<span>{d['label']}</span>"
+            f"<span style='color:{GREY};font-size:11px;'>"
+            f"marge ${d['distance']:+,.0f}</span>"
             f"<span style='color:{d['color']};font-weight:600;'>"
-            f"{d['ratio_used'] * 100:.0f}% utilisé</span>"
+            f"{d['ratio_used'] * 100:.0f}%</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
-        fig = horizontal_gauge(d["distance"], limit, d["label"], d["color"])
+        fig = horizontal_gauge(d["distance"], limit, d["color"])
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     # Sparkline equity
@@ -768,15 +791,24 @@ def render_strats(trades: list[dict]) -> None:
 
 
 def render_equity(pnl: dict, trades: list[dict]) -> None:
-    dates, equity = equity_series(trades)
+    timestamps, equity = equity_series(trades)
 
+    # Note : la courbe somme TOUS les trades clos historiques (depuis le 1er
+    # fill du compte). Le risk_state.cum_pnl peut différer si reset mensuel
+    # ou trades fermés hors-flow. On affiche les deux pour transparence.
+    final_eq = equity[-1] if equity else 0.0
+    delta_vs_risk = final_eq - pnl["cum_pnl"]
+    note = f"Cum equity ${final_eq:+,.0f} · risk_state ${pnl['cum_pnl']:+,.0f}"
+    if abs(delta_vs_risk) > 1.0:
+        note += f" · Δ ${delta_vs_risk:+,.0f} (frais / trades hors-flow)"
     st.markdown(
         f"<div style='color:{GREY};font-size:11px;text-transform:uppercase;"
-        f"letter-spacing:1px;'>Equity cumulée (challenge en cours)</div>",
+        f"letter-spacing:1px;'>Equity historique tous trades</div>"
+        f"<div style='color:{GREY};font-size:10px;margin-bottom:4px;'>{note}</div>",
         unsafe_allow_html=True,
     )
     st.plotly_chart(
-        equity_curve_full(dates, equity, pnl["peak_pnl"]),
+        equity_curve_full(timestamps, equity, pnl["peak_pnl"]),
         use_container_width=True,
         config={"displayModeBar": False},
     )
@@ -787,7 +819,7 @@ def render_equity(pnl: dict, trades: list[dict]) -> None:
         unsafe_allow_html=True,
     )
     st.plotly_chart(
-        drawdown_underwater(dates, equity),
+        drawdown_underwater(timestamps, equity),
         use_container_width=True,
         config={"displayModeBar": False},
     )
@@ -951,16 +983,14 @@ def main():
         f"""
         <div style="display:flex;align-items:center;justify-content:space-between;
                     padding:2px 0 14px 0;">
-            <div style="font-size:24px;font-weight:700;color:#fafafa;">📊 Topstep Live</div>
+            <div style="font-size:22px;font-weight:700;color:#fafafa;letter-spacing:0.5px;">Topstep Live</div>
             <div style="font-size:11px;color:{GREY};">v2 · auto-refresh {REFRESH_INTERVAL_S}s</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["💓 Pulse", "🎯 Strats", "📈 Equity", "📋 Trades", "⚙️ Sys"]
-    )
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Pulse", "Strats", "Equity", "Trades", "Sys"])
     with tab1:
         render_pulse(state, pnl, trades)
     with tab2:
