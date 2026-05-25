@@ -10,19 +10,24 @@ from collections import defaultdict
 import pandas as pd
 import plotly.graph_objects as go
 
-# Palette
-GREEN = "#3ddc84"
-RED = "#ff6b6b"
-YELLOW = "#ffb347"
-BLUE = "#5e9eff"
-PURPLE = "#a78bfa"
-GREY = "#6c757d"
-GREY_DIM = "#3a3d44"
-BG = "#0e1117"
-BG2 = "#1a1d24"
-BG3 = "#252830"
+# Palette — iOS system colors (Apple Human Interface Guidelines)
+GREEN = "#34C759"
+RED = "#FF3B30"
+YELLOW = "#FF9500"  # iOS Orange (plus chaud que jaune)
+BLUE = "#007AFF"
+PURPLE = "#AF52DE"
+PINK = "#FF2D55"
+TEAL = "#5AC8FA"
+GREY = "#8E8E93"  # iOS Gray
+GREY_DIM = "#2C2C2E"  # iOS Card background dark mode
+BG = "#000000"  # True black AMOLED-friendly
+BG2 = "#1C1C1E"  # iOS secondary system background
+BG3 = "#2C2C2E"
 
-FONT = {"family": "Inter, system-ui, sans-serif", "color": "#fafafa"}
+FONT = {
+    "family": '-apple-system, "SF Pro Display", Inter, system-ui, sans-serif',
+    "color": "#FFFFFF",
+}
 
 
 def rgba(hex_color: str, alpha: float) -> str:
@@ -39,61 +44,74 @@ def rgba(hex_color: str, alpha: float) -> str:
 def radial_gauge(
     value: float, max_value: float, label: str, color: str, height: int = 180
 ) -> go.Figure:
-    """Gauge radiale Plotly Indicator — type speedometer.
+    """Apple Fitness ring — anneau complet, valeur centrée, pourcentage en bas.
 
-    Affiche la valeur centrée, avec un arc gradué qui se remplit selon
-    le pourcentage utilisé. Sépare en zones colorées (sûr, attention, danger).
+    Style : 2 segments donut Plotly :
+    - Premier segment : couleur du ring (rempli selon ratio)
+    - Deuxième segment : reste (gris très foncé)
+    Coins arrondis grâce à `marker_line` blanc fin.
     """
     pct = max(0.0, min(100.0, (value / max_value * 100) if max_value > 0 else 0))
-    fig = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=value,
-            number={
-                "prefix": "$",
-                "valueformat": ",.0f",
-                "font": {**FONT, "size": 24, "color": color},
+    filled = pct
+    empty = 100 - pct
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Pie(
+            values=[filled, empty],
+            labels=["", ""],
+            hole=0.72,
+            marker={
+                "colors": [color, GREY_DIM],
+                "line": {"color": BG, "width": 2},
             },
-            domain={"x": [0, 1], "y": [0, 1]},
-            gauge={
-                "axis": {
-                    "range": [0, max_value],
-                    "tickwidth": 0,
-                    "tickfont": {**FONT, "size": 10, "color": GREY},
-                    "ticksuffix": "",
-                    "showticklabels": False,
-                },
-                "bar": {"color": color, "thickness": 0.32},
-                "bgcolor": BG2,
-                "borderwidth": 0,
-                "steps": [
-                    {"range": [0, max_value * 0.5], "color": rgba(GREEN, 0.10)},
-                    {"range": [max_value * 0.5, max_value * 0.8], "color": rgba(YELLOW, 0.12)},
-                    {"range": [max_value * 0.8, max_value], "color": rgba(RED, 0.15)},
-                ],
-                "threshold": {
-                    "line": {"color": "#fafafa", "width": 2},
-                    "thickness": 0.7,
-                    "value": value,
-                },
-            },
+            sort=False,
+            direction="clockwise",
+            rotation=0,
+            textinfo="none",
+            hoverinfo="skip",
+            showlegend=False,
         )
     )
+
+    # Valeur centrée — gros chiffre en bold
     fig.add_annotation(
-        text=f"<b>{label}</b><br><span style='color:{GREY};font-size:10px'>{pct:.0f}% utilisé</span>",
+        text=f"<b>${value:,.0f}</b>",
         xref="paper",
         yref="paper",
         x=0.5,
-        y=-0.05,
+        y=0.55,
+        showarrow=False,
+        font={**FONT, "size": 22, "color": color},
+    )
+    # Label sous la valeur
+    fig.add_annotation(
+        text=f"<span style='color:{GREY};font-size:9px;letter-spacing:0.5px;'>{label.upper()}</span>",
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.35,
+        showarrow=False,
+        font={**FONT, "size": 9},
+    )
+    # Pourcentage tout en bas
+    fig.add_annotation(
+        text=f"<span style='color:{color};font-weight:600;font-size:11px;'>{pct:.0f}%</span>",
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.05,
         showarrow=False,
         font={**FONT, "size": 11},
     )
+
     fig.update_layout(
         height=height,
-        margin={"l": 8, "r": 8, "t": 24, "b": 32},
-        paper_bgcolor=BG,
-        plot_bgcolor=BG,
+        margin={"l": 6, "r": 6, "t": 8, "b": 8},
+        paper_bgcolor=BG2,
+        plot_bgcolor=BG2,
         font=FONT,
+        showlegend=False,
     )
     return fig
 

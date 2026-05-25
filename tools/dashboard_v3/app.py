@@ -66,19 +66,29 @@ app.index_string = """
     {%css%}
     <style>
         :root {
-            --bg: #0e1117;
-            --bg2: #1a1d24;
-            --bg3: #252830;
-            --green: #3ddc84;
-            --red: #ff6b6b;
-            --yellow: #ffb347;
-            --blue: #5e9eff;
-            --purple: #a78bfa;
-            --grey: #6c757d;
-            --grey-dim: #3a3d44;
-            --text: #fafafa;
+            /* iOS Dark Mode system colors */
+            --bg: #000000;
+            --bg2: #1C1C1E;       /* iOS secondary system bg */
+            --bg3: #2C2C2E;       /* iOS tertiary system bg */
+            --green: #34C759;     /* iOS green */
+            --red: #FF3B30;       /* iOS red */
+            --orange: #FF9500;    /* iOS orange */
+            --yellow: #FFCC00;    /* iOS yellow */
+            --blue: #007AFF;      /* iOS blue */
+            --indigo: #5856D6;    /* iOS indigo */
+            --purple: #AF52DE;    /* iOS purple */
+            --pink: #FF2D55;      /* iOS pink */
+            --teal: #5AC8FA;      /* iOS teal */
+            --grey: #8E8E93;      /* iOS gray */
+            --grey-dim: #3A3A3C;
+            --text: #FFFFFF;
+            --text-secondary: rgba(235, 235, 245, 0.6);
+            --ease-ios: cubic-bezier(0.25, 0.1, 0.25, 1);
         }
-        * { font-family: 'Inter', system-ui, sans-serif !important; }
+        * {
+            font-family: -apple-system, "SF Pro Display", "SF Pro Text", Inter, system-ui, sans-serif !important;
+            -webkit-font-smoothing: antialiased;
+        }
         html, body, #react-entry-point {
             background: var(--bg) !important;
             color: var(--text) !important;
@@ -87,180 +97,215 @@ app.index_string = """
         }
         ._dash-undo-redo, .dash-debug-menu, .dash-debug-menu__outer { display: none !important; }
 
-        /* Container responsive */
+        /* Container responsive (iOS-style centered) */
         .v3-container {
             max-width: 480px;
             margin: 0 auto;
-            padding: 16px 14px;
+            padding: 20px 16px 32px 16px;
         }
 
-        /* Header */
+        /* Header iOS Large Title */
         .v3-header {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            margin-bottom: 14px;
-            animation: fadeIn 0.4s ease-out;
+            align-items: flex-end;
+            margin-bottom: 22px;
+            animation: fadeIn 0.5s var(--ease-ios);
         }
         .v3-title {
-            font-size: 22px;
+            font-size: 32px;       /* Apple Large Title */
             font-weight: 700;
-            letter-spacing: 0.3px;
-            background: linear-gradient(135deg, #fafafa, #b8b8b8);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px; /* Apple negative tracking */
+            line-height: 1;
+            color: var(--text);
         }
         .v3-subtitle {
-            font-size: 11px;
-            color: var(--grey);
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
         }
 
-        /* Metadata row */
+        /* Metadata row — iOS rounded inset */
         .v3-meta {
             display: flex;
             justify-content: space-between;
-            padding: 8px 12px;
+            padding: 12px 14px;
             background: var(--bg2);
-            border-radius: 10px;
-            font-size: 11px;
-            color: var(--grey);
-            margin-bottom: 14px;
+            border-radius: 14px;        /* iOS 14px continuous radius */
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 18px;
+            animation: slideUp 0.5s var(--ease-ios);
         }
         .v3-meta b { color: var(--text); font-weight: 600; }
 
-        /* KPI cards */
+        /* KPI cards — iOS style avec glow subtil */
         .v3-kpi-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-bottom: 14px;
+            gap: 12px;
+            margin-bottom: 18px;
         }
         .v3-kpi {
-            background: linear-gradient(135deg, var(--bg2), var(--bg3));
-            border-radius: 14px;
-            padding: 14px 16px;
-            border-left: 3px solid var(--grey-dim);
-            animation: slideUp 0.4s ease-out;
+            background: var(--bg2);
+            border-radius: 18px;
+            padding: 18px 18px 16px 18px;
+            position: relative;
+            overflow: hidden;
+            animation: slideUp 0.5s var(--ease-ios) backwards;
         }
-        .v3-kpi.green { border-left-color: var(--green); }
-        .v3-kpi.red { border-left-color: var(--red); }
-        .v3-kpi.blue { border-left-color: var(--blue); }
-        .v3-kpi.grey { border-left-color: var(--grey-dim); }
+        /* Glow d'accent en haut au lieu de border-left rigide */
+        .v3-kpi::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: var(--grey-dim);
+            opacity: 0.5;
+        }
+        .v3-kpi.green::before { background: var(--green); }
+        .v3-kpi.red::before   { background: var(--red); }
+        .v3-kpi.blue::before  { background: var(--blue); }
+        .v3-kpi.orange::before{ background: var(--orange); }
+        .v3-kpi.grey::before  { background: var(--grey-dim); }
+
         .v3-kpi-label {
-            font-size: 10px;
+            font-size: 11px;
             text-transform: uppercase;
-            letter-spacing: 1.2px;
-            color: var(--grey);
-            margin-bottom: 6px;
-            font-weight: 500;
+            letter-spacing: 0.8px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            font-weight: 600;
         }
         .v3-kpi-value {
-            font-size: 30px;
+            font-size: 34px;       /* gros chiffre Apple */
             font-weight: 700;
+            letter-spacing: -1px;  /* tracking serré */
             line-height: 1;
-            margin-bottom: 4px;
+            margin-bottom: 6px;
         }
-        .v3-kpi-value.green { color: var(--green); }
-        .v3-kpi-value.red { color: var(--red); }
-        .v3-kpi-value.blue { color: var(--blue); }
-        .v3-kpi-value.grey { color: var(--grey); }
+        .v3-kpi-value.green  { color: var(--green); }
+        .v3-kpi-value.red    { color: var(--red); }
+        .v3-kpi-value.blue   { color: var(--blue); }
+        .v3-kpi-value.orange { color: var(--orange); }
+        .v3-kpi-value.grey   { color: var(--text-secondary); }
         .v3-kpi-sub {
-            font-size: 11px;
-            color: var(--grey);
-            font-weight: 400;
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
         }
 
-        /* Compare badges */
+        /* Compare badges — pill iOS */
         .v3-badges {
             display: flex;
-            gap: 8px;
-            margin: 4px 0 14px 0;
+            gap: 6px;
+            margin: 6px 0 18px 0;
             flex-wrap: wrap;
         }
         .v3-badge {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 5px 10px;
+            padding: 6px 12px;
             background: var(--bg2);
             border-radius: 999px;
-            font-size: 11px;
-            color: var(--grey);
-            border: 1px solid var(--grey-dim);
-        }
-        .v3-badge b { color: var(--text); font-weight: 600; margin-left: 2px; }
-        .v3-badge.green { color: var(--green); border-color: var(--green); }
-        .v3-badge.red { color: var(--red); border-color: var(--red); }
-
-        /* Section titles */
-        .v3-section-title {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 1.4px;
-            color: var(--grey);
-            margin: 18px 0 8px 0;
+            font-size: 12px;
+            color: var(--text-secondary);
             font-weight: 500;
         }
+        .v3-badge b { color: var(--text); font-weight: 600; margin-left: 2px; }
+        .v3-badge.green { color: var(--green); background: rgba(52, 199, 89, 0.15); }
+        .v3-badge.red   { color: var(--red); background: rgba(255, 59, 48, 0.15); }
+        .v3-badge.blue  { color: var(--blue); background: rgba(0, 122, 255, 0.15); }
 
-        /* Gauges grid */
+        /* Section titles — Apple style header */
+        .v3-section-title {
+            font-size: 13px;
+            text-transform: none;        /* Apple : pas tout en majuscules */
+            letter-spacing: -0.2px;
+            color: var(--text-secondary);
+            margin: 24px 0 10px 4px;
+            font-weight: 600;
+        }
+        .v3-section-title .emoji {
+            margin-right: 6px;
+            font-size: 15px;
+        }
+
+        /* Gauges grid — espacement plus généreux */
         .v3-gauges-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 8px;
+            gap: 10px;
+        }
+        .v3-gauges-grid > div {
+            background: var(--bg2);
+            border-radius: 16px;
+            overflow: hidden;
+            animation: slideUp 0.5s var(--ease-ios) backwards;
         }
 
-        /* Strats table */
+        /* Strats table — iOS Inset Grouped style */
         .v3-table {
             width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 14px;
+            background: var(--bg2);
+            border-radius: 14px;
+            overflow: hidden;
         }
         .v3-table th {
             text-align: left;
-            font-size: 10px;
+            font-size: 11px;
             text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--grey);
-            padding: 8px 6px;
-            border-bottom: 1px solid var(--grey-dim);
-            font-weight: 500;
+            letter-spacing: 0.8px;
+            color: var(--text-secondary);
+            padding: 12px 12px 8px 12px;
+            background: var(--bg2);
+            font-weight: 600;
         }
         .v3-table td {
-            padding: 10px 6px;
-            border-bottom: 1px solid var(--grey-dim);
+            padding: 12px;
+            border-top: 0.5px solid var(--grey-dim);   /* separator iOS */
             color: var(--text);
+            font-weight: 500;
         }
+        .v3-table tr:first-child td { border-top: none; }
         .v3-table td.pnl-pos { color: var(--green); font-weight: 600; }
         .v3-table td.pnl-neg { color: var(--red); font-weight: 600; }
 
-        /* Tabs styling — FORCE horizontal layout */
+        /* Tabs styling — pill style Apple Segmented Control */
         .dash-tabs,
         .dash-tabs > div,
         .dash-tabs-container {
-            background: transparent !important;
+            background: var(--bg2) !important;
             border: none !important;
+            border-radius: 10px !important;
+            padding: 3px !important;
             display: flex !important;
             flex-direction: row !important;
-            justify-content: space-around !important;
-            border-bottom: 1px solid var(--grey-dim) !important;
+            justify-content: space-between !important;
+            margin-bottom: 8px !important;
         }
         .dash-tab {
             flex: 1 1 auto !important;
             background: transparent !important;
-            color: var(--grey) !important;
+            color: var(--text-secondary) !important;
             border: none !important;
-            border-bottom: 2px solid transparent !important;
-            padding: 10px 6px !important;
-            font-size: 13px !important;
-            font-weight: 500 !important;
-            transition: all 0.2s;
+            border-radius: 7px !important;
+            padding: 8px 4px !important;
+            font-size: 12px !important;
+            font-weight: 600 !important;
+            transition: all 0.25s var(--ease-ios);
             text-align: center !important;
         }
         .dash-tab:hover { color: var(--text) !important; }
         .dash-tab--selected {
-            color: var(--green) !important;
-            border-bottom: 2px solid var(--green) !important;
-            background: transparent !important;
+            color: var(--text) !important;
+            background: var(--bg3) !important;        /* fond actif */
+            border: none !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.4);
         }
 
         /* Log code block */
@@ -326,7 +371,13 @@ def badge(label: str, value: str, color: str = "") -> html.Span:
     return html.Span([label, " ", html.B(value)], className=cls)
 
 
-def section_title(text: str) -> html.Div:
+def section_title(text: str, emoji: str = "") -> html.Div:
+    """Section title style Apple — emoji optionnel devant."""
+    if emoji:
+        return html.Div(
+            [html.Span(emoji, className="emoji"), text],
+            className="v3-section-title",
+        )
     return html.Div(text, className="v3-section-title")
 
 
@@ -454,9 +505,9 @@ def build_pulse(state: dict, pnl: dict, trades: list[dict]) -> html.Div:
             ),
             html.Div([kpi_jour, kpi_cum], className="v3-kpi-grid"),
             html.Div(badges, className="v3-badges") if badges else html.Div(),
-            section_title("Limites Topstep"),
+            section_title("Limites Topstep", emoji="🎯"),
             html.Div(gauges, className="v3-gauges-grid"),
-            section_title("Equity (broker net)" if acc else "Equity (state local)"),
+            section_title("Equity (broker net)" if acc else "Equity (state local)", emoji="📈"),
             dcc.Graph(
                 figure=_pulse_equity_chart(acc, broker, pnl, trades),
                 config={"displayModeBar": False},
@@ -544,7 +595,7 @@ def build_strats(trades: list[dict]) -> html.Div:
                     )
                 )
             contract_section = [
-                section_title("Par contrat (broker, net)"),
+                section_title("Par contrat (broker, net)", emoji="💹"),
                 html.Table(
                     [
                         html.Thead(
@@ -595,7 +646,7 @@ def build_strats(trades: list[dict]) -> html.Div:
                 )
             )
         strat_section = [
-            section_title("Par stratégie (state local, brut)"),
+            section_title("Par stratégie (state local, brut)", emoji="🎯"),
             html.Div(
                 "Note : ne tient pas compte des frais broker — utilisez 'Par contrat' pour le net réel.",
                 style={"color": ch.GREY, "fontSize": "10px", "marginBottom": "6px"},
@@ -678,7 +729,7 @@ def build_equity(trades: list[dict], pnl: dict) -> html.Div:
 
         return html.Div(
             [
-                section_title("Equity nette (broker)"),
+                section_title("Equity nette (broker)", emoji="📈"),
                 html.Div(
                     dcc.Markdown(note, dangerously_allow_html=True),
                     style={"color": ch.GREY, "fontSize": "10px", "marginBottom": "8px"},
@@ -687,12 +738,12 @@ def build_equity(trades: list[dict], pnl: dict) -> html.Div:
                     figure=ch.equity_curve_pro(timestamps, equity_net, hover_trades, peak_net),
                     config={"displayModeBar": False},
                 ),
-                section_title("Drawdown underwater"),
+                section_title("Drawdown underwater", emoji="🌊"),
                 dcc.Graph(
                     figure=ch.drawdown_underwater_pro(timestamps, equity_net),
                     config={"displayModeBar": False},
                 ),
-                section_title("Distribution P&L par trade (net)"),
+                section_title("Distribution P&L par trade (net)", emoji="📊"),
                 dcc.Graph(
                     figure=ch.pnl_distribution_pro(hover_trades),
                     config={"displayModeBar": False},
@@ -849,10 +900,10 @@ def build_trades(state: dict, trades: list[dict]) -> html.Div:
 
     return html.Div(
         [
-            section_title(f"Trades aujourd'hui ({len(today_t)})"),
+            section_title(f"Trades aujourd'hui ({len(today_t)})", emoji="📋"),
             *today_section,
             *pos_orders_section,
-            section_title("Heatmap P&L journalier"),
+            section_title("Heatmap P&L journalier", emoji="🗓️"),
             dcc.Graph(figure=ch.heatmap_github_style(trades), config={"displayModeBar": False}),
         ]
     )
@@ -908,9 +959,9 @@ def build_sys(state: dict) -> html.Div:
                 ],
                 className="v3-kpi-grid",
             ),
-            section_title("Shadow vs Live"),
+            section_title("Shadow vs Live", emoji="👥"),
             *shadow_section,
-            section_title("Logs récents"),
+            section_title("Logs récents", emoji="📝"),
             html.Div(
                 [
                     html.Div(line, className="v3-log")
@@ -933,8 +984,8 @@ app.layout = html.Div(
             [
                 html.Div(
                     [
-                        html.Div("Topstep Live", className="v3-title"),
-                        html.Div("v3 · refresh 30s", className="v3-subtitle"),
+                        html.Div("📊 Topstep Live", className="v3-title"),
+                        html.Div("v3 · 30s", className="v3-subtitle"),
                     ],
                     className="v3-header",
                 ),
@@ -943,31 +994,31 @@ app.layout = html.Div(
                     value="pulse",
                     children=[
                         dcc.Tab(
-                            label="Pulse",
+                            label="💓 Pulse",
                             value="pulse",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
                         ),
                         dcc.Tab(
-                            label="Strats",
+                            label="🎯 Strats",
                             value="strats",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
                         ),
                         dcc.Tab(
-                            label="Equity",
+                            label="📈 Equity",
                             value="equity",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
                         ),
                         dcc.Tab(
-                            label="Trades",
+                            label="📋 Trades",
                             value="trades",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
                         ),
                         dcc.Tab(
-                            label="Sys",
+                            label="⚙️ Sys",
                             value="sys",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
