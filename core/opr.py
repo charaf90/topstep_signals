@@ -486,14 +486,12 @@ def run_opr_day(
             result = None
             exit_price = None
             if hit_sl and hit_tp:
-                # Les deux touchés sur la même bougie → on tranche par
-                # direction de la bougie (TP autorisé seulement si la
-                # bougie va dans le sens du trade).
-                bull = float(bar["close"]) >= float(bar["open"])
-                if direction == "long":
-                    result, exit_price = ("TP", tp) if bull else ("SL", sl)
-                else:
-                    result, exit_price = ("TP", tp) if not bull else ("SL", sl)
+                # Bougie qui touche SL ET TP dans la même barre : ordre
+                # intra-bar inconnu (pas de M1 en backtest). Pour un signal
+                # de rebond, toucher le SL = rebond "trop violent" → on assume
+                # SL (worst-case, jamais TP). Cohérent avec CLAUDE.md
+                # « Fill ambigu : SL prioritaire, jamais TP ».
+                result, exit_price = "SL", sl
             elif hit_sl:
                 result, exit_price = "SL", sl
             elif hit_tp:
@@ -565,11 +563,9 @@ def run_opr_day(
                     result = None
                     exit_price = None
                     if hit_sl and hit_tp:
-                        bull = float(bar["close"]) >= float(bar["open"])
-                        if direction == "long":
-                            result, exit_price = ("TP", tp) if bull else ("SL", sl)
-                        else:
-                            result, exit_price = ("TP", tp) if not bull else ("SL", sl)
+                        # Même règle que ci-dessus : SL prioritaire sur la
+                        # bougie ambiguë (rebond trop violent, jamais TP).
+                        result, exit_price = "SL", sl
                     elif hit_sl:
                         result, exit_price = "SL", sl
                     elif hit_tp:
