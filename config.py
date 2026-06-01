@@ -470,7 +470,15 @@ OPR_V5_1_F3_MAX = {"MES1": None, "NQ1": None, "YM1": None}  # ← optimum v5
 #     de fill, non distinguable avant le fill)
 # Phase A (M1 polling) pourrait améliorer cette fidélité — à évaluer après
 # le burn-in.
-OPR_V5_1_LIVE_TICKERS = ["NQ1", "YM1"]  # MES1 reste sur v4 (config legacy)
+# NQ1 mis EN PAUSE le 2026-06-01 (edge non robuste, double confirmation) :
+#   • Post-fix « bougie ambiguë → SL » : PF OOS 2.29 → 1.23 (94 % des trades
+#     se résolvaient dans la bougie de fill = artefact de résolution optimiste).
+#   • Analyse MFE/MAE sur M1 (scripts/opr_sltp_mfe_mae.py) : excursions
+#     symétriques (MFE≈MAE), 0 cellule SL/TP à stops actifs tient PF≥1.3
+#     cohérent IS↔OOS → pas d'edge de gestion. Cf. project_opr_sltp_mfe_mae_2026-06-01.
+#   • NQ1 reste tradé par fib-v4 (honnête, robuste). YM1 OPR conservé (PF OOS 4.42).
+# Pour réactiver NQ1 : remettre "NQ1" dans la liste. Code v5.1 conservé intact.
+OPR_V5_1_LIVE_TICKERS = ["YM1"]  # MES1 sur v4 (legacy) ; NQ1 en pause (cf. ci-dessus)
 
 # Tickers tradés via OPR v4 fallback (legacy). Vidé le 2026-05-21 :
 # OPR/MES1 (v4) en veille — PF 1.16 vs portfolio 2.67, drag confirmé sur 20 mois.
