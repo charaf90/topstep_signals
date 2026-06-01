@@ -21,17 +21,18 @@ Transformer `topstep_signals` (déjà solide, ~14k lignes, 2 stratégies en prod
 ## 📍 ÉTAT ACTUEL — À METTRE À JOUR À CHAQUE SESSION
 
 ```
-Phase active     : PHASE 3 — Améliorations live (PHASE 1 clôturée, obs 7j OK)
+Phase active     : PHASE 3 — Améliorations live (PHASES 0/1/2 ✅ ; live consolidé sur main)
 Étape en cours   : 3.3 vol-targeting (flag OFF, réactivation différée) + 3.4 optionnelle
-Dernière session : 2026-06-01 (validation shadow + dashboard avant restart ; PHASE 1
-                   clôturée par obs 7j ; pause OPR NQ1 appliquée en config — cf. mémoire
-                   project_opr_sltp_mfe_mae_2026-06-01)
-Prochaine action : (a) RESTART daemon en fenêtre pré-market : applique la pause NQ1 et
-                       re-check VPN au boot. ⚠️ Ce restart N'EST PAS la PHASE 4 — aucun
-                       flag risqué activé (vol-targeting reste OFF).
-                   (b) shadow framework VALIDÉ (tourne isolé ~1 sem., dry_run, état séparé)
-                       — l'utiliser pour tester vol-targeting (3.3) avant toute activation
-                   (c) PHASE 4 = activation progressive des flags, future (samedi marché fermé)
+Dernière session : 2026-06-01 — validation shadow+dashboard ✅ ; PHASE 1 clôturée (obs 7j) ;
+                   pause OPR NQ1 ; ✅ RESTART daemon EFFECTUÉ (pré-market) : tourne depuis
+                   main, VPN check OK, [NQ1] OPR en veille confirmé live, mode challenge
+                   préservé. main consolidé (fix same-bar + golden re-base + analyse M1).
+Prochaine action : (a) ✅ RESTART fait — surveiller 1ère session post-restart (J+1, dashboard).
+                   (b) shadow framework VALIDÉ (isolé ~1 sem., dry_run) — l'utiliser pour
+                       tester vol-targeting (3.3) AVANT toute activation.
+                   (c) PHASE 4 = activation progressive des flags, future (samedi marché fermé).
+                   (d) « passer à la suite » : exploration data M1 (cf. project_opr_sltp_mfe_mae)
+                       ou nouvelle stratégie diversifiante (3.4).
 ```
 
 **Quand tu termines une étape** :
