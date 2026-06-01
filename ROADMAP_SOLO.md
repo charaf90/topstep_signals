@@ -28,8 +28,10 @@ Dernière session : 2026-06-01 — validation shadow+dashboard ✅ ; PHASE 1 cl�
                    main, VPN check OK, [NQ1] OPR en veille confirmé live, mode challenge
                    préservé. main consolidé (fix same-bar + golden re-base + analyse M1).
 Prochaine action : (a) ✅ RESTART fait — surveiller 1ère session post-restart (J+1, dashboard).
-                   (b) shadow framework VALIDÉ (isolé ~1 sem., dry_run) — l'utiliser pour
-                       tester vol-targeting (3.3) AVANT toute activation.
+                   (b) shadow framework VALIDÉ → daemon ARRÊTÉ 2026-06-01 (essais concluants ;
+                       inutile de le laisser tourner sans variante à tester). Code conservé.
+                       Le RELANCER (./tools/launch_shadow.sh start) seulement pour A/B une
+                       variante future (ex: vol-targeting 3.3) avant activation.
                    (c) PHASE 4 = activation progressive des flags, future (samedi marché fermé).
                    (d) « passer à la suite » : exploration data M1 (cf. project_opr_sltp_mfe_mae)
                        ou nouvelle stratégie diversifiante (3.4).
@@ -476,7 +478,7 @@ Notifier par Telegram + créer note rapide dans `docs/incidents/YYYY-MM-DD.md` (
 PHASE 0 — Fondations         (3-4 jours) : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-24
 PHASE 1 — Filet sécurité     (1 semaine) : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-06-01
 PHASE 2 — Backtest pro       (1.5 sem.)  : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-25
-PHASE 3 — Améliorations live (2 sem.)    : [ ] non démarrée  / [x] en cours  / [ ] terminée le YYYY-MM-DD  (3.1/3.2/3.5 ✓ ; shadow validé isolé ~1 sem. 2026-06-01 ; 3.3 vol-targeting et 3.4 différées, flags OFF)
+PHASE 3 — Améliorations live (2 sem.)    : [ ] non démarrée  / [x] en cours  / [ ] terminée le YYYY-MM-DD  (3.1/3.2/3.5 ✓ ; shadow framework validé → daemon ARRÊTÉ 2026-06-01, relançable ; 3.3 vol-targeting et 3.4 différées, flags OFF)
 PHASE 4 — Release            (1 jour)    : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
 
 Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
