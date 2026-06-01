@@ -470,7 +470,15 @@ OPR_V5_1_F3_MAX = {"MES1": None, "NQ1": None, "YM1": None}  # ← optimum v5
 #     de fill, non distinguable avant le fill)
 # Phase A (M1 polling) pourrait améliorer cette fidélité — à évaluer après
 # le burn-in.
-OPR_V5_1_LIVE_TICKERS = ["NQ1", "YM1"]  # MES1 reste sur v4 (config legacy)
+# NQ1 mis EN PAUSE le 2026-06-01 (edge non robuste, double confirmation) :
+#   • Post-fix « bougie ambiguë → SL » : PF OOS 2.29 → 1.23 (94 % des trades
+#     se résolvaient dans la bougie de fill = artefact de résolution optimiste).
+#   • Analyse MFE/MAE sur M1 (scripts/opr_sltp_mfe_mae.py) : excursions
+#     symétriques (MFE≈MAE), 0 cellule SL/TP à stops actifs tient PF≥1.3
+#     cohérent IS↔OOS → pas d'edge de gestion. Cf. project_opr_sltp_mfe_mae_2026-06-01.
+#   • NQ1 reste tradé par fib-v4 (honnête, robuste). YM1 OPR conservé (PF OOS 4.42).
+# Pour réactiver NQ1 : remettre "NQ1" dans la liste. Code v5.1 conservé intact.
+OPR_V5_1_LIVE_TICKERS = ["YM1"]  # MES1 sur v4 (legacy) ; NQ1 en pause (cf. ci-dessus)
 
 # Tickers tradés via OPR v4 fallback (legacy). Vidé le 2026-05-21 :
 # OPR/MES1 (v4) en veille — PF 1.16 vs portfolio 2.67, drag confirmé sur 20 mois.
@@ -994,3 +1002,325 @@ SMC_ADX_PERIOD = 14
 
 # Exclusion jours macro (FOMC/CPI/NFP)
 SMC_EXCLUDE_MACRO_DAYS = True
+
+# ==============================================================================
+# STRATÉGIE PIVOT-REV (mean-reversion ML MGC1 M5)
+# ==============================================================================
+# Concept : "wash out" volumétrique sur MGC1 M5 + filtre ML (RandomForest
+# entraîné sur IS uniquement, label oracle argrelextrema(order=20)).
+# Détection : proba_RF ≥ p10%_IS AND vol_rel ≥ VOL_REL_MIN AND
+#             range_atr_ratio ≥ 1.5 AND hour_ny ≥ 6 AND NOT macro_day.
+# Trigger   : stop entry au high/low de la bougie candidate ± 1 tick,
+#             valide CONFIRM_BARS barres M5 (15 min si =3).
+# Exit      : triple barrier — SL = max(1×ATR14, low/high candidate ± 0.5 tick),
+#             TP = entrée ± RR_TARGET × SL_dist, time barrier 20 barres M5,
+#             clôture forcée 15:50 NY.
+# Validation : HOLDOUT PUR (PAS de walk-forward standard projet).
+#   IS  = 2025-10-19 → 2026-01-31 (entraînement RF + grid search)
+#   OOS = 2026-02-01 → 2026-05-15 (mesure unique, jamais ré-optimisé)
+#   PURGE 20 barres M5 en frontière (label leakage argrelextrema order=20)
+# ─────────────────────────────────────────────────────────────────────────────
+
+PIVOT_REV_STRATEGY_VERSION = "pivot-rev-v1"
+PIVOT_REV_TICKERS = ["MGC1"]
+
+# ── Schéma holdout pur (PAS le walk-forward standard) ────────────────────────
+PIVOT_REV_IS_START = "2025-10-19"
+PIVOT_REV_IS_END = "2026-01-31"
+PIVOT_REV_OOS_START = "2026-02-01"
+PIVOT_REV_OOS_END = "2026-05-15"
+PIVOT_REV_PURGE_BARS = 20  # barres M5 purgées en frontière IS/OOS
+
+# ── ML — RandomForest (cf. scripts/archive/research_pivot/research_pivot_nq1.py) ─
+PIVOT_REV_PIVOT_ORDER = 20  # argrelextrema(close, order=20) → pivots stables
+PIVOT_REV_RF_N_ESTIMATORS = 300
+PIVOT_REV_RF_MAX_DEPTH = 8
+PIVOT_REV_RF_MIN_SAMPLES_LEAF = 20
+PIVOT_REV_RF_RANDOM_STATE = 42
+PIVOT_REV_RF_QUANTILE_IS = 0.90  # seuil p10% IS = quantile 90% de proba_RF sur IS
+
+# ── Filtres fixes (validés par étude amont, NON optimisés) ───────────────────
+PIVOT_REV_RANGE_ATR_RATIO_MIN = 1.5
+PIVOT_REV_HOUR_NY_MIN = 6  # 06:00 NY → 16:00 NY (capture US session complète)
+PIVOT_REV_HOUR_NY_MAX = 16
+
+# ── Filtres optimisables (3³ = 27 combos) ────────────────────────────────────
+PIVOT_REV_SL_MULT = 1.0  # plancher ATR14 (grille : [0.75, 1.0, 1.25])
+PIVOT_REV_RR_TARGET = 3.0  # break-even RR = 2.73 (grille : [2.5, 3.0, 3.5])
+PIVOT_REV_VOL_REL_MIN = 2.5  # ratio volume vs SMA20 (grille : [2.0, 2.5, 3.0])
+
+# ── Gestion du trade ─────────────────────────────────────────────────────────
+PIVOT_REV_CONFIRM_BARS = 3  # barres M5 max pour trigger d'entrée (15 min)
+PIVOT_REV_TIME_BARRIER_BARS = 20  # clôture forcée après 20 barres M5 (100 min)
+PIVOT_REV_FORCE_CLOSE_HOUR_NY = 15
+PIVOT_REV_FORCE_CLOSE_MIN_NY = 50  # clôture forcée à 15:50 NY
+PIVOT_REV_MAX_TRADES_PER_DAY = 1  # 1 seul trade MGC1 / jour (anti-cluster)
+PIVOT_REV_SKIP_MACRO_DAYS = True
+
+# ── Sécurité fill ────────────────────────────────────────────────────────────
+PIVOT_REV_MIN_SL_DIST_TICKS = 2  # SL_dist ≥ 2 ticks (plancher sécurité)
+PIVOT_REV_DOJI_BODY_RATIO_MAX = 0.10  # body/range < 10% → ignoré (doji ambigu)
+
+
+# ==============================================================================
+# STRATÉGIE EIA-INV (event-driven mean-reversion sur EIA Weekly Petroleum)
+# ==============================================================================
+# Concept : sur-réaction HFT au headline EIA (mercredi 10:30 NY) → entrée
+# LIMIT contrarian à l'extremum de la barre EIA M15, TP = close 10:15 NY (ancre).
+# Edge : Lazar/Maneescu/Manzoni 2017 — mean-reversion < 25 min documentée.
+# Ticker unique : MCL1 (Micro WTI Crude).
+#
+# IMPORTANT — Biais backtest M15 : le fill LIMIT au high/low de la barre EIA est
+# assumé garanti dès atteinte (~10-15 % d'optimisme PF vs live). Live-équivalence
+# via M5Buffer obligatoire avant toute promotion en prod
+# (cf. feedback_live_eq_pattern.md).
+# ==============================================================================
+EIA_INV_STRATEGY_VERSION = "eia-inv-v1"
+
+# ── Tickers + timeframe ──────────────────────────────────────────────────────
+EIA_INV_TICKERS = ["MCL1"]
+
+# ── Filtre magnitude (FILTRE BASELINE v1) ────────────────────────────────────
+EIA_INV_SPIKE_MIN_PCT = 0.40  # spike_pct = spike_range / ANCHOR × 100 (%)
+
+# ── Gestion du SL ─────────────────────────────────────────────────────────────
+EIA_INV_SL_MULT = 1.5  # extension SL au-delà du spike (× spike_range)
+
+# ── Frictions event-driven (slippage spécifique) ─────────────────────────────
+EIA_INV_SLIP_ENTRY_TICKS = 3  # spread élargi post-release (override MCL1 = 2)
+EIA_INV_SLIP_EXIT_TICKS = 1  # sortie standard
+
+# ── Time barrier ──────────────────────────────────────────────────────────────
+EIA_INV_TIME_BARRIER_MIN = 60  # fermeture forcée après N min post-EIA (→ 11:30 NY)
+
+# ── Heures NY (DST-aware via zoneinfo) ───────────────────────────────────────
+EIA_INV_ANCHOR_TIME_NY = (10, 15)  # barre M15 fermée à 10:15 NY = ANCHOR close
+EIA_INV_EVENT_TIME_NY = (10, 30)  # barre M15 EIA (ouvre 10:30, ferme 10:45 NY)
+
+# ── Trades max ───────────────────────────────────────────────────────────────
+EIA_INV_MAX_TRADES_PER_DAY = 1  # 1 event EIA / mercredi
+
+# ── Calendrier EIA — dates SKIPPÉES (cf. concept.md Q6) ──────────────────────
+# Source officielle EIA : mercredis fériés US qui décalent l'event au jeudi
+# (ou décalage exceptionnel). En v1, on skip ces mercredis purement et
+# simplement (perte ~5 events/an, gain en simplicité).
+EIA_INV_SKIP_DATES = [
+    # 2025 — fériés US qui décalent l'EIA au jeudi
+    "2025-01-22",  # MLK Jr. Day + Inauguration → jeudi 23/01
+    "2025-02-19",  # Presidents Day → jeudi 20/02
+    "2025-05-28",  # Memorial Day → jeudi 29/05
+    "2025-09-03",  # Labor Day → jeudi 04/09
+    "2025-10-15",  # Columbus Day → jeudi 16/10
+    "2025-11-12",  # Veterans Day → jeudi 13/11
+    "2025-12-24",  # Christmas → lundi 29/12 17:00 ET (cas unique)
+    # 2026
+    "2026-01-21",  # MLK Jr. Day → jeudi 22/01
+    "2026-02-18",  # Presidents Day → jeudi 19/02
+]
+
+# ── Walk-forward (standard projet) ───────────────────────────────────────────
+EIA_INV_IS_END = "2025-09-30"
+EIA_INV_OOS_START = "2025-10-01"
+
+# ── Grille d'optimisation (PHASE 4 — non exécutée en v1 baseline) ────────────
+# Documentée pour traçabilité ; le scaffold v1 utilise uniquement les valeurs
+# par défaut ci-dessus (filtre spike_pct seul).
+EIA_INV_PARAM_GRID = {
+    "spike_min_pct": [0.30, 0.40, 0.50],
+    "sl_mult": [1.0, 1.5, 2.0],
+    "time_barrier_min": [45, 60, 90],
+}
+
+# ==============================================================================
+# STRATÉGIE VWAP-PB (vwap-pb-v1) — VWAP pullback intraday
+# ==============================================================================
+# Concept : entrée LIMIT @ VWAP(j-1) après stretch ≥ 1.0×ATR contre tendance
+# courte (3 barres M15 du même côté de VWAP), TP/SL = ±1×ATR (RR brut 1:1).
+# Edge : VWAP = benchmark institutionnel ; pression de rappel mécanique en
+#        tendance intraday. Mais second-ordre sur micros (volume faible vs
+#        contrat standard) — surveillance d'érosion nécessaire.
+# Falsification : PF OOS < 1.2 OU taux reversion < 40% en 8 barres M15.
+# Tickers : NQ1 (primaire), MGC1 (secondaire). MCL1 EXCLU v1 (frictions 31% SL).
+# Concept source : output/vwap-pb-v1/concept.md (sortie @researcher 2026-05-26)
+#
+# IMPORTANT — VWAP causale stricte : groupby('date_ny').cumsum().shift(1).
+# Le shift(1) est OBLIGATOIRE sinon la VWAP barre i inclut la close(i) → look-ahead.
+# Test unitaire dédié dans strategies/vwap_pb.py (auto-exécution si __main__).
+# ==============================================================================
+VWAP_PB_STRATEGY_VERSION = "vwap-pb-v1"
+
+# ── Tickers + timeframe ──────────────────────────────────────────────────────
+VWAP_PB_TICKERS = ["NQ1", "MGC1"]  # MCL1 réservé V3 (frictions destructrices)
+
+# ── Filtres signal (4 paramètres optimisables max — anti-curve-fitting) ──────
+VWAP_PB_STRETCH_MIN = 1.0  # stretch minimum en × ATR (close - VWAP)
+VWAP_PB_STRETCH_MAX = 2.5  # plafond anti-momentum (trade pas un fort breakout)
+VWAP_PB_TREND_BARS = 3  # nombre barres M15 consécutives même côté VWAP
+
+# ── ROLLBACK v1.1 → v1 (2026-05-26) ──────────────────────────────────────────
+# Le filtre SKIP_VOL_H (seuil ATR p80 figé IS) testé en v1.1 a été ROLLBACK.
+# Cause racine : drift de volatilité +148% sur MGC1 entre IS et OOS (Gold ATH
+# crise géopolitique 2025-2026). Le seuil IS p80=8.11 dépassé par 94% des barres
+# OOS MGC1 → filtre élimine 100% des trades MGC1 OOS (53→0). P&L OOS portfolio
+# chute de $3,542 → $1,086 (-69%). Verdict v1.1 = 🔴.
+# Leçon : un seuil quantile IS-only n'est PAS robuste si drift régime structurel.
+# Patch archivé : output/archive/vwap-pb-v1.1/.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Gestion du SL/TP (RR brut 1:1, RR net ~0.89 après frictions) ─────────────
+VWAP_PB_SL_ATR_MULT = 1.0  # multiplicateur SL × ATR14
+# TP = même multiplicateur que SL (RR brut 1:1)
+
+# ── TTL ordre LIMIT (max 2h avant cancel) ────────────────────────────────────
+VWAP_PB_TTL_BARS = 8  # 8 barres M15 = 2h max avant cancel LIMIT
+
+# ── Heures NY (DST-aware via zoneinfo) — fenêtres par actif ──────────────────
+# NQ1 : exclut 09:30-09:59 (VWAP instable peu de barres + collision OPR)
+# MGC1: exclut <09:30 pré-market + >13:00 post-pit (volume COMEX décline)
+VWAP_PB_SESSION_WINDOW_NY = {
+    "NQ1": ((10, 0), (15, 0)),  # [10:00, 15:00) NY
+    "MGC1": ((9, 30), (13, 0)),  # [09:30, 13:00) NY
+}
+
+# ── Reset VWAP par actif (volume significatif) ───────────────────────────────
+# NQ1 : 09:30 NY = open cash session standard
+# MGC1: 09:00 NY = volume COMEX significatif (open pit RTH)
+VWAP_PB_RESET_HOUR_NY = {
+    "NQ1": (9, 30),
+    "MGC1": (9, 0),
+}
+
+# ── Trades max par actif par jour ────────────────────────────────────────────
+VWAP_PB_MAX_TRADES_PER_DAY = 1  # 1 trade max par actif par jour (anti-overtrade)
+
+# ── ROLLBACK v2 → v1 (2026-05-26) ────────────────────────────────────────────
+# Le filtre @quant MEDIUM `VWAP_PB_MIN_MINUTES_AFTER_RESET=90` testé en v2 a
+# été ROLLBACK. Gain marginal (+0.05 PF OOS) au prix de -$1,202 P&L absolu, et
+# finding Bonferroni-fail (p=0.006 vs seuil 0.0038 sur N=13 features).
+# v1 plus simple et plus rentable. Patch archivé : output/archive/vwap-pb-v2/.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Walk-forward (standard projet — actifs avec historique long) ─────────────
+VWAP_PB_IS_END = "2025-09-30"
+VWAP_PB_OOS_START = "2025-10-01"
+
+# ── Grille d'optimisation (PHASE 4 — 4 dimensions × 3 = 81 combos max) ───────
+# Justification grille (cf. concept.md §Paramètres) :
+#   - STRETCH_MIN : seuil de signification (< 0.8 = bruit, > 1.2 = restrictif)
+#   - STRETCH_MAX : plafond anti-momentum (> 3.0 = on chase un breakout)
+#   - SL_ATR_MULT : tradeoff WR/n_trades (< 0.8 = SL trop serré, > 1.5 = trop large)
+#   - TREND_BARS  : robustesse signal tendance (2 = bruyant, 4 = restrictif)
+VWAP_PB_PARAM_GRID = {
+    "stretch_min": [0.8, 1.0, 1.2],
+    "stretch_max": [2.0, 2.5, 3.0],
+    "sl_atr_mult": [0.8, 1.0, 1.5],
+    "trend_bars": [2, 3, 4],
+}
+
+# ==============================================================================
+# STRATEGIE GAP FILL (gap-fill-v1) — Gap Fill Open NY
+# ==============================================================================
+# Concept : le marche tend a combler les gaps entre le close RTH J-1 (PSC =
+#   Prior Session Close) et l'open RTH J (OPEN_RTH = open barre 09:30 ET).
+#   Edge statistique (~60-70% des gaps < 0.5% se comblent dans la matinee NY).
+#   Mecanisme : rebalancement des algos VWAP/TWAP + liquidation des positions
+#   overnight ouvertes dans le gap.
+# Falsification : PF OOS < 1.2 OU bootstrap portfolio < 50%.
+#
+# PIÈGES CRITIGUES (implementes dans strategies/gap_fill.py) :
+#   1. PSC = close de la DERNIERE barre M15 RTH (09:30-16:00 ET) de J-1.
+#      Ne jamais utiliser df.iloc[-1] sans filtre RTH (inclut barres overnight).
+#   2. ATR14 = rolling 14 sur barres RTH uniquement (pas le DF brut overnight).
+#   3. DST-aware via zoneinfo("America/New_York").
+#   4. No look-ahead : decision 09:30 ET sur barres J-1. Confirmation = close
+#      barre 09:30 (connue uniquement a 09:45). Entree = open barre 09:45 ET.
+#   5. C4 : OPEN_RTH dans range RTH J-1 uniquement (low/high RTH 09:30-16:00).
+#   6. YM1 inclus : meme classe d'actif (equities), meme phenomene de gap RTH.
+#      Absent du backlog original mais ajoute ici apres validation concept.
+#
+# Walk-forward standard : IS -> 2025-09-30 | OOS -> 2025-10-01
+# Voir strategies/gap_fill.py.
+# ==============================================================================
+
+GAP_STRATEGY_VERSION = "gap-fill-v1"
+
+# ── Tickers ──────────────────────────────────────────────────────────────────
+GAP_TICKERS = ["MES1", "NQ1", "YM1"]  # equities micro futures US
+
+# ── Seuils signal (filtres C2 et C3) ─────────────────────────────────────────
+# GAP_MIN_PCT  : gap minimum en % du PSC. < 0.03% = bruit de marche.
+#                Defaut 0.05% : compromis volume / qualite signal.
+# GAP_MAX_ATR  : gap maximum en multiple ATR14 RTH. > 0.30 ATR = gap de rupture
+#                (news/earnings). On evite les gaps violents non recouvrables.
+GAP_MIN_PCT = 0.05  # % du PSC — grille : [0.03, 0.05, 0.08]
+GAP_MAX_ATR = 0.30  # multiple ATR14 RTH — grille : [0.20, 0.30, 0.40]
+
+# ── Gestion du risque ─────────────────────────────────────────────────────────
+# SL = OPEN_RTH + sl_mult × ATR14 (pour SHORT, inverse pour LONG)
+# TP = PSC (comblage complet du gap)
+# TE = 11:00 ET (Time Exit fixe, non optimise)
+GAP_SL_ATR_MULT = {
+    "MES1": 1.0,  # grille : [0.75, 1.0, 1.5]
+    "NQ1": 1.0,
+    "YM1": 1.0,
+}
+GAP_TE_HOUR = 11  # Time Exit 11:00 ET
+GAP_TE_MINUTE = 0
+
+# ── Filtres contextuels ───────────────────────────────────────────────────────
+# FILTER_MONDAY : exclure les lundis (gap weekend = reouverte apres 2j hors
+#   marche, dynamique differente). Defaut True.
+GAP_FILTER_MONDAY = True  # grille : [True, False]
+
+# ── Walk-forward (dates standard projet) ──────────────────────────────────────
+GAP_IS_END = "2025-09-30"
+GAP_OOS_START = "2025-10-01"
+
+# ── Grille d'optimisation (PHASE 4) ──────────────────────────────────────────
+# 4 dimensions : 3 × 3 × 3 × 2 = 54 combos.
+# Bonferroni : p_seuil = 0.05 / 54 = 0.0009.
+# Justification :
+#   gap_min_pct  : [0.03, 0.05, 0.08] — bornes autour du defaut 0.05
+#   gap_max_atr  : [0.20, 0.30, 0.40] — bornes autour du defaut 0.30
+#   sl_atr_mult  : [0.75, 1.0, 1.5]   — tradeoff WR / n_trades
+#   filter_monday: [True, False]       — test causal lundi vs reste semaine
+GAP_PARAM_GRID = {
+    "gap_min_pct": [0.03, 0.05, 0.08],
+    "gap_max_atr": [0.20, 0.30, 0.40],
+    "sl_atr_mult": [0.75, 1.0, 1.5],
+    "filter_monday": [True, False],
+}
+
+# ==============================================================================
+# STRATÉGIE PDH/PDL RETEST
+# ==============================================================================
+PDH_PDL_STRATEGY_VERSION = "pdh-pdl-retest-v1"
+PDH_PDL_TICKERS = ["MES1", "NQ1", "YM1", "MGC1"]
+
+# Paramètres fixes (non optimisés)
+PDH_PDL_MIN_BREAK_ATR = 0.05  # cassure min en fraction ATR14
+PDH_PDL_RETEST_ZONE_ATR_HIGH = 0.10  # zone haute retest = PDH + 10% ATR
+PDH_PDL_RETEST_ZONE_ATR_LOW = 0.15  # zone basse retest = PDH - 15% ATR
+PDH_PDL_RETEST_CLOSE_BUFFER = 0.10  # tolérance clôture barre retest
+PDH_PDL_GAP_EXCLUSION_ATR = 0.30  # exclure setup si gap overnight > 30% ATR
+PDH_PDL_MAX_TRADES_PER_DAY = 2  # max 1 long + 1 short par jour
+
+# Paramètres optimisables (valeurs baseline v1)
+PDH_PDL_BREAK_BUFFER_TICKS = 2  # grille : [0, 1, 2] — optimisé MES1
+PDH_PDL_SL_ATR_MULT = 0.5  # grille : [0.3, 0.5, 0.7] — optimisé MES1
+PDH_PDL_TP_RR = 1.5  # grille : [1.5, 2.0, 2.5] — optimisé MES1
+PDH_PDL_MAX_RETEST_BARS = 16  # grille : [4, 8, 16] — optimisé MES1
+
+# Walk-forward (dates standard projet)
+PDH_PDL_IS_END = "2025-09-30"
+PDH_PDL_OOS_START = "2025-10-01"
+
+# Grille d'optimisation (PHASE 4)
+# 4 dimensions : 3 × 3 × 3 × 3 = 81 combos
+# Bonferroni : p_seuil = 0.05 / 81 = 0.000617
+PDH_PDL_PARAM_GRID = {
+    "break_buffer_ticks": [0, 1, 2],
+    "sl_atr_mult": [0.3, 0.5, 0.7],
+    "tp_rr": [1.5, 2.0, 2.5],
+    "max_retest_bars": [4, 8, 16],
+}
