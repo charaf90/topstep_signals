@@ -1,8 +1,12 @@
 # Détecteur de pivots ML — Étude de recherche
 
-> **Statut** : recherche clôturée le 2026-05-18 — résultat robuste identifié sur MGC1, en attente d'exploitation dans une stratégie.
+> **Statut** : recherche clôturée le 2026-05-18, **tentative de stratégie `pivot-rev-v1` rejetée le 2026-05-26**.
 >
-> **Ce fichier** : référence auto-contenue pour reprendre le travail dans une session ultérieure sans avoir à recharger le contexte.
+> ⚠️ **Concept tradable ABANDONNÉ DÉFINITIVEMENT** (cf. `docs/strategies_abandoned.md` section "Pivot detector ML"). Cette fiche est conservée comme **référence méthodologique** (l'étude ML reste valide, lift ×8.8 confirmé) mais l'exploitation en stratégie a échoué structurellement (PF IS 0.97, 70% expiration trigger, taux TP réel 7% vs 28% attendu). Audit @auditor a confirmé que le code v1 était propre — c'est la traduction signal ML → exécution qui a coûté tout l'edge.
+>
+> **Leçon principale** : edge de classification ML ≠ edge de trading. Une précision OOS stable (lift ×8.8) ne garantit pas la rentabilité après règles d'entrée/sortie + frictions.
+>
+> **Ce fichier** : référence auto-contenue conservée pour traçabilité.
 
 ---
 

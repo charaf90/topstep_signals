@@ -156,15 +156,11 @@ def run_fib_v4_backtest(
                 hit_sl = bar["high"] >= position["sl"]
                 hit_tp = bar["low"] <= position["tp"]
             if hit_sl and hit_tp:
-                bull_bar = bar["close"] >= bar["open"]
-                if position["direction"] == "long":
-                    exit_price, exit_reason = (
-                        (position["tp"], "TP") if bull_bar else (position["sl"], "SL")
-                    )
-                else:
-                    exit_price, exit_reason = (
-                        (position["tp"], "TP") if not bull_bar else (position["sl"], "SL")
-                    )
+                # Bougie ambiguë (touche SL ET TP) : ordre intra-bar inconnu.
+                # Pour un signal de retracement, toucher le SL = rebond trop
+                # violent → SL prioritaire, jamais TP (worst-case). Harmonisé
+                # avec le bloc fill same-bar ci-dessous (déjà conservateur).
+                exit_price, exit_reason = position["sl"], "SL"
             elif hit_sl:
                 exit_price, exit_reason = position["sl"], "SL"
             elif hit_tp:

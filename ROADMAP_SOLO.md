@@ -21,14 +21,17 @@ Transformer `topstep_signals` (déjà solide, ~14k lignes, 2 stratégies en prod
 ## 📍 ÉTAT ACTUEL — À METTRE À JOUR À CHAQUE SESSION
 
 ```
-Phase active     : PHASE 3 — Améliorations live — code seul mergé
-Étape en cours   : 1.8 (obs 7j) + 3.3 réactivation différée + 3.4 optionnelle
-Dernière session : 2026-05-25 (PHASE 3 code mergé sur main — shadow framework
-                   + audit adaptive_sizing en lecture seule)
-Prochaine action : (a) cron reconcile_daily + obs 7j
-                   (b) lancer shadow daemon en parallèle (./tools/launch_shadow.sh start)
-                       pour valider le framework 1-2 jours avant fix adaptive_sizing
-                   (c) PHASE 4 release coordonnée quand tout est stable
+Phase active     : PHASE 3 — Améliorations live (PHASE 1 clôturée, obs 7j OK)
+Étape en cours   : 3.3 vol-targeting (flag OFF, réactivation différée) + 3.4 optionnelle
+Dernière session : 2026-06-01 (validation shadow + dashboard avant restart ; PHASE 1
+                   clôturée par obs 7j ; pause OPR NQ1 appliquée en config — cf. mémoire
+                   project_opr_sltp_mfe_mae_2026-06-01)
+Prochaine action : (a) RESTART daemon en fenêtre pré-market : applique la pause NQ1 et
+                       re-check VPN au boot. ⚠️ Ce restart N'EST PAS la PHASE 4 — aucun
+                       flag risqué activé (vol-targeting reste OFF).
+                   (b) shadow framework VALIDÉ (tourne isolé ~1 sem., dry_run, état séparé)
+                       — l'utiliser pour tester vol-targeting (3.3) avant toute activation
+                   (c) PHASE 4 = activation progressive des flags, future (samedi marché fermé)
 ```
 
 **Quand tu termines une étape** :
@@ -148,7 +151,7 @@ Puis répondre :
 
 ---
 
-### PHASE 1 — Filet de sécurité (1 semaine) — RISQUE ZÉRO (read-only)
+### PHASE 1 — Filet de sécurité (1 semaine) — RISQUE ZÉRO (read-only) — ✅ terminée le 2026-06-01
 
 **Objectif** : composants de sécurité opérationnelle qui **lisent** l'état du live mais ne le modifient jamais. Inclut le **dashboard iPhone via Tailscale**.
 
@@ -184,7 +187,7 @@ Puis répondre :
 
   Format : pour chaque scénario, "Symptômes → Action exacte (commandes copier-collables) → Vérification → Récupération".
 
-- [x] **1.4 Dashboard Streamlit + accès iPhone via Tailscale**
+- [x] **1.4 Dashboard + accès iPhone via Tailscale** *(évolué depuis : Streamlit 8501 → **Dash v3.1** `tools/dashboard_v3/`, port **8502**, http://Katana17:8502 — broker-first ProjectX, read-only, validé 2026-05-25 ; cf. mémoire project_dashboard_v31_validated. Lancement : `tools/launch_dashboard_v3.sh`. L'ancien `tools/dashboard.py` Streamlit reste présent mais déprécié.)*
 
   **Sous-étape 1.4.a — Installer Tailscale** (10 min)
   ```bash
@@ -281,10 +284,10 @@ Puis répondre :
   - `./check.sh` + golden master verts
   - `git checkout main && git merge infra/safety-net`
 
-- [ ] **1.8 Observation 1 semaine**
+- [x] **1.8 Observation 1 semaine** *(validée 2026-06-01 : ~1 semaine de fonctionnement sans problème ni faux positif — confirmé utilisateur. Shadow + dashboard tournent en parallèle, isolés, sans impact live.)*
   - Cron reconcile_daily actif
   - Dashboard ouvert régulièrement
-  - Critère Go pour PHASE 2 : **zéro faux positif Telegram pendant 7 jours**
+  - Critère Go pour PHASE 2 : **zéro faux positif Telegram pendant 7 jours** → OK
 
 **Critères de validation PHASE 1** :
 - ✅ Réconciliation tourne 7 jours sans faux alerte
@@ -470,9 +473,9 @@ Notifier par Telegram + créer note rapide dans `docs/incidents/YYYY-MM-DD.md` (
 
 ```
 PHASE 0 — Fondations         (3-4 jours) : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-24
-PHASE 1 — Filet sécurité     (1 semaine) : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
+PHASE 1 — Filet sécurité     (1 semaine) : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-06-01
 PHASE 2 — Backtest pro       (1.5 sem.)  : [ ] non démarrée  / [ ] en cours  / [x] terminée le 2026-05-25
-PHASE 3 — Améliorations live (2 sem.)    : [ ] non démarrée  / [x] en cours  / [ ] terminée le YYYY-MM-DD  (3.1/3.2/3.5 ✓ ; 3.3 réactivation et 3.4 différées)
+PHASE 3 — Améliorations live (2 sem.)    : [ ] non démarrée  / [x] en cours  / [ ] terminée le YYYY-MM-DD  (3.1/3.2/3.5 ✓ ; shadow validé isolé ~1 sem. 2026-06-01 ; 3.3 vol-targeting et 3.4 différées, flags OFF)
 PHASE 4 — Release            (1 jour)    : [ ] non démarrée  / [ ] en cours  / [ ] terminée le YYYY-MM-DD
 
 Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
@@ -502,4 +505,4 @@ Total estimé : 5-6 semaines, bot live jamais interrompu sauf samedi PHASE 4
 
 ---
 
-*Dernière mise à jour : 2026-05-25 (PHASE 3 code seul mergé — shadow framework + audit adaptive_sizing ; activation différée).*
+*Dernière mise à jour : 2026-06-01 (validation shadow + dashboard v3.1 avant restart ; PHASE 1 clôturée par obs 7j ; shadow framework validé isolé ~1 sem. ; pause OPR NQ1 appliquée hors-chantier. Restart pré-market à venir = pause NQ1 + re-check VPN, PAS d'activation de flag — PHASE 4 reste future.).*
