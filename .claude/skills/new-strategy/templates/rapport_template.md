@@ -1,74 +1,39 @@
 # Template — output/<strategy_id>/rapport.md
 
-> **Format compact 1 page (~80 lignes max).** Les détails complets vont dans
-> `output/<strategy_id>/summary.json` (structuré) et `output/<strategy_id>/full/`
-> (charts, robustness.json, audit_visuel.md, trades CSV). Ce rapport est la
-> page d'archive humaine — lisible en 1 minute.
+> **Writeup court survivant (~30 lignes).** Uniquement pour les 🟡/🟢 (deep lane). Les 🔴 ne
+> produisent PAS de dossier — juste 1 ligne dans `REGISTRE_HYPOTHESES.md`. Détails structurés
+> dans `summary.json` ; robustesse complète dans `full/robustness_<id>.{json,md}` (généré par `optimize.py`).
 
 ```markdown
-# Rapport — [STRATEGY_ID] (v[N])
-
-**Date :** [YYYY-MM-DD] · **Itérations :** [N]/5 · **Verdict :** 🟢/🟡/🔴
+# Rapport — [STRATEGY_ID] (v[N]) · [YYYY-MM-DD] · Verdict 🟢/🟡
 
 ## Concept
-[1-2 phrases : signal, timing, tickers, edge théorique.]
-**Hypothèse falsifiable :** [1 phrase — observation qui invalide en live]
+[1-2 phrases : signal, timing, tickers, edge — qui paie ce P&L.]
+**Falsifiable :** [observation qui invalide en live]
 
-## Métriques OOS (portfolio, net de frais)
-
-| Métrique | Valeur | Seuil 🟢 |
+## Métriques OOS (portfolio, net de frais — lues depuis robustness_<id>.md)
+| | Valeur | Seuil 🟢 |
 |---|---|---|
-| Trades / WR | XXX / XX% | ≥ 50 / – |
+| Trades / WR | XXX / XX% | ≥ 50 |
 | PF net | X.XX | ≥ 1.5 |
 | P&L net | +$X XXX | > 0 |
-| Bootstrap portfolio (block, 1000 iter) | XX% | ≥ 80% |
-| Dégradation IS→OOS PF | XX% | ≤ 30% |
-| DD max OOS | -$XXX | < limite Topstep restante |
-| PSR(0) | XX% | ≥ 95% |
+| Bootstrap portfolio | XX% | ≥ 80% |
+| Dégradation IS→OOS | XX% | ≤ 30% |
+| MC P95 DD | -$XXX | < limite Topstep restante |
 
-## Stress par régime (PF OOS)
-trending=X.XX · ranging=X.XX · macro=X.XX · vol_h=X.XX · vol_b=X.XX
-**MC P95 DD :** -$XXX (limite Topstep restante : -$XXX)
+Stress régime (PF OOS) : trending=X.XX · ranging=X.XX · macro=X.XX · vol_h=X.XX · vol_b=X.XX
 
-## Filtres data-driven (@quant — si PHASE 3.5)
-[Si quant_used=true dans summary.json, lister top 3 filtres appliqués :]
-1. <feature> <op> <seuil> — impact PF OOS +X.XX (p<X.XXX Bonferroni)
-2. ...
+## Live-equivalence
+applicable=[oui/non] · path=[M1Buffer/live_eq_script/n/a] · PF live-eq=[X.XX]
 
-## Complémentarité portefeuille (corrélation daily P&L OOS)
-vs OPR opr-v4 : 0.XX · vs Fib fib-v3 : 0.XX · vs VPC vpc-v4 : 0.XX
+## Quant (si discover exécuté)
+verdict=[HIGH/MEDIUM/LOW] · filtres=[<feature> <op> <seuil> (ΔPF +X.XX, p<X.XXX Bonferroni)] / rollback
+
+## Fit portefeuille
+corr daily P&L OOS vs OPR=0.XX · vs Fib=0.XX  (cible < 0.5)
 
 ## Verdict & next step
-
-**[🟢 / 🟡 / 🔴]** — [Justification 2-3 lignes : ce qui convainc / ce qui manque.]
-
-**Conditions d'upgrade/downgrade**
-- Pour passer 🟡 → 🟢 : [conditions mesurables]
-- Pour rétrograder 🟢 → 🟡 : [conditions kill-switch]
-
-**Next step** : [promotion via @forge / itération vN+1 / rejet documenté]
-
-## Itérations (résumé)
-| v | Modif clé | PF OOS | Bootstrap | Verdict |
-|---|---|---|---|---|
-| v1 | baseline | X.XX | XX% | 🔴/🟡/🟢 |
-| v2 | +<filtre quant ou param> | X.XX | XX% | 🔴/🟡/🟢 |
-| vN | ... | X.XX | XX% | 🔴/🟡/🟢 |
-
-## Workflow promotion (si 🟢, à confirmer par l'utilisateur étape par étape)
-1. [ ] @forge crée `core/<strategy_id>.py` (logique live)
-2. [ ] @forge update `broker/live_runner.py` + `core/signal_selector.py`
-3. [ ] Test simulation `PROJECTX_LIVE_MODE = False` (5 jours)
-4. [ ] Activation progressive : 1 contrat 1 semaine → sizing nominal
-
-## Artefacts
-- `summary.json` (verdict + métriques structurées, lu par auditor)
-- `full/robustness.json` (Bootstrap, Bonferroni, PSR, MC complet)
-- `full/audit_visuel.md` (si PHASE 6.5 exécutée — sinon skip 🟢 clair)
-- `full/charts/` (10 jours + portfolio equity/DD/heatmap/hourly/corr)
-- `quant_report.md` + `quant_patch.py` (si PHASE 3.5 exécutée)
-
-## Limites connues
-[2-3 lignes : ce que le backtest ne capture pas — latence réelle, profondeur
-carnet en stress, changement structurel post-OOS, frais Topstep évolutifs.]
+**[🟢/🟡]** — [justification 2 lignes]
+Next : [promotion @forge / itération vN+1 / veille]
+Limites connues : [latence réelle, profondeur carnet en stress, frais Topstep évolutifs]
 ```

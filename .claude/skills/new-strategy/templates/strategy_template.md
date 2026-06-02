@@ -57,6 +57,9 @@ _NY = ZoneInfo("America/New_York")                # DST-aware nativement
 
 # ── Grille d'optimisation ─────────────────────────────────────────────────────
 # Règle : ≤ 4 dimensions simultanées · bornes ancrées dans la logique marché
+# BREADTH (Pilier perf) : code les variantes naturelles (triggers, seuils, tickers)
+#   comme dimensions ici → optimize.py les teste TOUTES en UN run walk-forward,
+#   au lieu de cycles séquentiels coûteux.
 PARAM_GRID = {
     "sl_mult":  [0.5, 1.0, 1.5, 2.0],
     "tp_mult":  [1.5, 2.0, 3.0, 4.0],
@@ -76,7 +79,7 @@ def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
 
 def _compute_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """ADX pour classification trending/ranging — utilisé en stress test PHASE 5."""
+    """ADX pour classification trending/ranging — utilisé en stress régime (auto via optimize.py)."""
     high, low, close = df["high"], df["low"], df["close"]
     plus_dm  = high.diff()
     minus_dm = -low.diff()
@@ -113,7 +116,7 @@ def run_backtest(
       date, dir, entry, sl, tp, sl_dist, tp_dist, rr, n_ct,
       result (TP|SL|TE|NOT_FILLED), pnl, fill_time, exit_time, exit, regime
 
-    Colonnes optionnelles (utilisées par PHASE 5 stress tests) :
+    Colonnes optionnelles (utilisées par stress régime (auto via optimize.py)) :
       pnl_gross, adx, atr_pct, is_macro_day
 
     `pnl` = P&L net (slippage + commissions inclus).
@@ -251,7 +254,7 @@ def run_backtest(
             daily_trades[date_str] = daily_trades.get(date_str, 0) + 1
             break
 
-        # Tagging régime (pour stress tests PHASE 5)
+        # Tagging régime (pour stress régime (auto via optimize.py))
         if pd.notna(bar["adx"]) and bar["adx"] > 25:
             regime = "trending"
         elif pd.notna(bar["adx"]) and bar["adx"] < 20:
@@ -278,7 +281,7 @@ def run_backtest(
             "exit_time":    exit_time,
             "exit":         exit_px,
             "regime":       regime,
-            # ── Colonnes optionnelles (PHASE 5 stress tests) ──
+            # ── Colonnes optionnelles (stress régime (auto via optimize.py)) ──
             "pnl_gross":    round(pnl_gross, 2),
             "adx":          round(bar["adx"], 1) if pd.notna(bar["adx"]) else None,
             "atr_pct":      round(bar["atr_pct"], 2) if pd.notna(bar["atr_pct"]) else None,
@@ -399,7 +402,7 @@ def plot_correlation_rolling(trades_df, ref_strategies_dfs, output_path): ...
 
 - **Fill conservatif** : la règle SL prioritaire en cas d'ambiguïté est essentielle. Sans elle, le WR peut être biaisé de 5–10 points.
 - **`pnl` = net** : c'est la colonne canonique. `pnl_gross` est gardé pour debug.
-- **Régime tagging** : ADX et percentile ATR sont calculés pour permettre les stress tests en PHASE 5 sans réexécuter le backtest.
+- **Régime tagging** : ADX et percentile ATR sont calculés pour permettre les stress régime (auto via optimize.py) sans réexécuter le backtest.
 - **Reproductibilité** : `np.random.seed(42)` dès l'import.
 - **MACRO_EVENT_DATES** : à maintenir manuellement dans `config.py` ou via un script d'ingestion.
 - **DST-aware** : `zoneinfo("America/New_York")` gère DST nativement, contrairement à `pytz`.

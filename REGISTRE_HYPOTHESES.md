@@ -1,8 +1,11 @@
 # Registre des hypothèses testées et falsifiées
 
-> Trace des hypothèses formulées (par `@chartist`, `@researcher`, l'utilisateur, ou la littérature) et **testées rigoureusement** par le pipeline, qu'elles aient été validées 🟢 ou rejetées 🔴.
+> Trace des hypothèses formulées (utilisateur, littérature, `BACKLOG.md`, variante d'un edge prod) et **testées rigoureusement** par le pipeline gated, qu'elles aient été validées 🟢 ou rejetées 🔴.
 >
-> **Objectif** : éviter de re-tester sous une autre forme une hypothèse déjà invalidée. Capitaliser la connaissance accumulée.
+> **Objectif** : éviter de re-tester sous une autre forme une hypothèse déjà invalidée. Capitaliser la connaissance accumulée → le hit-rate futur monte.
+>
+> **Écriture obligatoire** : à l'étape CAPITALISATION du pipeline, **toute** stratégie testée
+> (🟢/🟡/🔴) ajoute 1 entrée ici. Consultation obligatoire à l'ÉTAPE 0 (ne pas re-tester un mort).
 
 ---
 
@@ -11,7 +14,7 @@
 Chaque entrée doit contenir :
 - `ID` : identifiant court (H4, ICT-OB-v1, etc.)
 - `Date` : YYYY-MM-DD du test
-- `Source` : `@chartist` / `@researcher` / utilisateur / littérature
+- `Source` : utilisateur / littérature / `BACKLOG.md` / variante edge prod (OPR, Fib)
 - `Verdict` : 🟢 PRODUCTION / 🟡 VEILLE / 🔴 REJET
 - `Spec` : description courte de l'hypothèse
 - `Métriques` : PF OOS, n_trades, bootstrap (ce qui a justifié le verdict)
@@ -85,9 +88,9 @@ Issues du rapport `@chartist idea` 2026-05-15 sur NQ1 :
 
 ---
 
-## Leçons transversales (à consulter avant tout nouveau test chartist)
+## Leçons transversales (à consulter à l'ÉTAPE 0, avant tout nouveau test)
 
-1. **Patterns Ichimoku canoniques = méfiance** : 2/2 tests Ichimoku ont échoué (H4 filtre cloud, kijun_pb-v1 Kijun pullback). L'indicateur est trop documenté → arbitré. Le chartist devrait privilégier des patterns moins canoniques pour les futures invocations idea.
+1. **Patterns canoniques ultra-documentés = méfiance (RED-FLAG ÉTAPE 0)** : 2/2 tests Ichimoku ont échoué (H4 filtre cloud, kijun_pb-v1 Kijun pullback). Indicateur trop documenté → arbitré. Privilégier des edges moins canoniques ou des variantes d'edges déjà prouvés en prod (OPR/Fib).
 2. **Sample size critique** : tout test sur n < 30 (et a fortiori < 50) requiert une exigence supplémentaire (PSR fiable, bootstrap au-dessus de Bonferroni, P&L réparti sur ≥ 4-5 mois). Si ces garanties manquent, rejeter par sécurité.
 3. **IS breakeven + OOS positif = signal d'alerte** : si une stratégie n'a pas d'edge en IS, son edge OOS est probablement un artefact de régime favorable, pas un edge structurel.
 4. **Multi-ticker après échec = data dredging** : ne JAMAIS tester sur MES1/YM1 une hypothèse rejetée sur NQ1 dans l'espoir qu'elle marche "ailleurs". C'est aggraver le multiple-testing.

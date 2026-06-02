@@ -1,146 +1,129 @@
 # Équipe d'agents — topstep_signals
 
-Architecture hybride pour le développement et l'exploitation de stratégies de trading algorithmique sur le challenge Topstep 50K.
+Architecture sobre, performante et rigoureuse pour développer et exploiter des stratégies de
+trading algorithmique sur le challenge Topstep 50K.
 
-- **Quotidien (90 %)** : pipeline séquentiel via 8 subagents — isolation de contexte, sécurité, sobriété tokens.
-- **Exploration intensive (10 %)** : agent teams (expérimental, déjà activé dans `.claude/settings.json`) pour parallélisme et débat contradictoire.
+> **Objectif système** : maximiser le nombre de stratégies rentables, robustes et non-corrélées
+> trouvées **par token dépensé**. Throughput ↑ · hit-rate ↑ · rigueur de validation INCHANGÉE.
 
-## Table des agents
+- **Quotidien** : la FAST LANE (test rapide d'une idée) est faite **inline** par l'orchestrateur
+  (zéro cold-start subagent). Les specialists ne servent qu'en DEEP LANE (validation lourde).
+- **Exploration intensive** : agent teams (expérimental, `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`)
+  pour parallélisme et débat contradictoire.
 
-| Agent | Rôle | Comment l'invoquer | Modèle | Protection |
+## Les 3 piliers
+
+1. **SOBRIÉTÉ** — pipeline gated, dev inline, **zéro recalcul redondant** (`optimize.py` calcule
+   déjà bootstrap/MC/PSR/Bonferroni/stress → `output/robustness_<id>.{json,md}` ; on lit, on ne refait pas).
+2. **PERFORMANCE (hit-rate)** — sélection d'idée avant codage (backlog + red-flags), variantes
+   d'edges prouvés, breadth via grille walk-forward, `@quant` pour repêcher les 🟡, fit portefeuille,
+   capitalisation systématique.
+3. **RIGUEUR** — ce qu'on allège = redondance + cérémonie, **jamais la validation** : live-equivalence
+   BLOCANT, `@auditor`, seuils 🟢, Bonferroni, walk-forward fixe.
+
+## Table des agents (6)
+
+| Agent | Statut | Rôle | Invocation | Protection |
 |---|---|---|---|---|
-| **Orchestrateur** | Route les demandes, synthétise. **Ne fait pas le travail de fond.** | Session principale (par défaut) | Opus 4.7 | Suit les règles `ask` sur `core/**` et `broker/**` |
-| **@athena** | Cheffe d'orchestre stratégique. Émet un PLAN d'orchestration que l'orchestrateur exécute. | `@athena` ou « ATHENA, ... » | Inherit (Opus) | Lecture seule (Read, Grep, Glob, Bash, WebSearch) |
-| **@researcher** | Recherche web, formalisation algorithmique de concepts trading, pièges classiques. | `@researcher` ou « Recherche / formalise ... » | Sonnet | Lecture seule (+ WebFetch/WebSearch) |
-| **@new-strategy** | Pipeline complet (PHASES 1-8) — implémentation, backtest, optimisation, stress tests. | `@new-strategy` ou `/new-strategy "..."` | Inherit (Opus) | Écriture limitée à `strategies/`, `config.py`, `output/` |
-| **@auditor** | Audit indépendant de la fidélité concept↔code. Peut rétrograder le verdict. | `@auditor` ou « Audite ... » | Inherit (Opus) | Lecture seule stricte |
-| **@chartist** | Expert en analyse technique multimodale. Mode `idea` (idéation visuelle PHASE 0.5) ou `audit` (audit visuel PHASE 6.5 — **CONDITIONNEL** : skip si verdict 🟢 clair). Lit les PNG (mono-TF ou trio 15m+H1+D1). Ne décide pas du verdict. | `@chartist MODE: idea` ou `@chartist MODE: audit` | Inherit (Opus, multimodal) | Lecture seule absolue |
-| **@quant** | Data scientist trading senior. Mode `catalog` (PHASE 2.5 — propose features candidates) ou `discover` (PHASE 3.5 — sklearn RF + permutation test sur trades baseline, produit un patch Python). Ne modifie jamais de fichier de stratégie directement. | `@quant MODE: catalog` ou `@quant MODE: discover` | Inherit (Opus) | Écriture limitée à `output/<strategy_id>/` |
-| **@argus** | Surveillance du daemon live (tmux, state, logs, Telegram). | `@argus` ou « État du live ? » | Sonnet | Lecture seule absolue (interdiction `kill`, `rm`, `tmux send-keys`, etc.) |
-| **@forge** | Promotion en production : crée `core/<id>.py`, modifie `broker/live_runner.py`. | `@forge` + verdict 🟢 confirmé + confirmation utilisateur **par fichier** | Inherit (Opus) | Modification autorisée de `core/` et `broker/`, mais chaque écriture déclenche un prompt utilisateur |
+| **Orchestrateur** | cœur | FAST LANE inline (cadrage edge, scaffold, backtest, optimize, verdict) + routage + capitalisation. | Session principale | Règles `ask` sur `core/**` et `broker/**` |
+| **@new-strategy** | dev (subagent) | Même pipeline gated, mais **isole le contexte** (dev long / parallèle). | `@new-strategy` ou `/new-strategy "..."` | Écriture `strategies/`, `config.py`, `output/` |
+| **@auditor** | deep lane | Audit fidélité/look-ahead/frictions/live-eq/cohérence verdict. Peut rétrograder. | `@auditor` | Lecture seule stricte |
+| **@quant** | on-demand | Mode `discover` : repêchage data-driven d'un 🟡 (RF/LogReg + Bonferroni). Moteur de hit-rate. | `@quant` (discover) | Écriture `output/<id>/` uniquement |
+| **@athena** | on-demand | Conseil **one-shot** : priorisation backlog + fit portefeuille + go/no-go. | `@athena` | Lecture seule |
+| **@argus** | live | Surveillance daemon (tmux, state, logs, Telegram). | `@argus` | Lecture seule absolue |
+| **@forge** | promotion | Promotion prod : crée `core/<id>.py`, modifie `broker/live_runner.py`. | `@forge` + 🟢 confirmé + confirmation par fichier | Écriture `core/`/`broker/`, chaque écriture confirmée |
+
+> Agents **supprimés** lors de la refonte : `researcher` (cadrage absorbé inline) et `chartist`
+> (audit visuel = coup d'œil manuel `python -m core.explore_chart`, à la demande).
 
 ## Workflows
 
-### 1. Développer une nouvelle stratégie (workflow recommandé — pipeline orchestré)
+### 1. Développer une stratégie — pipeline gated (recommandé)
 
 ```
-Utilisateur : « ATHENA, développe une stratégie ICT order block sur NQ1 »
+ÉTAPE 0 · SÉLECTION (inline)
+  BACKLOG.md (P1>P2>P3) + REGISTRE_HYPOTHESES (ne pas re-tester un mort)
+  + RED-FLAGS → rejet à coût zéro (indicateur arbitré, event-driven basse fréq, doublon prod, RR écrasé)
+        ↓
+FAST LANE (inline session principale — défaut)
+  1. cadrer l'edge (qui paie ? falsifiable ?)   2. scaffold + config.py (variantes → PARAM_GRID)
+  3. backtest.py + optimize.py (robustesse AUTO) 4. lire verdict + robustness_<id>.md
+  5. GATE :  🔴 → STOP + 1 ligne REGISTRE + mémoire        🟡/🟢 → DEEP LANE
+        ↓
+DEEP LANE (survivants seulement)
+  6. live-equivalence (BLOCANT si feature bougie de fill)
+  7. [@quant discover si 🟡 + n_oos≥100]  → tenter 🟡→🟢 (rollback si Bonferroni fail)
+  8. summary.json + rapport.md court  → 9. @auditor  → 10. @forge si 🟢 confirmé
+        ↓
+CAPITALISATION (tous cas)
+  verdict → REGISTRE_HYPOTHESES.md + statut BACKLOG.md + mémoire si leçon transversale
 ```
 
-Flow exécuté par l'orchestrateur (étapes chartist + quant conditionnelles selon décision d'Athena) :
+Source de vérité du pipeline : `.claude/skills/new-strategy/SKILL.md`. Les subagents ne peuvent
+pas spawn d'autres subagents — l'orchestrateur chaîne les invocations.
+
+### 2. Conseil stratégique avant dev
 
 ```
-[Orchestrateur] → @athena                    (Tour 1 — émet PLAN ATHENA)
-              ↓
-[Optionnel — concept ouvert, mono-/multi-TF]
-[Orchestrateur] → python -m core.explore_chart --ticker <X> --n 10 [--multi-tf]
-[Orchestrateur] → @chartist MODE: idea       (Tour 2a — hypothèses d'edge)
-              ↓
-[Orchestrateur] → @researcher                (Tour 2 — formalisation + sources)
-              ↓
-[Orchestrateur] → @athena                    (Tour 3 — transition, décide [2.5] et [3.5])
-              ↓
-[Optionnel — concept conditionnel ou neuf]
-[Orchestrateur] → @quant MODE: catalog       (Tour 3a — propose features candidates)
-              ↓
-[Orchestrateur] → @new-strategy              (Tour 4 — PHASES 2-3 : scaffold + baseline)
-              ↓
-[Conditionnel — baseline 🟡 ou 🟢 borderline avec n_oos ≥ 100]
-[Orchestrateur] → @quant MODE: discover      (Tour 4a — sklearn + patch)
-[Orchestrateur] → @new-strategy              (Tour 4b — applique patch en vN+1, PHASES 4-8)
-              ↓
-[Orchestrateur] → @athena                    (Tour 5 — lit summary.json, décide [4.5])
-              ↓
-[CONDITIONNEL — skip si verdict 🟢 clair (bootstrap≥80% AND PF≥1.5) OU 🔴]
-[Orchestrateur] → @chartist MODE: audit      (Tour 5a — warnings visuels)
-              ↓
-[Orchestrateur] → @auditor                   (Tour 6 — lit summary.json + audit quant_patch.py)
-              ↓
-[Orchestrateur] → @athena                    (Tour 7 — VERDICT FINAL)
-              ↓
-[Orchestrateur] → Utilisateur                (synthèse + suggestion : @forge si 🟢)
+Utilisateur : « ATHENA, quelle idée prioriser ? » / « ce concept vaut le coup ? »
 ```
+`@athena` (one-shot) : priorise une idée du backlog, applique les red-flags, juge le fit portefeuille
+(corr P&L daily < 0.5), rend un GO/NO-GO argumenté. Ne pilote pas le pipeline.
 
-**Décision d'invoquer le chartist** :
-- Mode `idea` (avant @researcher) : oui si concept ouvert / non formalisé / exploration multi-marché. Non si concept clair (ex: "ORB pullback NQ 09:30").
-- Mode `audit` (après @new-strategy) : **SKIP si verdict 🟢 clair (bootstrap ≥ 80% AND PF OOS ≥ 1.5)** — gain ~80-100k tokens. Exécuter sur 🟢 borderline et 🟡. Skip sur 🔴.
-
-**Décision d'invoquer le quant** :
-- Mode `catalog` (avant @new-strategy) : oui si concept implique du filtrage conditionnel (régime, timing, microstructure) ou concept neuf sans héritage prod. Non si simple variant d'une strat prod (ex: opr-v6).
-- Mode `discover` (après baseline) : **recommandé si baseline = 🟡** (PF OOS 1.2-1.5) — un filtre data-driven peut basculer en 🟢. Skip si baseline 🔴 dur (problème structurel) ou si n_oos < 100 (sample insuffisant pour ML).
-
-### 2. Développer une stratégie (workflow rapide — skill direct)
+### 3. Repêcher un 🟡 (hit-rate)
 
 ```
-Utilisateur : /new-strategy "ORB inverse sur YM1, fenêtre 9h30-10h30 NY"
+Utilisateur (ou orchestrateur, baseline 🟡 + n_oos≥100) : « QUANT, discover sur <id> »
 ```
+`@quant` produit `output/<id>/quant_patch.py`. Appliqué en vN+1 si verdict ≥ MEDIUM ; rollback si LOW.
 
-Le skill `/new-strategy` exécute le pipeline en autonomie (PHASES 1-8 du skill). Pas de phase researcher/auditor explicite. Les PHASES 2.5 et 3.5 (`@quant`) peuvent être invoquées par le skill s'il tourne en session principale (`agent: general-purpose`). À privilégier quand l'idée est déjà claire et formalisée.
-
-### 3. Surveiller le live
+### 4. Surveiller le live
 
 ```
 Utilisateur : « ARGUS, état du live ? »
-            ou « Comment va le compte ce matin ? »
 ```
+`@argus` : état tmux, compte Topstep (P&L, distances aux limites), stratégies actives, logs, alertes.
 
-`@argus` produit un rapport structuré avec :
-- État du daemon tmux
-- Compte Topstep (P&L, distances aux limites)
-- Stratégies actives et trades du jour
-- Logs (erreurs, NOT_FILLED, anomalies)
-- Alertes (🚨 critique / ⚠️ attention / ℹ️ info)
-
-### 4. Promouvoir en production
+### 5. Promouvoir en production
 
 ```
-Utilisateur : (après verdict 🟢 confirmé)
-              « FORGE, prépare la promotion de <strategy_id> »
+Utilisateur (après 🟢 audité) : « FORGE, prépare la promotion de <id> »
 ```
+`@forge` : vérifie préconditions → plan fichier par fichier → confirmation par fichier → vérifie imports
+→ plan d'activation progressive (simulation → 1 contrat → sizing nominal).
 
-`@forge` :
-1. Vérifie toutes les **préconditions** (verdict 🟢 audité, rapports présents, hors session live).
-2. Émet un **plan de promotion** fichier par fichier.
-3. Demande **confirmation pour chaque fichier** avant écriture.
-4. Vérifie les imports après chaque modification.
-5. Affiche un récap final avec plan d'activation progressive (simulation 1 semaine → live 1 contrat → sizing nominal).
-
-### 5. Audit ponctuel d'un code existant
+### 6. Audit ponctuel
 
 ```
-Utilisateur : « AUDITOR, vérifie strategies/concept-v3.py et son rapport »
+Utilisateur : « AUDITOR, vérifie strategies/<id>.py et son summary.json »
 ```
 
-`@auditor` produit un rapport critique sans écrire ; signale les look-ahead, biais, incohérences verdict.
+### 7. Exploration intensive — agent team
 
-### 6. Exploration intensive — agent team (10 % des cas)
-
-Pour les questions difficiles qui méritent un débat contradictoire (ex: « pourquoi notre OPR sous-performe sur les mardis ? »), l'orchestrateur peut proposer la création d'une **agent team** :
-
-```
-Utilisateur : « Crée une équipe pour investiguer le pattern de pertes du mardi sur OPR. »
-```
-
-L'orchestrateur (lead de la team) spawn 3-4 teammates :
-- Un teammate de type `auditor` (vérifie data + code)
-- Un teammate de type `researcher` (cherche des explications structurelles)
-- Un teammate de type `new-strategy` (teste un fix éventuel)
-- Optionnellement un teammate "devil's advocate" qui challenge les hypothèses
-
-Les teammates communiquent entre eux via la mailbox d'agent teams. Voir la doc [agent-teams](https://code.claude.com/docs/en/agent-teams.md) pour les détails opérationnels (Shift+Down pour cycler, `TeamCreate`, etc.).
+Pour un débat contradictoire (ex: « pourquoi OPR sous-performe le mardi ? »), l'orchestrateur peut
+spawn une team de teammates basés sur les subagents restants (auditor, new-strategy, quant, +
+éventuellement un "devil's advocate"). Voir la doc [agent-teams](https://code.claude.com/docs/en/agent-teams.md).
 
 ## Garanties de sécurité
 
-1. **`core/**` et `broker/**` sont en mode `ask`** dans `.claude/settings.json` : tout `Edit` ou `Write` y déclenche un prompt utilisateur — quel que soit l'agent.
-2. **`state/**` et `logs/**` sont en `deny`** : aucun agent ne peut altérer l'état du live runner.
-3. **Bash destructeurs en `deny`** : `rm -rf`, `git push --force`, `git reset --hard` sont bloqués globalement.
-4. **Outils restreints par agent** : athena, researcher, auditor, argus n'ont **pas** d'outils d'écriture. new-strategy a Edit/Write mais son system prompt interdit `core/` et `broker/`.
-5. **FORGE** est le seul agent autorisé en écriture sur la prod, et chaque écriture est confirmée individuellement par l'utilisateur.
+1. **`core/**` et `broker/**` en mode `ask`** : tout `Edit`/`Write` déclenche un prompt — quel que soit l'agent.
+2. **`state/**` et `logs/**` en `deny`** : aucun agent n'altère l'état du live runner.
+3. **Bash destructeurs en `deny`** : `rm -rf`, `git push --force`, `git reset --hard` bloqués.
+4. **Outils restreints par agent** : athena, auditor, argus n'ont pas d'écriture ; quant écrit
+   uniquement `output/<id>/` ; new-strategy a Edit/Write mais interdit `core/`/`broker/`.
+5. **FORGE** est le seul agent autorisé en écriture prod, chaque écriture confirmée individuellement.
+
+## Capitalisation (Pilier 2)
+
+- `strategie_futur/BACKLOG.md` — idées priorisées, source de vérité des candidats.
+- `REGISTRE_HYPOTHESES.md` — hypothèses testées 🟢/🟡/🔴 + leçons (consulter avant, écrire après).
+- `docs/strategies_abandoned.md` + mémoire `feedback_strategies_abandoned_lessons` — leçons compactes.
 
 ## Référence aux sources
 
-- **Pipeline `new-strategy`** : `.claude/skills/new-strategy/SKILL.md` (source de vérité unique, PHASES 0.5 → 8 dont 0.5 et 6.5 optionnelles via chartist)
-- **Templates** : `.claude/skills/new-strategy/templates/strategy_template.md`, `rapport_template.md`
-- **Outil idéation visuelle** : `core/explore_chart.py` (génère N jours stratifiés par régime, flag `--multi-tf` pour trio 15m+H1+D1)
-- **Permissions** : `.claude/settings.json` (équipe + protection) et `.claude/settings.local.json` (allowlist Bash personnelle)
-- **Convention projet** : `CLAUDE.md` (architecture, paramètres, performances prod)
+- **Pipeline** : `.claude/skills/new-strategy/SKILL.md` (single-source-of-truth, gated).
+- **Templates** : `.claude/skills/new-strategy/templates/{strategy_template,rapport_template}.md`.
+- **Robustesse auto** : `core/optimizer.py` + `core/robustness.py::run_full_robustness`.
+- **Exploration visuelle manuelle** : `core/explore_chart.py` (CLI, à la demande).
+- **Permissions** : `.claude/settings.json` + `.claude/settings.local.json`.
+- **Convention projet** : `CLAUDE.md`.

@@ -46,90 +46,95 @@ Au démarrage de session, si le chantier est actif, ajoute à la synthèse :
 
 ---
 
-## Ton rôle — ORCHESTRATEUR
+## Ton rôle — ORCHESTRATEUR (+ dev rapide inline)
 
-Tu es **l'ORCHESTRATEUR** de l'équipe d'agents. Tu ne fais **pas** le travail de fond toi-même (recherche, dev, audit, surveillance, promotion) : tu **routes** vers le bon subagent et tu **synthétises**. Voir [CLAUDE_TEAM.md](CLAUDE_TEAM.md) pour la table complète des agents et workflows.
+Tu **fais toi-même** le travail de la FAST LANE (cadrer l'edge, scaffold, backtest, optimize,
+lecture du verdict) **inline en session principale** — c'est le mode par défaut, le plus sobre
+en tokens (zéro cold-start). Tu **routes vers un specialist** uniquement pour la DEEP LANE
+(validation lourde) et les rôles dédiés (live, promotion). Voir [CLAUDE_TEAM.md](CLAUDE_TEAM.md).
+
+> **Objectif système** : maximiser le nombre de stratégies rentables, robustes et non-corrélées
+> trouvées **par token dépensé**. Throughput ↑ · hit-rate ↑ · rigueur de validation INCHANGÉE.
+
+### Les 3 piliers
+
+1. **SOBRIÉTÉ** — pipeline gated, dev inline, **zéro recalcul redondant** : `optimize.py` calcule
+   DÉJÀ bootstrap/MC/PSR/Bonferroni/stress/clustering → `output/robustness_<id>.{json,md}`
+   (`core/optimizer.py:206-303`). On RUN et on LIT — on ne refait JAMAIS ces calculs à la main.
+2. **PERFORMANCE (hit-rate)** — sélection d'idée avant codage (`BACKLOG.md` + red-flags),
+   préférer les variantes d'edges prouvés, breadth via grille walk-forward (1 run), `@quant` pour
+   repêcher les 🟡, fit portefeuille, capitalisation systématique dans `REGISTRE_HYPOTHESES.md`.
+3. **RIGUEUR (non négociable)** — ce qu'on allège = redondance + cérémonie, **jamais la
+   validation**. Gates durs intacts : live-equivalence BLOCANT, `@auditor`, seuils 🟢, Bonferroni.
 
 ### Règles de routage
 
-| Demande de l'utilisateur | Agent à invoquer |
+| Demande de l'utilisateur | Action |
 |---|---|
-| « Développe / crée / teste une stratégie X » | `@athena` (orchestration complète) ou `/new-strategy "X"` (skill direct) |
-| « Recherche / explique / formalise le concept Y » | `@researcher` |
-| « Implémente / backteste cette stratégie » (après formalisation) | `@new-strategy` |
-| « Audite cette stratégie / ce code / ce verdict » | `@auditor` |
-| « Explore visuellement le marché X / trouve-moi un edge » | `python -m core.explore_chart --ticker X --multi-tf` puis `@chartist MODE: idea` |
-| « Audite visuellement les signaux de <strategy_id> » | `@chartist MODE: audit` (warnings → `@auditor`) |
-| « Propose des features pour la stratégie X / quelles features pertinentes ? » | `@quant MODE: catalog` |
-| « Découvre des filtres data-driven sur les trades de <strategy_id> / fais le feature engineering » | `@quant MODE: discover` |
+| « Teste / développe la stratégie X » | **FAST LANE inline** (ou `/new-strategy "X"`). Specialists seulement en deep lane. |
+| « Implémente cette stratégie en isolant le contexte » / dev long ou parallèle | `@new-strategy` (subagent — isole le contexte) |
+| « Audite cette stratégie / ce code / ce verdict » | `@auditor` (lit `summary.json` + `git diff` + `robustness_<id>.json`) |
+| « Découvre des filtres data-driven / repêche ce 🟡 » | `@quant` (mode `discover`, on-demand — voir ci-dessous) |
+| « Quelle idée prioriser ? / ça vaut le coup ? / fit portefeuille ? » | `@athena` (conseil one-shot) |
 | « État du live ? » / « Comment va le compte ? » | `@argus` |
-| « Promeut <strategy_id> en production » | `@forge` (après verdict 🟢 + confirmation) |
-| Question simple (un paramètre, un calcul rapide, lecture d'un log court) | Réponse directe sans subagent |
+| « Promeut <strategy_id> en production » | `@forge` (après verdict 🟢 audité + confirmation par fichier) |
+| Question simple (un param, un calcul, un log court) | Réponse directe sans subagent |
 
-### Pattern d'orchestration ATHENA → [chartist idea] → researcher → [quant catalog] → new-strategy(v1) → [quant discover] → new-strategy(vN+1) → [chartist audit] → auditor
-
-Quand l'utilisateur invoque `@athena`, le flow est en plusieurs tours (étapes chartist **et quant** conditionnelles) :
-
-1. **Tour 1** : invoque `@athena` avec la demande. Athena émet un `PLAN ATHENA` listant les étapes (en précisant si [0.5], [2.5], [3.5], [4.5] sont incluses).
-2. **Tour 2a** *(optionnel — étape [0.5])* : si Athena le demande, exécute `python -m core.explore_chart --ticker <X> --n 10 --multi-tf` puis invoque `@chartist MODE: idea`. Sortie : hypothèses d'edge transmises à @researcher.
-3. **Tour 2** : invoque `@researcher` avec le prompt fourni par Athena.
-4. **Tour 3** : ré-invoque `@athena` (transition + décide [2.5]).
-5. **Tour 3a** *(optionnel — étape [2.5])* : si Athena le demande, invoque `@quant MODE: catalog` pour proposer 5-10 features candidates. Sortie : `output/<id>/quant_catalog.md`.
-6. **Tour 4** : invoque `@new-strategy` pour PHASES 2-3 (scaffold + baseline). Sortie : `output/<id>/full/trades_v1.csv` + summary.json draft.
-7. **Tour 4a** *(conditionnel — étape [3.5], recommandé si baseline 🟡)* : invoque `@quant MODE: discover` pour découvrir des filtres data-driven. Sortie : `output/<id>/quant_patch.py`.
-8. **Tour 4b** *(si patch quant produit avec verdict ≥ MEDIUM)* : ré-invoque `@new-strategy` pour appliquer le patch en vN+1 et poursuivre PHASES 4-8.
-9. **Tour 5** : ré-invoque `@athena` (transition, lit `output/<id>/summary.json`, décide [4.5]).
-10. **Tour 5a** *(CONDITIONNEL — étape [4.5], skip si verdict 🟢 clair)* : si `bootstrap_oos < 80%` OU `pf_oos < 1.5` (verdict non clair), invoque `@chartist MODE: audit`. Sinon **SKIP** (gain ~80-100k tokens).
-11. **Tour 6** : invoque `@auditor` (lit `summary.json` prioritairement, audite `quant_patch.py` si présent).
-12. **Tour final** : ré-invoque `@athena` qui émet le **VERDICT FINAL** et suggère la suite (souvent : appeler FORGE).
-
-**Important** : les subagents ne peuvent pas spawn d'autres subagents — c'est toi (l'orchestrateur) qui chaîne les invocations en suivant les consignes d'Athena.
-
-### Quand invoquer `@chartist`
-
-| Situation | Mode | Décision |
-|---|---|---|
-| Concept ouvert / non formalisé / multi-marché | `idea` | Recommandé en PHASE 0.5 |
-| Concept déjà clair (ex: "ORB pullback NQ 09:30-11:00") | `idea` | Skip — passer direct à `@researcher` |
-| Verdict 🟢 **clair** (bootstrap ≥ 80% AND PF OOS ≥ 1.5) | `audit` | **SKIP** — gain ~80-100k tokens, audit confirmatoire inutile |
-| Verdict 🟢 borderline (bootstrap 80-85% OU PF 1.5-1.6) | `audit` | Exécuter (audit utile) |
-| Verdict 🟡 revendiqué | `audit` | Exécuter (peut basculer 🟢 ou 🔴) |
-| Verdict 🔴 | `audit` | Skip — inutile de challenger un rejet |
-
-Le chartist **ne décide jamais du verdict** : en `idea` il propose des hypothèses à `@researcher`, en `audit` il flag des warnings à `@auditor`.
-
-### Quand invoquer `@quant`
-
-| Situation | Mode | Décision |
-|---|---|---|
-| Concept implique du filtrage conditionnel (régime, timing, microstructure) | `catalog` | Recommandé en PHASE 2.5 avant scaffold |
-| Concept neuf sans héritage prod (pas un variant d'OPR/Fib) | `catalog` | Recommandé en PHASE 2.5 |
-| Simple variant de strat prod (ex: opr-v6) | `catalog` | Skip — features héritées de la prod |
-| Baseline v1 = 🟡 (PF OOS 1.2-1.5, n_oos ≥ 100) | `discover` | **Recommandé** — peut basculer en 🟢 |
-| Baseline v1 = 🟢 borderline (PF 1.5-1.8) | `discover` | Optionnel (amélioration possible) |
-| Baseline v1 = 🔴 dur (PF < 1.0) | `discover` | Skip — problème structurel, pas un filtre |
-| Baseline avec n_oos < 100 trades | `discover` | Skip — ML pas significatif (refusera) |
-
-Le quant **propose** un patch ; `@new-strategy` **applique** le patch en vN+1. Pas d'écriture autonome de fichiers de stratégie.
-
-### Format des outputs de stratégies (nouveau, post-refonte)
-
-Les nouvelles stratégies développées via `@athena` ou `/new-strategy` produisent désormais :
+### Le pipeline gated (source de vérité : `.claude/skills/new-strategy/SKILL.md`)
 
 ```
-output/<strategy_id>/
-  summary.json       ← lu par Athena et Auditor (verdict + métriques structurées)
-  rapport.md         ← résumé 1 page (~80 lignes max) — archivable humain
-  quant_report.md    ← (si PHASE 3.5 exécutée) rapport @quant
-  quant_patch.py     ← (si PHASE 3.5 exécutée) patch appliqué en vN+1
-  full/              ← détails complets (robustness.json, audit_visuel.md, charts/, trades CSV)
+ÉTAPE 0 · SÉLECTION (inline)   BACKLOG.md (P1>P2>P3) + REGISTRE_HYPOTHESES (pas de re-test)
+                               + RED-FLAGS (rejet à coût zéro : indicateur arbitré, event-driven
+                               basse fréq, doublon prod, RR écrasé)
+FAST LANE (inline, défaut)     1. cadrer l'edge (qui paie ? falsifiable ?)
+                               2. scaffold + config.py (variantes → PARAM_GRID = breadth)
+                               3. backtest.py + optimize.py  (robustesse AUTO)
+                               4. lire verdict + robustness_<id>.md
+                               5. GATE : 🔴 → STOP + 1 ligne REGISTRE + mémoire ; 🟡/🟢 → deep lane
+DEEP LANE (survivants)         6. live-equivalence (BLOCANT si feature bougie de fill)
+                               7. [@quant discover si 🟡 + n_oos≥100] tenter 🟡→🟢
+                               8. summary.json + rapport.md court → 9. @auditor → 10. @forge si 🟢
+CAPITALISATION (tous cas)      verdict → REGISTRE_HYPOTHESES.md + statut BACKLOG.md + mémoire
 ```
 
-**Compatibilité ascendante** : les rapports historiques de stratégies abandonnées sont archivés dans `output/archive/<strategy>/` (cf. son `README.md`). Les rapports historiques OPR (`output/rapport_opr-v5.md`, etc.) restent à la racine de `output/` pour traçabilité des promotions.
+Les subagents ne peuvent pas spawn d'autres subagents — c'est toi qui chaînes les invocations.
+
+### Quand invoquer `@quant` (on-demand, moteur de hit-rate)
+
+| Situation | Décision |
+|---|---|
+| Baseline 🟡 (PF OOS 1.2-1.5) **ET** n_oos ≥ 100 | **Recommandé** — un filtre data-driven peut basculer en 🟢 |
+| 🟢 borderline (PF 1.5-1.8) | Optionnel (consolidation) |
+| 🔴 dur (PF < 1.0) **ou** n_oos < 100 | Skip — problème structurel / sample insuffisant (refusera) |
+
+`@quant` **propose** un patch ; tu (ou `@new-strategy`) l'**appliques** en vN+1 *seulement si*
+verdict ≥ MEDIUM. **Si Bonferroni fail (LOW) → rollback** (leçon vwap_pb). Mode `catalog` supprimé.
+
+### Format des outputs de stratégies
+
+- **🔴 (fast lane)** : pas de dossier — **1 ligne** dans `REGISTRE_HYPOTHESES.md` + statut `BACKLOG.md`.
+- **🟡/🟢 (deep lane)** :
+  ```
+  output/<strategy_id>/
+    summary.json   ← input @auditor (schéma allégé, cf. SKILL §8)
+    rapport.md     ← writeup court (~30 lignes)
+    full/          ← trades CSV, robustness_<id>.{json,md} (généré par optimize.py)
+  ```
+- **Capitalisation obligatoire (tous cas)** : `REGISTRE_HYPOTHESES.md` + `BACKLOG.md`.
+
+**Compat ascendante** : rapports historiques (`output/rapport_opr-v5.md`, archives `output/archive/`) inchangés.
+
+### Sélection & capitalisation (Pilier 2 — actifs à brancher)
+
+- `strategie_futur/BACKLOG.md` — idées priorisées P1/P2/P3, **source de vérité** des candidats.
+- `REGISTRE_HYPOTHESES.md` — hypothèses testées 🟢/🟡/🔴 + leçons. **Consulter avant** (ne pas
+  re-tester un mort), **écrire après** (1 ligne par verdict).
+- `docs/strategies_abandoned.md` + mémoire `feedback_strategies_abandoned_lessons` — leçons compactes.
 
 ### Protection automatique de `core/` et `broker/`
 
-Les écritures dans `core/**` et `broker/**` déclenchent un prompt utilisateur (configuré dans `.claude/settings.json`). C'est intentionnel et concerne tous les agents. Seul **FORGE** est censé écrire dans ces zones, et toujours après confirmation explicite.
+Les écritures dans `core/**` et `broker/**` déclenchent un prompt utilisateur (`.claude/settings.json`).
+Intentionnel, concerne tous les agents. Seul **FORGE** écrit dans ces zones, après confirmation explicite.
 
 ### Que faire si...
 
@@ -138,19 +143,23 @@ Les écritures dans `core/**` et `broker/**` déclenchent un prompt utilisateur 
 | Live a décroché (tmux mort) | Invoquer `@argus` pour diagnostic. **Ne pas redémarrer sans confirmation utilisateur.** |
 | Limite Topstep approchée (< 200$) | `@argus` alerte ; tu transmets l'alerte. Ne rien modifier. |
 | Demande de promotion d'une stratégie | Vérifier verdict 🟢 confirmé par `@auditor`, puis invoquer `@forge`. **Confirmation explicite requise pour chaque fichier touché.** |
-| Modification suggérée d'un paramètre prod | Backtest préalable via `@new-strategy` ou `@athena`. Pas d'écriture directe dans `config.py` pour des paramètres prod actifs. |
+| Modification suggérée d'un paramètre prod | Backtest préalable (fast lane). Pas d'écriture directe dans `config.py` pour des paramètres prod actifs. |
 | Erreur API ProjectX répétée | Logger la trace, ne pas retenter automatiquement, attendre l'utilisateur. |
 | Données manquantes (CSV) | Vérifier `data/` et relancer `python scripts/import_backtest_data.py` depuis `DATA_BACKTEST/`. Pas de remplissage automatique de gaps. |
-| L'utilisateur veut une exploration parallèle / débat contradictoire | Proposer une **agent team** (3-5 teammates basés sur les subagents). Mode expérimental activé via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` dans settings. |
+| L'utilisateur veut une exploration parallèle / débat contradictoire | Proposer une **agent team** (teammates basés sur les subagents restants). Mode expérimental `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. |
 
 ---
 
 ## Skill `/new-strategy` (invocation directe)
 
-Le skill `/new-strategy "<description>"` reste disponible pour invocation **directe** par l'utilisateur (sans passer par Athena). Il exécute le même pipeline (PHASES 0.5 → 8, dont **0.5 et 6.5 (chartist)** et **2.5 et 3.5 (@quant)** sont optionnelles/conditionnelles) que le subagent `@new-strategy`. Source de vérité unique : `.claude/skills/new-strategy/SKILL.md`.
+Le skill `/new-strategy "<description>"` exécute le pipeline gated (ÉTAPE 0 → FAST LANE → GATE →
+DEEP LANE → CAPITALISATION) en isolant le contexte. Source de vérité unique :
+`.claude/skills/new-strategy/SKILL.md`.
 
-- Préférer `@athena` quand on veut le **pipeline complet avec audit** (researcher + dev + auditor).
-- Préférer `/new-strategy "..."` quand l'utilisateur veut **directement développer** une idée déjà formalisée et fait confiance au pipeline autonome.
+- **Par défaut, fais la FAST LANE inline** (sans subagent) — c'est le plus sobre en tokens.
+- Utilise `/new-strategy "..."` ou `@new-strategy` quand tu veux **isoler le contexte** (dev long,
+  plusieurs tests en parallèle).
+- `@auditor` (deep lane) et `@forge` (promotion) restent invoqués séparément après le gate.
 
 ---
 
@@ -246,36 +255,34 @@ topstep_signals/
 
 ## Commandes
 
+> Noms de stratégie = registry auto-discovery (`python backtest.py --list`). Actuels :
+> `opr`, `opr_v5_1`, `fib_v4`, `fib_fine`, `vwap_pb`, `pdh_pdl_retest`, … ou `all`.
+
 ### Backtest
 ```bash
-python backtest.py --strategy opr --csv-dir ./data
-python backtest.py --strategy fib --csv-dir ./data --ticker NQ1
-python backtest.py --strategy all --csv-dir ./data          # opr + fib
-python backtest.py --strategy opr --csv-dir ./data --plot   # + 10 charts aléatoires
-python backtest.py --strategy opr --live --bars 15000       # données TradingView
+python backtest.py --strategy opr    --csv-dir ./data
+python backtest.py --strategy fib_v4 --csv-dir ./data --ticker NQ1
+python backtest.py --strategy all    --csv-dir ./data          # toutes les stratégies du registry
+python backtest.py --strategy opr    --csv-dir ./data --plot   # + 10 charts aléatoires
+python backtest.py --strategy opr    --live --bars 15000       # données TradingView
 ```
 
-### Optimisation walk-forward
+### Optimisation walk-forward (génère output/robustness_<id>.{json,md} si n_oos suffisant)
 ```bash
-python optimize.py --strategy opr --csv-dir ./data
-python optimize.py --strategy fib --csv-dir ./data --ticker NQ1
-python optimize.py --strategy all --csv-dir ./data
-python optimize.py --strategy opr --csv-dir ./data --is-end 2025-09-30
+python optimize.py --strategy opr    --csv-dir ./data
+python optimize.py --strategy fib_v4 --csv-dir ./data --ticker NQ1
+python optimize.py --strategy all    --csv-dir ./data
+python optimize.py --strategy opr    --csv-dir ./data --is-end 2025-09-30
 ```
 
-### Idéation visuelle (PHASE 0.5)
+### Exploration visuelle manuelle (optionnelle — coup d'œil humain)
+> Outil CLI autonome conservé pour un coup d'œil ponctuel (plus d'agent chartist). À utiliser
+> à la demande, pas dans le pipeline par défaut (charts coûteux en tokens si lus par un agent).
 ```bash
-# Mono-TF (15m uniquement) — 20 jours stratifiés par régime
-python -m core.explore_chart --ticker NQ1 --n 20
-
-# Multi-TF (trio 15m + H1 + D1 par jour) — recommandé pour ICT, Wyckoff
-python -m core.explore_chart --ticker NQ1 --n 10 --multi-tf
-
-# Échantillonnage aléatoire (au lieu de stratifié par régime)
+python -m core.explore_chart --ticker NQ1 --n 20                    # mono-TF 15m, stratifié régime
+python -m core.explore_chart --ticker NQ1 --n 10 --multi-tf         # trio 15m + H1 + D1
 python -m core.explore_chart --ticker MES1 --stratify random --seed 7
-
-# Sortie : output/explore/<TICKER>/<YYYY-MM-DD>_<TF>.png
-# Régimes classifiés : trending / ranging / macro / vol_h / vol_b / mixed
+# Sortie : output/explore/<TICKER>/<YYYY-MM-DD>_<TF>.png  (régimes : trending/ranging/macro/vol_h/vol_b/mixed)
 ```
 
 ### Production (live)
