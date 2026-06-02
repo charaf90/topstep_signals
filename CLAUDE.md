@@ -169,6 +169,11 @@ Le skill `/new-strategy "<description>"` reste disponible pour invocation **dire
   - MES1 → `opr-v4` (pass-through, ML non significatif)
 - **Fib `fib-v4`** — Retracement Fibonacci data-driven (3 cellules 🟢) : MES1 + NQ1 + MGC1 (Gold).
   Invalidation pivot break + wick excess intra-bar via M1Buffer. Plus aucun fallback fib-v3.
+- **Fib `fib-fine-v2`** — Retracement Fibonacci NATIF M5, filtre causal d'expansion de
+  volatilité (look-ahead retiré). Univers live NQ1 + MES1 (cœur 🟢, sizing $130).
+  **Promu 2026-06-02, flag `FIB_FINE_ENABLED=False` (OFF) — inerte jusqu'à activation
+  + restart délibéré.** Indépendant de fib-v4 (clés strategy distinctes, TF M5).
+  Barres M5 en REST dédié (`_fetch_bars_m5`), pas de M1Buffer.
 
 > Stratégies abandonnées (cf. `docs/strategies_abandoned.md` et `output/archive/`) :
 > fib-v3, VPC, ARF, SMC v1, opr-h4, kijun-pb.
@@ -458,6 +463,26 @@ OOS oct 2025 → mai 2026.
 P&L OOS portefeuille : **+$5,234** (vs fib-v3 +$3,287 sur même période = +$1,947).
 
 Cf. `output/rapport_fib-v4.md`, `output/robustness_fib-v4.md`.
+
+### Fib fib-fine-v2 (promu 2026-06-02 — flag OFF)
+
+Retracement Fibonacci NATIF M5. Filtre wick look-ahead retiré, remplacé par filtre
+CAUSAL d'expansion de volatilité (`atr_ratio_sl >= 1.0`, seuil fixe pré-spécifié,
+lu sur barre M5 i-1). OOS oct 2025 → mars 2026.
+
+| Ticker | TF | PF OOS | n_oos | Sizing |
+|---|---|---|---|---|
+| NQ1 | M5 | **2.41** | 57 | $130 |
+| MES1 | M5 | **1.47** | 105 | $130 |
+| **Portfolio** | M5 | **1.63** | — | bootstrap 99.6% |
+
+P&L OOS portefeuille : **+$6,029**. Replay portefeuille : **0 breach**, DD incrémental
+**+$187**. Univers live initial = NQ1 + MES1 (cœur 🟢). MGC1 (bonus 🟡 OOS-only) et YM1
+(mirage look-ahead) EXCLUS. **Audit visuel sauté (assumé par l'utilisateur).**
+
+Promu flag `FIB_FINE_ENABLED=False` (OFF) : code live inerte tant que le flag n'est pas
+passé à `True` + restart délibéré. Indépendant de fib-v4 (clés strategy distinctes).
+Cf. `core/fib_fine_v2.py`, `strategies/fib_fine.py`.
 
 ---
 

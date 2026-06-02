@@ -37,6 +37,10 @@ from config import (
     CHALLENGE_ADAPTIVE_SIZING_ENABLED,
     CHALLENGE_BYPASS_USER_DAILY_LIMIT,
     CHALLENGE_NOTIFY_OVERRIDE_THRESHOLD_USD,
+    FIB_FINE_ENABLED,
+    FIB_FINE_LIVE_M5_WARMUP_BARS,
+    FIB_FINE_LIVE_TICKERS,
+    FIB_FINE_STRUCT_PER_TF,
     FIB_MAX_HOLD_BARS,
     FIB_V4_ENABLED,
     FIB_V4_TICKERS,
@@ -73,6 +77,7 @@ from config import (
 )
 from core.adaptive_sizing import adaptive_risk_usd
 from core.event_logger import EventLogger
+from core.fib_fine_v2 import get_fib_fine_live_signal
 from core.opr_v5_1 import get_opr_v5_1_live_signals
 from core.risk_portfolio import PortfolioRiskManager, _Order
 from core.signal_selector import filter_correlated_signals
@@ -313,6 +318,11 @@ class SessionRunner:
             for t in FIB_V4_TICKERS:
                 if t not in tickers:
                     tickers.append(t)
+        # Tickers couverts par fib-fine-v2 (NQ1/MES1 déjà inclus ; flag OFF par défaut).
+        if FIB_FINE_ENABLED:
+            for t in FIB_FINE_LIVE_TICKERS:
+                if t not in tickers:
+                    tickers.append(t)
         return tickers
 
     # ─────────────────────────────────────────────────────────────────────
@@ -451,6 +461,46 @@ class SessionRunner:
         )
         return df
 
+    def _fetch_bars_m5(
+        self, ticker: str, n_bars: int = FIB_FINE_LIVE_M5_WARMUP_BARS
+    ) -> pd.DataFrame | None:
+        """
+        Fetch les n_bars dernières barres M5 depuis l'API ProjectX (fib-fine-v2).
+
+        Calqué sur `_fetch_bars` mais en unité M5 (unit=2, unit_number=5). Source
+        DÉDIÉE fib-fine (FIB_FINE_LIVE_BARS_SOURCE="rest") — aucune dépendance au
+        M1Buffer (le filtre causal atr_ratio_sl ne lit que des barres M5 closes).
+        Retourne un DataFrame UTC naïf de barres CLÔTURÉES (include_partial=False).
+        """
+        cid = self._contract_id(ticker)
+        if cid is None:
+            _log.error("Pas de contractId pour %s — impossible de fetcher M5", ticker)
+            return None
+
+        now = datetime.utcnow()
+        # ~12 barres M5/heure, ~23 h de marché/jour → ~276 barres/jour. On remonte
+        # large pour couvrir n_bars (warmup EMA200 M5 + pivots).
+        start = now - timedelta(days=max(1, n_bars // 200))
+        bars = self.client.get_bars(
+            contract_id=cid,
+            start_dt=start,
+            end_dt=now,
+            unit=2,  # Minute
+            unit_number=5,
+            limit=n_bars,
+            live=self.live_mode,
+            include_partial=False,
+        )
+        if not bars:
+            _log.warning("Aucune barre M5 reçue pour %s", ticker)
+            return None
+
+        df = _bars_to_df(bars)
+        _log.debug(
+            "%s : %d barres M5 chargées (de %s à %s)", ticker, len(df), df.index[0], df.index[-1]
+        )
+        return df
+
     # ─────────────────────────────────────────────────────────────────────
     # Détection des signaux stratégie
     # ─────────────────────────────────────────────────────────────────────
@@ -575,6 +625,66 @@ class SessionRunner:
                 "tag": tag,
                 "ticker": ticker,
                 "reason": live_state.get("reason", "fib-v4 wick excess"),
+            }
+
+        # ACTIVE : broker gère via brackets — rien à faire ici
+        return None
+
+    def _get_fib_fine_signal(self, ticker: str) -> dict | None:
+        """
+        Appelle get_fib_fine_live_signal (fib-fine-v2, M5) et retourne le signal
+        ou une action d'annulation.
+
+        Calqué sur `_get_fib_v4_signal` mais :
+          • barres M5 fetchées en REST dédié (_fetch_bars_m5), pas le df M15.
+          • strategy="FIB_FINE" posé par core.fib_fine_v2 → chemins SÉPARÉS de
+            fib-v4 (event_logger, signal_selector, time-stop _sync_broker).
+          • pas d'état "CANCEL_FILL" (filtre wick neutralisé en v2, filtre causal).
+
+        Retourne :
+          • None si rien d'actif (flag OFF, ticker hors univers, ACTIVE géré
+            broker-side, ou erreur).
+          • dict signal "à placer" si state == "PENDING" (avec tag FIBFINE_...).
+          • dict {"_action": "cancel", "tag": ...} si state == "CANCEL"
+            (pivot break sur M5 closes pendant la phase pending).
+        """
+        if not FIB_FINE_ENABLED:
+            return None
+        if ticker not in FIB_FINE_LIVE_TICKERS:
+            return None
+
+        try:
+            df_m5 = self._fetch_bars_m5(ticker)
+        except Exception as exc:
+            _log.error("_fetch_bars_m5 %s échoué : %s", ticker, exc)
+            return None
+        if df_m5 is None or df_m5.empty:
+            return None
+
+        try:
+            live_state = get_fib_fine_live_signal(df_m5, ticker)
+        except Exception as exc:
+            _log.error("get_fib_fine_live_signal %s échoué : %s", ticker, exc)
+            return None
+
+        if live_state is None:
+            return None
+
+        state = live_state["state"]
+        sig = live_state["signal"]
+        imp_key = live_state["impulse_key"]
+        today = _current_day_ny(datetime.utcnow()).strftime("%Y%m%d")
+        tag = f"FIBFINE_{ticker}_{today}_{imp_key}"
+
+        if state == "PENDING":
+            return {**sig, "tag": tag}
+
+        if state == "CANCEL":
+            return {
+                "_action": "cancel",
+                "tag": tag,
+                "ticker": ticker,
+                "reason": live_state.get("reason", "fib-fine invalidation"),
             }
 
         # ACTIVE : broker gère via brackets — rien à faire ici
@@ -943,6 +1053,19 @@ class SessionRunner:
                         elapsed_bars = int((now_utc - fill_dt).total_seconds() / 900)
                         if elapsed_bars >= FIB_MAX_HOLD_BARS:
                             self._close_position_market(tag, info, now_utc)
+                    elif ft_iso and strat == "FIB_FINE":
+                        # Time-stop fib-fine-v2 (intraday) : barre M5 = 300 s, et
+                        # max_hold_bars M5 dédié (cf. FIB_FINE_STRUCT_PER_TF["m5"]).
+                        # Fidèle au backtest qui produit un TE après max_hold_bars
+                        # OU au changement de jour NY.
+                        fill_dt = datetime.fromisoformat(ft_iso.replace("Z", "+00:00")).replace(
+                            tzinfo=None
+                        )
+                        elapsed_bars = int((now_utc - fill_dt).total_seconds() / 300)
+                        max_hold = FIB_FINE_STRUCT_PER_TF["m5"]["max_hold_bars"]
+                        new_day = _current_day_ny(now_utc) != _current_day_ny(fill_dt)
+                        if elapsed_bars >= max_hold or new_day:
+                            self._close_position_market(tag, info, now_utc)
                     continue
 
                 # Position disparue → clôturée (TP/SL/TE/market)
@@ -1105,6 +1228,39 @@ class SessionRunner:
                 tag,
                 action.get("reason", "fib-v4 wick excess intra-bar"),
             )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Helper fib-fine-v2 — invalidation pivot break (CANCEL)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _handle_fib_fine_cancel(self, action: dict):
+        """
+        fib-fine-v2 invalidation pendant la phase PENDING (pivot break mesuré sur
+        barres M5 closes) : annule l'ordre limite côté broker et passe le tag local
+        en CANCELLED.
+
+        Calqué sur `_handle_fib_v4_cancel`. No-op si :
+          • le tag n'existe pas dans state["placed_tags"] (signal pas placé)
+          • le tag n'est pas PENDING (état terminal local)
+        """
+        tag = action["tag"]
+        placed = self.state.get("placed_tags", {})
+        info = placed.get(tag)
+        if info is None or info.get("status") != _ST_PENDING:
+            return
+
+        order_id = info.get("order_id", -1)
+        if not self.dry_run and order_id and order_id > 0:
+            try:
+                self.client.cancel_order(self.account_id, order_id)
+            except Exception as exc:
+                _log.warning("[%s] cancel_order API échec : %s", tag, exc)
+
+        self._handle_cancel_transition(
+            tag,
+            info,
+            reason=action.get("reason", "fib-fine invalidation pivot break"),
+        )
 
     # ─────────────────────────────────────────────────────────────────────
     # Realtime — drain + dispatch events SignalR
@@ -1695,6 +1851,18 @@ class SessionRunner:
                         self._handle_fib_v4_cancel(sig)
                     elif action == "cancel_fill":
                         self._handle_fib_v4_cancel_fill(sig, now_utc=datetime.utcnow())
+                    elif not self._already_placed(sig["tag"]):
+                        new_signals.append(sig)
+
+            # fib-fine-v2 — NQ1, MES1 (cf. FIB_FINE_LIVE_TICKERS ; flag OFF par
+            # défaut). Barres M5 fetchées en REST dédié (_fetch_bars_m5) — n'utilise
+            # PAS le df M15 ci-dessus. Chemin entièrement séparé d'OPR/fib-v4.
+            if FIB_FINE_ENABLED and ticker in FIB_FINE_LIVE_TICKERS:
+                sig = self._get_fib_fine_signal(ticker)
+                if sig is not None:
+                    action = sig.get("_action")
+                    if action == "cancel":
+                        self._handle_fib_fine_cancel(sig)
                     elif not self._already_placed(sig["tag"]):
                         new_signals.append(sig)
 

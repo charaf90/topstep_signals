@@ -1324,3 +1324,305 @@ PDH_PDL_PARAM_GRID = {
     "tp_rr": [1.5, 2.0, 2.5],
     "max_retest_bars": [4, 8, 16],
 }
+
+# ==============================================================================
+# STRATÉGIE XMKT-RV (dislocation inter-marché NQ/ES/YM — relative-value M1)
+# ==============================================================================
+# Concept : NQ1, MES1 (ES) et YM1 partagent un facteur macro commun → leurs
+# rendements log M1 sont très corrélés (corr observée : NQ-ES 0.95, ES-YM 0.89,
+# NQ-YM 0.79). Le bruit de microstructure crée des désynchronisations
+# transitoires (lead-lag). Quand la jambe exécutée s'écarte de son marché de
+# référence au-delà d'une bande (Z-score d'un spread résiduel beta-ajusté), on
+# parie sur le réalignement (index-arbitrage / réversion) en tradant la jambe
+# laggard dans le sens du catch-up.
+#
+# Edge : qui paie ? Les liquidity-takers qui poussent une jambe au-delà de son
+# fair-value relatif (impulsion momentum mono-instrument). Le market-making
+# cross-asset et l'index-arbitrage HFT réalignent en secondes/minutes ; on
+# capte la queue lente de ce réalignement à l'échelle M1.
+#
+# Falsification : si en OOS les entrées |Z|>seuil ne reversent pas (Z continue
+# à s'étendre plus souvent qu'il ne revient), l'edge n'existe pas → rejet.
+#
+# DATA : M1 dans DATA_BACKTEST/{NQ1,MES1,YM1}_data_m1.csv,
+#        couverture 2025-02-16 → 2026-03-02 (~12,5 mois, historique RÉDUIT).
+#        Inner-join sur timestamp. RTH NY uniquement, aucun overnight.
+# ------------------------------------------------------------------------------
+XMKT_STRATEGY_VERSION = "xmkt-rv-v1"
+XMKT_TICKERS = ["NQ1", "MES1", "YM1"]
+
+# ── Marché de référence par jambe exécutée (régression r_leg ~ r_ref) ─────────
+# Choix ancré sur la corrélation observée (cf. probe data quality) :
+#   NQ1 régressé sur ES (la plus corrélée, 0.948)
+#   MES1 régressé sur NQ (0.948)
+#   YM1  régressé sur ES (0.894)
+XMKT_REF_PAIR = {
+    "NQ1": "MES1",
+    "MES1": "NQ1",
+    "YM1": "MES1",
+}
+
+# ── Fenêtres roulantes (en barres M1) ─────────────────────────────────────────
+# XMKT_BETA_WINDOW : fenêtre de la régression rolling r_leg ~ r_ref (beta lead-lag)
+# XMKT_Z_WINDOW    : fenêtre du Z-score du spread résiduel cumulé
+XMKT_BETA_WINDOW = 60  # 60 min — beta stable intraday
+XMKT_Z_WINDOW = 30  # 30 min — bande de réversion courte
+
+# ── Seuils de décision (Z-score) ──────────────────────────────────────────────
+XMKT_Z_ENTRY = 2.0  # |Z| > entrée → dislocation tradable
+XMKT_Z_EXIT = 0.5  # |Z| <= sortie → réversion atteinte (take profit logique)
+XMKT_Z_STOP = 3.5  # |Z| >= stop → continuation (la dislocation s'aggrave) → SL
+
+# ── Gestion du temps ──────────────────────────────────────────────────────────
+XMKT_TIME_STOP_MIN = 30  # time-stop en minutes (réversion intraday rapide)
+XMKT_HOUR_START_NY = 9.5  # 09:30 NY (RTH open)
+XMKT_HOUR_END_NY = 15.5  # 15:30 NY — pas de nouvelle entrée après (EOD flat 16:00)
+XMKT_EOD_FLAT_HOUR_NY = 16.0  # clôture forcée RTH — aucun overnight
+
+XMKT_MAX_TRADES_PER_DAY = 4  # par actif (M1 → fréquence plus élevée tolérée)
+
+# ── Neutralisation des artefacts de roll / overnight ──────────────────────────
+# Les contrats continus back-adjustés créent de faux spikes de rendement aux
+# frontières de roll trimestriel (mars/juin/sept/déc) et aux coupures de session.
+# Traitement :
+#   1. Tout rendement traversant une coupure de session (barre M1 non
+#      consécutive à la précédente, gap > XMKT_SESSION_GAP_SEC) est mis à 0.
+#   2. Winsorisation des rendements log à ±XMKT_WINSOR_SIGMA × σ_rolling.
+# Un edge qui dépend de ces spikes serait un artefact → éliminé par construction.
+XMKT_SESSION_GAP_SEC = 60  # barres M1 espacées de >60s = coupure de session
+XMKT_WINSOR_SIGMA = 6.0  # cap des rendements à 6σ rolling
+XMKT_WINSOR_WINDOW = 120  # fenêtre du σ pour la winsorisation (min)
+
+# ── Sizing ────────────────────────────────────────────────────────────────────
+# Risque dollar par trade : RISK_PER_TRADE_USD (global). La distance de stop
+# en relative-value n'est pas un prix fixe (sortie sur Z), donc on borne le SL
+# physique via XMKT_HARD_SL_ATR (ATR M1 multiple) pour le sizing et un garde-fou
+# catastrophe (gap brutal du sous-jacent).
+XMKT_HARD_SL_ATR = 4.0  # SL physique de secours = 4 × ATR(14) M1 de la jambe
+XMKT_ATR_PERIOD = 14  # période ATR M1
+
+# ── Walk-forward (historique M1 réduit : IS fév→sept 2025, OOS oct 2025→mars 2026)
+XMKT_IS_END = "2025-09-30"
+XMKT_OOS_START = "2025-10-01"
+
+# ── Grille d'optimisation (PHASE 4) ───────────────────────────────────────────
+# 4 dimensions : 3 × 3 × 3 × 3 = 81 combos.
+# Bonferroni : p_seuil = 0.05 / 81 = 0.000617.
+# Justification des bornes :
+#   z_entry  : [1.75, 2.0, 2.5]  — bande de dislocation (sous 1.75 = bruit)
+#   z_exit   : [0.0, 0.5, 1.0]   — cible de réversion (0 = retour fair-value)
+#   z_window : [20, 30, 45]      — horizon de réversion (min)
+#   time_stop: [20, 30, 45]      — durée max de tenue (min)
+XMKT_PARAM_GRID = {
+    "z_entry": [1.75, 2.0, 2.5],
+    "z_exit": [0.0, 0.5, 1.0],
+    "z_window": [20, 30, 45],
+    "time_stop": [20, 30, 45],
+}
+
+# ==============================================================================
+# STRATÉGIE FIB-FINE — retracement Fibonacci NATIF sur timeframe fin (M1 / M5)
+# ==============================================================================
+# Mirror data-driven de fib-v4 (continuation sur retracement Fib), mais TOUTE la
+# structure (impulsion, pivots, niveaux, entrée, invalidation, sortie) est
+# détectée sur un timeframe FIN. Le timeframe est un PARAMÈTRE (`m1`/`m5`) afin
+# de lancer la MÊME logique sur les deux résolutions et comparer l'edge NET.
+#
+# Objectif central : déterminer si une Fib détectée nativement sur TF fin bat /
+# complète le fib-v4 M15 prod, et laquelle des deux résolutions (M1 vs M5) donne
+# le meilleur edge NET (les frictions par trade pèsent proportionnellement plus
+# lourd sur des targets plus petits).
+#
+# Caveats données (cf. rapport) :
+#   • M1 : DATA_BACKTEST/{NQ1,MES1,YM1}_data_m1.csv — 2025-02-16 → 2026-03-02.
+#   • M5 natif : data/{TICKER}_data_m5.csv — 2025-10-19 → 2026-05-15 (OOS-only).
+#   • Pour la comparaison à PÉRIMÈTRE ÉGAL, le M5 est RESAMPLÉ depuis le M1
+#     (même back-adjustment, même fenêtre). Le M5 natif sert au bonus robustesse.
+#   • Rolls trimestriels : un saut de prix bar-to-bar > FIB_FINE_ROLL_GAP_PCT
+#     neutralise le swing chevauchant (faux swing d'impulsion).
+# ==============================================================================
+FIB_FINE_STRATEGY_VERSION = "fib-fine-v2"
+
+# Timeframe par défaut du backtest (surchargeable via params["timeframe"]).
+# v2 : M5 UNIQUEMENT (les *_m1 sont tués par les frictions, PF NET <= 0.76 —
+# abandon confirmé par @quant discover 2026-06-01). Le runner backtest.py
+# utilise FIB_FINE_DEFAULT_TF.
+FIB_FINE_DEFAULT_TF = "m5"
+
+# Univers v2 (réduit, justifié @quant) : NQ1 + MES1 + MGC1 en M5.
+#   • YM1 RETIRÉ : son edge v1 était un MIRAGE look-ahead (wick complet de la
+#     barre de fill) ; après filtre causal, OOS reste plat (1.01 -> 1.08) → pas
+#     d'edge récupérable. Ne PAS le réintroduire sans preuve OOS causale.
+#   • M1 RETIRÉ : frictions par trade trop lourdes sur targets fins.
+# NQ1/MES1 : M5 resamplé depuis le M1 DATA_BACKTEST (a un IS fév-sep 2025 + un
+# OOS oct 2025-mars 2026 → walk-forward propre).
+# MGC1 : M5 NATIF (data/MGC1_data_m5.csv) couverture oct 2025 → mai 2026 =
+# OOS-PUR (aucun IS) → cellule de confiance MOINDRE (cf. caveat rapport).
+FIB_FINE_TICKERS = ["NQ1", "MES1", "MGC1"]
+
+# Source de données PAR ticker pour le chargement du M5 fin (cf. caveats data).
+#   resampled : M5 reconstruit depuis le M1 DATA_BACKTEST (a un IS).
+#   native    : CSV M5 natif data/{TICKER}_data_m5.csv (OOS-only pour MGC1).
+FIB_FINE_SOURCE_PER_TICKER = {
+    "NQ1": "resampled",
+    "MES1": "resampled",
+    "MGC1": "native",  # pas de M1 MGC1 → seul M5 natif disponible (OOS-only)
+}
+
+# ── Structure de détection (cohérent avec fib-v4, adapté au nombre de barres) ──
+# En TF fin, on garde la même logique de pivots/impulse mais les périodes en
+# BARRES doivent couvrir une durée comparable. On exprime donc les périodes
+# structurelles PAR timeframe (m1 ≈ 5× plus de barres que m5 pour une même durée).
+FIB_FINE_ATR_PERIOD = 14
+FIB_FINE_EMA_FAST_PERIOD = 50
+FIB_FINE_EMA_SLOW_PERIOD = 200
+FIB_FINE_ADX_PERIOD = 14
+FIB_FINE_ADX_TREND_THRESHOLD = 20.0
+
+# Pivots left/right, impulse lookback/max-bars, timeouts — PAR timeframe.
+# Choisis pour couvrir ~ la même durée physique qu'en M15 (pivot 8 barres M15 =
+# 120 min ; en m5 = 24 barres, en m1 = 120 barres → on borne pour rester sobre).
+FIB_FINE_STRUCT_PER_TF = {
+    "m5": {
+        "pivot_left": 6,
+        "pivot_right": 6,
+        "impulse_lookback": 60,  # ~5 h
+        "max_impulse_bars": 40,  # ~3,3 h
+        "order_timeout_bars": 24,  # ~2 h pour fill
+        "max_hold_bars": 60,  # ~5 h (intraday, time-stop)
+    },
+    "m1": {
+        "pivot_left": 15,
+        "pivot_right": 15,
+        "impulse_lookback": 240,  # ~4 h
+        "max_impulse_bars": 150,  # ~2,5 h
+        "order_timeout_bars": 90,  # ~1,5 h pour fill
+        "max_hold_bars": 240,  # ~4 h (intraday, time-stop)
+    },
+}
+
+# ── Paramètres data-driven PER-TICKER (mirror fib-v4) ──────────────────────────
+# Niveau Fib retenu par ticker (data-driven en PHASE 4 ; défaut 0.382 = réf prod).
+FIB_FINE_LEVEL_PER_TICKER = {"NQ1": 0.382, "MES1": 0.382, "YM1": 0.382, "MGC1": 0.500}
+
+# SL/TP en multiples d'ATR (du TF fin) — défaut hérité de fib-v4, raffiné PHASE 4.
+FIB_FINE_SL_ATR_MULT_PER_TICKER = {"NQ1": 1.50, "MES1": 0.75, "YM1": 1.00, "MGC1": 1.00}
+FIB_FINE_TP_ATR_MULT_PER_TICKER = {"NQ1": 1.50, "MES1": 1.50, "YM1": 2.00, "MGC1": 1.50}
+
+# Taille minimale de l'impulse en ATR (filtre faux swings). Plus élevé en TF fin
+# pour exiger une impulse significative et limiter le bruit.
+FIB_FINE_MIN_IMPULSE_ATR_PER_TICKER = {"NQ1": 1.50, "MES1": 1.50, "YM1": 2.00, "MGC1": 1.50}
+
+# ── v2 : filtre wick NEUTRALISÉ (était LOOK-AHEAD) ─────────────────────────────
+# Le filtre wick_through_atr v1 lisait la mèche COMPLÈTE de la barre de FILL
+# (low/high finaux) = information NON observable en live à l'instant où le broker
+# fille l'ordre limite intra-bar. C'était le blocant #1 de l'audit. Il est
+# NEUTRALISÉ (1e9 = inactif) et remplacé par le filtre causal d'expansion de
+# volatilité ci-dessous. La colonne wick reste écrite (NaN) pour compat schéma.
+FIB_FINE_WICK_THROUGH_MAX_ATR_PER_TICKER = {"NQ1": 1e9, "MES1": 1e9, "YM1": 1e9, "MGC1": 1e9}
+
+# ── v2 : filtre CAUSAL d'expansion de volatilité (remplace le wick look-ahead) ─
+# atr_ratio_sl = compute_atr(df, 5).iloc[fill_i-1] / atr_a_l_armement.
+# On ne garde l'entrée que si ce ratio >= seuil. Le seuil est FIXE (1.0), PRÉ-
+# SPÉCIFIÉ par @quant (1 test parmi 3 hypothèses pré-déclarées, Bonferroni 0.0167,
+# perm-test pooled m5 indices p=0.002 PASS, stable IS->OOS). Aucun degré de
+# liberté de calibrage — l'optimiser serait du p-hacking : NE PAS le mettre dans
+# la PARAM_GRID. Causalité : volatilité court terme >= volatilité d'armement →
+# l'impulsion garde de l'énergie → continuation atteint le TP avant un stop pris
+# dans un range mou. Lecture sur barre i-1 (clôturée AVANT le fill) → no look-ahead.
+# 0.0 / None = filtre inactif (YM1 absent = volontairement exclu de l'univers v2).
+FIB_FINE_ATR_EXPANSION_PERIOD = 5  # ATR court terme (barres clôturées)
+FIB_FINE_ATR_EXPANSION_MIN_PER_TICKER = {
+    "NQ1": 1.0,  # robuste m5 (gain IS + OOS)
+    "MES1": 1.0,  # récupération partielle m5 (causale)
+    "MGC1": 1.0,  # boost m5 (mais data OOS-only → confiance moindre)
+}
+
+# Buffer pivot break en ATR : annule le pending si le prix casse le pivot
+# d'impulse au-delà du buffer. 0.0 = strict.
+FIB_FINE_PIVOT_BREAK_BUFFER_ATR_PER_TICKER = {"NQ1": 0.0, "MES1": 0.0, "YM1": 0.0, "MGC1": 0.0}
+
+# Skip jours macro (FOMC/CPI/NFP/JOLTS) par ticker. True pour Gold (parité v4).
+FIB_FINE_SKIP_MACRO_PER_TICKER = {"NQ1": False, "MES1": False, "YM1": False, "MGC1": True}
+
+# ── v2 : Session horaire DST-AWARE (heures NY, America/New_York) ───────────────
+# CORRECTION AUDIT : la session v1 était filtrée en heures UTC FIXES → glisse 1h
+# entre hiver (EST) et été (EDT). v2 convertit l'index en heure NY via
+# zoneinfo("America/New_York") (pattern projet, cf. core/opr.py) et filtre sur
+# l'heure NY. Les fenêtres sont exprimées en (heure_début_NY, heure_fin_NY).
+# us_session 9h-17h NY = RTH 9:30-16:00 + marge ; no_nuit = journée NY hors nuit.
+FIB_FINE_SESSION_WINDOWS_NY = {
+    "us_session": (9, 17),  # 9h-17h NY (couvre RTH 9:30-16:00)
+    "no_nuit": (4, 17),  # 4h-17h NY (pré-marché US + RTH)
+    "europe_us": (3, 13),  # ~Europe + ouverture US (heure NY)
+    "all": (0, 24),
+}
+FIB_FINE_SESSION_PER_TICKER = {
+    "NQ1": "us_session",  # 9h-17h NY
+    "MES1": "no_nuit",  # 4h-17h NY
+    "YM1": "us_session",  # (hors univers v2, conservé pour compat)
+    "MGC1": "us_session",  # 9h-17h NY
+}
+
+# Neutralisation des rolls : saut de prix close-to-close > ce % entre deux barres
+# consécutives → tout swing dont l'intervalle contient ce gap est rejeté (faux
+# swing d'impulsion fabriqué par le roll/back-adjust). 1,5 % = bien au-dessus du
+# bruit intraday normal mais en dessous des journées extrêmes (avr 2025 ~4 %).
+FIB_FINE_ROLL_GAP_PCT = 0.015
+
+# ── v2 : Sizing risk-per-trade dédié (correction Topstep MC DD) ────────────────
+# CORRECTION AUDIT : au sizing nominal RISK_PER_TRADE_USD = $200, le MC P95 DD de
+# l'univers v2 dépassait la limite trailing Topstep (-$2000). On dimensionne donc
+# fib-fine-v2 avec un risk-per-trade RÉDUIT, calibré pour que le MC P95 DD reste
+# sous la limite. None = utilise le nominal global RISK_PER_TRADE_USD ($200).
+# Valeur calibrée en PHASE 5 (Monte-Carlo) ci-dessous.
+FIB_FINE_RISK_PER_TRADE_USD = 130  # calibré PHASE 5 : MC P95 DD < -$2000 Topstep
+
+# ── Walk-forward (dates fixes projet) ──────────────────────────────────────────
+# NQ1/MES1 : M5 resamplé depuis M1 (fév 2025 → mars 2026) → IS + OOS propres.
+# MGC1     : M5 natif (oct 2025 → mai 2026) = OOS-PUR (aucune barre avant IS_END)
+#            → la stabilité IS→OOS de MGC1 ne peut PAS être validée (caveat).
+FIB_FINE_IS_END = "2025-09-30"
+FIB_FINE_OOS_START = "2025-10-01"
+
+# ── Grille d'optimisation (PHASE 4) — v2 ──────────────────────────────────────
+# 2 dimensions data-driven (≤ 4 → conforme). fib_level × sl_mult.
+#   • wick_max RETIRÉ de la grille : le filtre wick est neutralisé (look-ahead).
+#   • atr_expansion_min VOLONTAIREMENT ABSENT : seuil FIXE pré-spécifié (1.0),
+#     0 degré de liberté ; l'inclure dans la grille = p-hacking (interdit).
+# Bonferroni appliqué sur le nombre de configs effectivement testées.
+#   fib_level : [0.382, 0.5, 0.618]  — niveaux Fib canoniques
+#   sl_mult   : [0.75, 1.0, 1.5]     — serrage du stop (sensible aux frictions)
+FIB_FINE_PARAM_GRID = {
+    "fib_level": [0.382, 0.5, 0.618],
+    "sl_mult": [0.75, 1.0, 1.5],
+}
+
+# ── PROMOTION LIVE (fib-fine-v2) — ajout @forge 2026-06-02 ─────────────────────
+# Feature flag MAÎTRE. ACTIVÉ 2026-06-02 (cœur NQ1+MES1, $130) — activation directe
+# sans phase simulation, surveillance utilisateur. Le code live (core/fib_fine_v2.py
+# + blocs flag-gated de broker/live_runner.py) devient ACTIF au prochain restart
+# DÉLIBÉRÉ du daemon (hors session NY). Pour désactiver : repasser à False + restart.
+FIB_FINE_ENABLED = True
+
+# Univers LIVE initial (config-driven, SÉPARÉ de FIB_FINE_TICKERS de recherche).
+# Vague 1 = NQ1 + MES1 UNIQUEMENT (cœur 🟢, sizing $130). MGC1 (bonus 🟡 OOS-only),
+# YM1 (mirage look-ahead) et tout M1 EXCLUS. Ajout futur de MGC1 = éditer cette
+# liste (aucune refonte de code nécessaire — les params per-ticker existent déjà).
+FIB_FINE_LIVE_TICKERS = ["NQ1", "MES1"]
+
+# Sizing DÉDIÉ fib-fine ($130). N'altère PAS RISK_PER_TRADE_USD global ($200).
+# Réutilise la valeur de recherche déjà calibrée PHASE 5 (MC p95 DD < $2000 Topstep).
+FIB_FINE_RISK_USD = FIB_FINE_RISK_PER_TRADE_USD  # = 130
+
+# Timeframe de décision live (barres CLÔTURÉES). Doit rester "m5" (cohérence backtest).
+FIB_FINE_LIVE_TF = FIB_FINE_DEFAULT_TF  # = "m5"
+
+# Source des barres M5 en live : "rest" → fetch REST M5 dédié (unit=2,
+# unit_number=5) via SessionRunner._fetch_bars_m5. Pas de dépendance M1Buffer
+# (le filtre causal atr_ratio_sl ne lit que des barres M5 closes → no look-ahead).
+FIB_FINE_LIVE_BARS_SOURCE = "rest"
+
+# Nb de barres M5 d'historique à fournir au détecteur live (warmup EMA200 + pivots).
+# EMA_SLOW=200 + marge → ~2 jours de M5 (12*23*2 ≈ 552) ; on prend large.
+FIB_FINE_LIVE_M5_WARMUP_BARS = 800

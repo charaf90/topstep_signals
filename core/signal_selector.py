@@ -34,6 +34,10 @@ TICKER_PRIORITY: dict[str, dict[str, int]] = {
     "fib": {"NQ1": 1, "YM1": 2, "MES1": 3},
     # fib-v4 OOS Phase 4 : NQ1 PF=6.47 > MES1 PF=6.01 > MGC1 PF=2.53
     "fib-v4": {"NQ1": 1, "MES1": 2, "MGC1": 3},
+    # fib-fine-v2 OOS (M5) : NQ1 PF=2.41 > MES1 PF=1.47 (univers live v2 NQ1+MES1).
+    # Stratégie SÉPARÉE de fib-v4 (TF M5, clé strategy distincte) — jamais fusionnée.
+    "fib-fine": {"NQ1": 1, "MES1": 2},
+    "FIB_FINE": {"NQ1": 1, "MES1": 2},  # tolérance casse sur la clé strategy
     # vpc-v4 OOS : NQ1 PF≈1.85 > MES1 PF≈1.40 (YM1 hors-périmètre)
     "vpc": {"NQ1": 1, "MES1": 2},
     "VPC": {"NQ1": 1, "MES1": 2},  # tolérance casse sur la clé strategy
@@ -45,6 +49,7 @@ TICKER_OOS_SCORE: dict[str, dict[str, float]] = {
     "opr": {"NQ1": 6979.5, "YM1": 6835.0, "MES1": 1510.0},
     "fib": {"NQ1": 18.67, "YM1": 7.11, "MES1": 4.51},
     "fib-v4": {"NQ1": 6.47, "MES1": 6.01, "MGC1": 2.53},
+    "fib-fine": {"NQ1": 2.41, "MES1": 1.47},
     "vpc": {"NQ1": 1.85, "MES1": 1.40},
 }
 
