@@ -97,7 +97,7 @@ Les écritures dans `core/**` et `broker/**` déclenchent un prompt (`.claude/se
 
 | Situation | Action |
 |---|---|
-| Live a décroché (tmux mort) | `@argus` pour diagnostic. **Ne pas redémarrer sans confirmation.** |
+| Live a décroché (tmux mort ≠ daemon mort !) | `bash scripts/restart_daemon.sh status` puis `@argus` si doute. **Ne pas redémarrer sans confirmation.** Restart = `scripts/restart_daemon.sh restart` UNIQUEMENT. |
 | Limite Topstep approchée (< $200) | `@argus` alerte ; tu transmets. Ne rien modifier. |
 | Demande de promotion | Verdict 🟢 confirmé par `@auditor` puis `@forge`. **Confirmation par fichier.** |
 | Modif d'un paramètre prod | Backtest préalable. Pas d'écriture directe dans `config.py` pour un param prod actif. |
@@ -168,8 +168,10 @@ python optimize.py --strategy <nom> --csv-dir ./data --holdout     # ⚠️ cons
 # Risque portefeuille combiné (corrélations inter-stratégies, MC DD, P(target avant breach))
 python tools/portfolio_replay.py        # input du fit portefeuille @athena
 
-# Production (live)
-tmux ls ; tmux attach -t topstep        # daemon
+# Production (live) — le PROCESS fait foi, pas la session tmux (verrou PID)
+bash scripts/restart_daemon.sh status    # health-check canonique (pid, log, risk)
+bash scripts/restart_daemon.sh restart   # SEULE procédure de restart (refuse en session NY sauf --force)
+tmux attach -t topstep                   # voir la console du daemon
 cat state/live_state.json                # état RM
 tail -f logs/trading_events.log          # fills, closes, erreurs, risk
 ```

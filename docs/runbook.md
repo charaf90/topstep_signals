@@ -111,9 +111,8 @@ ip route | grep default
 tmux attach -t topstep
 # Ctrl+B puis D pour détacher sans tuer
 
-# 4. Si la WS ne reconnecte vraiment pas → restart propre
-tmux kill-session -t topstep
-tmux new -d -s topstep "python live.py"
+# 4. Si la WS ne reconnecte vraiment pas → restart propre (procédure canonique)
+bash scripts/restart_daemon.sh restart        # --force si session NY en cours
 tail -f logs/trading_events.log
 ```
 
@@ -324,8 +323,8 @@ tmux new -d -s topstep "python live.py"
 **Pré-requis** : le daemon est arrêté (cf. scénarios 1, 5, 6).
 
 ```bash
-# 1. Vérifier qu'aucun process zombie ne traîne
-ps aux | grep -E "live_runner|live\.py" | grep -v grep
+# 1. État réel du daemon (le process fait foi, PAS la session tmux)
+bash scripts/restart_daemon.sh status
 
 # 2. Vérifier qu'on est sur la branche prod
 git status
@@ -339,8 +338,12 @@ python scripts/reconcile_daily.py
 ip route | grep default
 # Doit JAMAIS être : default via 100.X.X.X dev tailscale0
 
-# 5. Démarrer dans tmux
-tmux new -d -s topstep "python live.py"
+# 5. Démarrer via la procédure CANONIQUE (jamais à la main)
+#    → vérifie le garde-fou session NY, lance dans tmux avec tee vers
+#    logs/daemon_<date>.log, attend le PID et affiche le health-check.
+#    ⚠️ Ne JAMAIS lancer "python live.py" nu : sans --daemon --execute c'est
+#    un dry-run/crash, et sans tee il n'y a AUCUN fichier log.
+bash scripts/restart_daemon.sh restart        # --force si session NY en cours
 
 # 6. Surveiller 5 min minimum
 tail -f logs/trading_events.log
