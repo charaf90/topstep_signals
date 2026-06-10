@@ -54,6 +54,7 @@ from config import (
     TOPSTEP_SAFETY_MULT,
     TOPSTEP_TRAILING_DD,
     USER_DAILY_LOSS_MAX,
+    USER_MAX_ARMED_RISK_USD,
     USER_MAX_OPEN_POSITIONS,
     USER_MAX_TRADES_PER_DAY,
 )
@@ -82,11 +83,14 @@ class PortfolioRiskManager:
       2. Cap fills journaliers (USER_MAX_TRADES_PER_DAY) — seuls les fills comptent
       3. Cap perte journalière réalisée (USER_DAILY_LOSS_MAX)
       4. Streak perdant (CONSEC_LOSS_PAUSE_DAYS)
-      5. Slack Topstep daily + trailing DD (pire-cas : tous pending + active → SL)
+      5. Slack Topstep daily + trailing DD (positions actives uniquement)
+      5-bis. Risque ARMÉ total (pending + actifs) : cap dur USER_MAX_ARMED_RISK_USD
+             + invariant pire-cas « tout l'armé → SL reste sous le DLL »
 
-    slack_daily = TOPSTEP_DAILY_LOSS_MAX + realized_day_pnl − (pending_risk + active_risk)
-    slack_trail = cum_pnl − (peak_pnl − TOPSTEP_TRAILING_DD) − (pending_risk + active_risk)
+    slack_daily = TOPSTEP_DAILY_LOSS_MAX + realized_day_pnl − active_risk
+    slack_trail = cum_pnl − (peak_pnl − TOPSTEP_TRAILING_DD) − active_risk
     autorise si min(slack_daily, slack_trail) ≥ risk_usd × TOPSTEP_SAFETY_MULT
+    ET (pending+active+risk_usd) ≤ cap armé ET DLL + rdp − (pending+active) ≥ seuil
     """
 
     # Capital tracking — démarrent à zéro au début du challenge
@@ -117,6 +121,7 @@ class PortfolioRiskManager:
     user_daily_loss_max: float = float(USER_DAILY_LOSS_MAX)
     user_max_trades_per_day: int = int(USER_MAX_TRADES_PER_DAY)
     user_max_open_positions: int = int(USER_MAX_OPEN_POSITIONS)
+    user_max_armed_risk_usd: float = float(USER_MAX_ARMED_RISK_USD)
 
     # Tracking du reset mensuel (challenge Topstep). Persistés dans live_state.json.
     last_reset_month: int | None = None
@@ -141,6 +146,10 @@ class PortfolioRiskManager:
             + sum(o.risk_usd for o in self.pending_orders.values())
         """
         return sum(o.risk_usd for o in self.active_positions.values())
+
+    def _pending_risk(self) -> float:
+        """Risque cumulé des ordres limites armés non encore filés."""
+        return sum(o.risk_usd for o in self.pending_orders.values())
 
     def _maybe_roll_day(self, when: datetime | None = None):
         """
@@ -225,7 +234,9 @@ class PortfolioRiskManager:
           2. Cap fills journaliers (USER_MAX_TRADES_PER_DAY)
           3. Cap perte journalière réalisée (USER_DAILY_LOSS_MAX)
           4. Streak perdant (CONSEC_LOSS_PAUSE_DAYS)
-          5. Slack Topstep daily + trailing DD (pire-cas tous pending + actif)
+          5. Slack Topstep daily + trailing DD (positions actives)
+          5-bis. Risque ARMÉ total pending+actifs : cap dur configurable
+                 (USER_MAX_ARMED_RISK_USD) + invariant pire-cas DLL armé
           6. Slack USER daily (optionnel, bypass challenge)
           7. Cohérence 50% Topstep — Combine uniquement (cf. tp_gain_usd)
         """
@@ -276,6 +287,28 @@ class PortfolioRiskManager:
                 f"slack_{slack:.0f}_below_{threshold:.0f}_"
                 f"(daily={slack_daily:.0f},trail={slack_trail:.0f},"
                 f"reserved={reserved:.0f})"
+            )
+
+        # 5-bis. Risque ARMÉ total (pending + actifs) — ajout 2026-06-10.
+        #    Les pending ne consomment pas le slack (décision 2026-05-21 : taux
+        #    de fill 30-50%, bloquait les 3èmes signaux). MAIS un jour violent
+        #    les fills sont corrélés : un sweep peut filler toutes les limites
+        #    armées puis les SL en cascade. Deux bornes complémentaires :
+        #    a) cap dur configurable (USER_MAX_ARMED_RISK_USD, 0 = off)
+        #    b) invariant pire-cas TOUJOURS actif : même si tout l'armé prend
+        #       son SL, la perte du jour reste sous le DLL Topstep (avec la
+        #       marge safety_mult). Ne mord qu'à l'approche du DLL — préserve
+        #       la motivation de 2026-05-21 (3-4 signaux simultanés passent).
+        armed = reserved + self._pending_risk()
+        if self.user_max_armed_risk_usd > 0 and armed + risk_usd > self.user_max_armed_risk_usd:
+            return False, (
+                f"armed_risk_cap_{armed + risk_usd:.0f}_above_{self.user_max_armed_risk_usd:.0f}"
+            )
+        slack_armed_daily = self.daily_loss_limit + self.realized_day_pnl - armed
+        if slack_armed_daily < threshold:
+            return False, (
+                f"armed_daily_worstcase_{slack_armed_daily:.0f}_below_{threshold:.0f}_"
+                f"(armed={armed:.0f})"
             )
 
         # 6. Slack USER daily — pire cas : (reserved + nouveau trade) → tous SL
@@ -415,6 +448,9 @@ class PortfolioRiskManager:
             "n_pending": len(self.pending_orders),
             "n_active": len(self.active_positions),
             "reserved_risk_usd": reserved,
+            "pending_risk_usd": self._pending_risk(),
+            "armed_risk_usd": reserved + self._pending_risk(),
+            "armed_risk_cap_usd": self.user_max_armed_risk_usd,
             "slack_daily": (self.daily_loss_limit + self.realized_day_pnl - reserved),
             "slack_trail": self.cum_pnl - trail_floor - reserved,
             "target_remaining": self.profit_target - self.cum_pnl,

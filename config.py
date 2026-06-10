@@ -174,6 +174,14 @@ MIN_BARS_US_SESSION = 8
 USER_DAILY_LOSS_MAX = 950  # $ perte journalière réalisée max — aligné Topstep DLL
 USER_MAX_TRADES_PER_DAY = 0  # désactivé — Topstep DLL $950 gère le cap réel
 USER_MAX_OPEN_POSITIONS = 0  # pas de limite (positions simultanées)
+# Cap dur sur le risque ARMÉ total = pending + positions actives (ajout 2026-06-10).
+# Borne le pire-cas "sweep de fills simultanés" (jour violent : les limites armées
+# par 4 stratégies × 2-3 tickers fillent ensemble puis SL en cascade) — scénario
+# invisible des checks slack, qui ne comptent que les positions actives depuis la
+# décision 2026-05-21. Avec $130-200/trade, $600 autorise 3-4 ordres armés
+# simultanés. 0 = désactivé. S'ajoute au garde-fou pire-cas DLL armé (toujours
+# actif, cf. core/risk_portfolio.can_open check 5-bis).
+USER_MAX_ARMED_RISK_USD = 600
 
 # ==============================================================================
 # GARDE-FOU TOPSTEP (challenge 50K)

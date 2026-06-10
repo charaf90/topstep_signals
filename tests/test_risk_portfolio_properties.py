@@ -34,6 +34,7 @@ def _build_rm(
     user_max_trades_per_day: int = 0,
     consec_loss_pause_days: int = 0,
     safety_mult: float = 1.0,  # 1.0 = pas de marge — testable purement
+    user_max_armed_risk_usd: float = 0.0,  # 0 = cap armé désactivé (isolé des autres invariants)
 ) -> PortfolioRiskManager:
     """Construit un manager avec params reproductibles, indépendamment de config.py."""
     return PortfolioRiskManager(
@@ -44,6 +45,7 @@ def _build_rm(
         user_max_trades_per_day=user_max_trades_per_day,
         consec_loss_pause_days=consec_loss_pause_days,
         safety_mult=safety_mult,
+        user_max_armed_risk_usd=user_max_armed_risk_usd,
     )
 
 
@@ -110,6 +112,76 @@ class TestSlackInvariant:
             assert worst_case_rdp >= -rm.daily_loss_limit - 1e-6, (
                 f"can_open True mais worst-case rdp={worst_case_rdp} < -{rm.daily_loss_limit}"
                 f"  (rdp={rdp}, n_active={n_active}, risk_active={risk_active}, new={new_risk})"
+            )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Invariant 2-bis — risque ARMÉ total (pending + actifs), ajout 2026-06-10
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestArmedRiskInvariant:
+    """Borne le pire-cas « sweep de fills simultanés » : toutes les limites
+    armées fillent puis SL en cascade. Deux mécanismes : cap dur configurable
+    (user_max_armed_risk_usd) + invariant DLL armé toujours actif."""
+
+    def _arm(self, rm: PortfolioRiskManager, risks: list[float]):
+        for i, r in enumerate(risks):
+            rm.register_open(f"pending_{i}", risk_usd=r)
+
+    def test_cap_arme_bloque_quand_depasse(self):
+        rm = _build_rm(user_max_armed_risk_usd=600.0)
+        self._arm(rm, [200.0, 200.0, 150.0])  # armé = 550
+        ok, reason = rm.can_open(risk_usd=200.0)  # 550 + 200 = 750 > 600
+        assert not ok and reason.startswith("armed_risk_cap")
+
+    def test_cap_arme_autorise_sous_le_cap(self):
+        rm = _build_rm(user_max_armed_risk_usd=600.0)
+        self._arm(rm, [200.0, 150.0])  # armé = 350
+        ok, _ = rm.can_open(risk_usd=200.0)  # 350 + 200 = 550 ≤ 600
+        assert ok
+
+    def test_cancel_libere_le_cap(self):
+        rm = _build_rm(user_max_armed_risk_usd=600.0)
+        self._arm(rm, [200.0, 200.0, 150.0])
+        assert not rm.can_open(risk_usd=200.0)[0]
+        rm.cancel_open("pending_0")  # armé = 350
+        assert rm.can_open(risk_usd=200.0)[0]
+
+    def test_fill_ne_change_pas_le_risque_arme(self):
+        """Un fill déplace le risque pending → actif : l'armé total est inchangé."""
+        rm = _build_rm(user_max_armed_risk_usd=600.0)
+        self._arm(rm, [200.0, 200.0, 150.0])
+        rm.register_fill("pending_0")
+        assert rm.status()["armed_risk_usd"] == 550.0
+        assert not rm.can_open(risk_usd=200.0)[0]  # toujours bloqué
+
+    def test_cap_zero_desactive_mais_garde_fou_dll_actif(self):
+        """Cap 0 = pas de cap fixe, mais l'invariant pire-cas DLL armé bloque
+        quand tout l'armé + le nouveau pourrait franchir le daily loss."""
+        rm = _build_rm(user_max_armed_risk_usd=0.0, safety_mult=1.0)
+        self._arm(rm, [300.0, 300.0, 300.0])  # armé = 900
+        ok, reason = rm.can_open(risk_usd=300.0)  # slack armé = 1000-900 = 100 < 300
+        assert not ok and reason.startswith("armed_daily_worstcase")
+
+    @given(
+        rdp=st.floats(min_value=-900.0, max_value=0.0),
+        pending=st.lists(RISK, min_size=0, max_size=8),
+        new_risk=RISK,
+    )
+    @settings(max_examples=200, deadline=None)
+    def test_si_can_open_alors_pire_cas_arme_respecte_daily(self, rdp, pending, new_risk):
+        """Si can_open autorise, alors même si TOUT l'armé (pending + nouveau)
+        fille et prend son SL, la perte du jour reste >= -daily_loss_limit."""
+        rm = _build_rm(safety_mult=1.0, user_max_armed_risk_usd=0.0)
+        rm.realized_day_pnl = rdp
+        self._arm(rm, pending)
+        ok, _ = rm.can_open(risk_usd=new_risk)
+        if ok:
+            worst_case_rdp = rdp - sum(pending) - new_risk
+            assert worst_case_rdp >= -rm.daily_loss_limit - 1e-6, (
+                f"can_open True mais worst-case armé rdp={worst_case_rdp} "
+                f"< -{rm.daily_loss_limit} (rdp={rdp}, pending={pending}, new={new_risk})"
             )
 
 
