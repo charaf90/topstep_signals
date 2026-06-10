@@ -1240,9 +1240,9 @@
       ]
     },
     "YM1": {
-      "n_filled": 284,
-      "n_total": 386,
-      "sum_pnl": 16383.5,
+      "n_filled": 286,
+      "n_total": 389,
+      "sum_pnl": 16834.0,
       "trades": [
         {
           "date": "2024-09-19",
@@ -7793,6 +7793,57 @@
           "date": "2026-05-28",
           "dir": "long",
           "entry": 50610.0,
+          "exit": 50682.0,
+          "exit_time": "2026-05-28 10:45:00-04:00",
+          "fill_time": "2026-05-28 10:45:00-04:00",
+          "n_ct": 6,
+          "pnl": 216.0,
+          "regime": "?",
+          "result": "TP",
+          "rr": 1.24,
+          "sl": 50552.0,
+          "sl_dist": 58.0,
+          "tp": 50682.0,
+          "tp_dist": 72.0
+        },
+        {
+          "date": "2026-06-01",
+          "dir": "long",
+          "entry": 51004.0,
+          "exit": 51071.0,
+          "exit_time": "2026-06-01 13:30:00-04:00",
+          "fill_time": "2026-06-01 13:30:00-04:00",
+          "n_ct": 7,
+          "pnl": 234.5,
+          "regime": "?",
+          "result": "TP",
+          "rr": 1.26,
+          "sl": 50951.0,
+          "sl_dist": 53.0,
+          "tp": 51071.0,
+          "tp_dist": 67.0
+        },
+        {
+          "date": "2026-06-04",
+          "dir": "long",
+          "entry": 51404.0,
+          "exit": null,
+          "exit_time": null,
+          "fill_time": null,
+          "n_ct": 7,
+          "pnl": 0.0,
+          "regime": "?",
+          "result": "NOT_FILLED",
+          "rr": 1.25,
+          "sl": 51347.0,
+          "sl_dist": 57.0,
+          "tp": 51475.0,
+          "tp_dist": 71.0
+        },
+        {
+          "date": "2026-06-09",
+          "dir": "short",
+          "entry": 51066.0,
           "exit": null,
           "exit_time": null,
           "fill_time": null,
@@ -7800,11 +7851,11 @@
           "pnl": 0.0,
           "regime": "?",
           "result": "NOT_FILLED",
-          "rr": 1.24,
-          "sl": 50552.0,
-          "sl_dist": 58.0,
-          "tp": 50682.0,
-          "tp_dist": 72.0
+          "rr": 1.25,
+          "sl": 51130.0,
+          "sl_dist": 64.0,
+          "tp": 50986.0,
+          "tp_dist": 80.0
         }
       ]
     }

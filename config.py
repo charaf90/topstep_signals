@@ -329,6 +329,348 @@ OPR_VOL_ZSCORE_WINDOW = 20  # bougies de session pour le z-score volume
 OPR_STRATEGY_VERSION = "opr-v4"
 
 # ==============================================================================
+# STRATÉGIE BOS_FVG (`bos-fvg-v1`) — ICT : Break of Structure + Fair Value Gap
+# ==============================================================================
+# Idée utilisateur (ICT). Setup M5 :
+#   1. BOS : impulsion qui casse le dernier swing high/low (close au-delà).
+#   2. FVG : imbalance 3 bougies dans l'impulsion (bullish : low[k] > high[k-2]).
+#   3. Entrée LIMIT au Consequent Encroachment (50% du FVG), à condition que ce
+#      point soit en DISCOUNT (sous le 50% Fib de l'impulsion pour un achat).
+#   4. SL sous le swing origine de l'impulsion (∓ buf). TP = rr × risque.
+#   5. Invalidation : clôture au-delà du FVG sans rebond → annulation pending.
+# Entrée LIMIT = fill HONNÊTE (pas de look-ahead). M5 resamplé M1 (NQ1/MES1/YM1)
+# → IS+OOS + test cross-instrument MES1. RED-FLAG ÉTAPE 0 : ICT ultra-canonique
+# (cf. smc-v1 rejeté, leçon Ichimoku). Testé car spec précise/falsifiable.
+BOS_FVG_STRATEGY_VERSION = "bos-fvg-v2"
+BOS_FVG_TICKERS = ["NQ1", "MES1", "YM1"]
+BOS_FVG_TIMEZONE = "America/New_York"
+BOS_FVG_SESSION_OPEN = (9, 30)
+BOS_FVG_SESSION_END = (16, 0)
+BOS_FVG_PIVOT_W = 2  # fenêtre pivot (left=right) pour swings M5
+BOS_FVG_ATR_PERIOD = 14
+BOS_FVG_MIN_IMPULSE_ATR = 0.5  # impulsion ≥ 0.5×ATR M5 (mouvement significatif)
+BOS_FVG_LOOKBACK_BARS = 30  # fenêtre max de recherche de l'impulsion/FVG (M5)
+BOS_FVG_SL_BUF = 0.10  # SL = origine swing ∓ buf × range impulsion
+BOS_FVG_RR = 2.0
+BOS_FVG_ORDER_TIMEOUT_BARS = 24  # annule le limit non fillé (2h)
+BOS_FVG_MAX_TRADES_PER_DAY = 3
+BOS_FVG_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200) [recherche]
+
+# ── Promotion LIVE (bos-fvg-v1, 2026-06-03) — config retenue NQ1+MES1 @ $150 ──
+# Code live INERTE tant que le daemon n'est pas redémarré délibérément.
+# Verdict 🟢 (audit look-ahead clean, stress régime robuste, MC DD P95 -$1031).
+BOS_FVG_ENABLED = True  # actif au prochain RESTART du daemon (pas avant)
+BOS_FVG_LIVE_TICKERS = ["NQ1", "MES1"]  # YM1 exclu (faible OOS + driver DD)
+BOS_FVG_RISK_USD = 150  # sizing dédié (≠ RISK_PER_TRADE_USD global $200)
+BOS_FVG_MAX_HOLD_BARS_M5 = 9  # time-stop bos-fvg-v2 : ferme la position après 9 barres M5 (~45min) depuis le fill, en plus de l'EOD (deep-lane 🟢 : OOS PF 2.26→2.93, MC DD P95 −22%)
+BOS_FVG_RR_PER_TICKER = {"NQ1": 1.5, "MES1": 1.5}  # optimum walk-forward
+BOS_FVG_SL_BUF_PER_TICKER = {"NQ1": 0.0, "MES1": 0.1}  # optimum walk-forward
+BOS_FVG_LIVE_M5_WARMUP_BARS = 800  # barres M5 fetchées pour le warmup (REST dédié, aligné fib-fine)
+
+# ==============================================================================
+# STRATÉGIE LIQUIDITY_HOOK (`liq-hook-v1`) — 15:45 NY Liquidity Hook (fade open-drive)
+# ==============================================================================
+# Idée utilisateur. Setup M5 sur l'ouverture cash NY (09:30 = 15h30 CET) :
+#   1. DRIVE : les 3 premières bougies M5 (09:30, 09:35, 09:40) poussent dans le
+#      MÊME sens (3 vertes → SHORT / 3 rouges → LONG). Flux institutionnel d'open.
+#   2. ANCRE : corps de la 2e bougie (09:35 = "velocity peak"), 0%=open, 100%=close.
+#   3. ENTRÉE : ordre LIMIT à l'extension 127.2% du corps (projetée dans le sens du
+#      drive) — on fade le dernier pic. Sell limit (drive haussier) / buy limit (baissier).
+#   4. SL = extension 161.8% du corps. TP = 50% (midpoint) du corps. RR géométrique ≈ 2.23.
+#   5. TIME-STOP : si fill mais TP non atteint à 10:15 NY (16h15 CET), close marché.
+# Fade contre-tendance d'un mouvement d'ouverture. Entrée LIMIT = fill HONNÊTE.
+# Niveaux fib FIXES (faithful) ; grille = filtre magnitude + heure du time-stop.
+# RED-FLAG ÉTAPE 0 : niveaux fib arbitraires (127.2/161.8) MAIS mécanisme (fade de
+# l'épuisement du drive d'open + reflux HFT) plausible et falsifiable. Daily-freq.
+LIQ_HOOK_STRATEGY_VERSION = "liq-hook-v1"
+LIQ_HOOK_TICKERS = ["NQ1", "MES1", "YM1"]  # micros indices actions (open cash 09:30)
+LIQ_HOOK_TIMEZONE = "America/New_York"
+LIQ_HOOK_SESSION_OPEN = (9, 30)  # ouverture cash NY = 15h30 CET
+LIQ_HOOK_SIGNAL_CANDLE_IDX = 1  # 2e bougie M5 (09:35) = velocity peak
+LIQ_HOOK_N_DRIVE_CANDLES = 3  # 3 bougies M5 consécutives même sens
+LIQ_HOOK_ENTRY_EXT = 1.272  # entrée = extension 127.2% du corps 09:35
+LIQ_HOOK_SL_EXT = 1.618  # SL = extension 161.8%
+LIQ_HOOK_TP_LEVEL = 0.5  # TP1 = 50% (midpoint) du corps
+LIQ_HOOK_TIMESTOP = (10, 15)  # time-stop NY = 16h15 CET (close marché si pas TP)
+LIQ_HOOK_ATR_PERIOD = 14
+LIQ_HOOK_MIN_DRIVE_ATR = 0.0  # filtre : span 3 bougies ≥ x×ATR (0 = off)
+LIQ_HOOK_MAX_TRADES_PER_DAY = 1
+LIQ_HOOK_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+# "literal"  : ordre limite mécanique — si le prix est déjà au-delà de L au 1er bar
+#              actif (drive très fort), fill au marché (entrée dégradée, souvent perdante
+#              = honnête/conservateur). "rest" : skip si déjà au-delà (entrée propre @ L).
+LIQ_HOOK_FILL_MODE = "literal"
+
+# ==============================================================================
+# STRATÉGIE EXPANSION_HUNT (`exp-hunt-v1`) — Turtle Soup : fade sweep Equal Highs
+# ==============================================================================
+# Idée utilisateur (ICT "expansion de chasse"). Setup M5 (NQ/MNQ), short :
+#   1. DOUBLE TOP : deux swing highs quasi-identiques (|h1-h2| ≤ tol×ATR) séparés
+#      par un swing low. EH = max(h1,h2). H (hauteur range) = EH − creux intermédiaire.
+#   2. SWEEP : une bougie casse les deux sommets (high > EH) = chasse de liquidité.
+#   3. ENTRÉE : sell limit @ EH + 0.272×H (extension externe, on fade l'overshoot).
+#   4. SL = EH + 0.618×H. TP1 = creux intermédiaire (EH − H). RR géométrique ≈ 3.68.
+# Buy limit symétrique (double bottom, extensions sous les lows). Entrée LIMIT =
+# fill HONNÊTE. Niveaux fib FIXES (faithful) ; grille = strictness double-top + range.
+# RED-FLAG ÉTAPE 0 : fade de sweep (cf. liq-hook/asian rejetés — « les sweeps
+# continuent ») MAIS SL range-relatif + RR 3.68 + structure sélective + précédent
+# bos-fvg (ICT survivant). Non-disqualifiable a priori → test fast lane.
+EXP_HUNT_STRATEGY_VERSION = "exp-hunt-v1"
+EXP_HUNT_TICKERS = ["NQ1", "MES1", "YM1"]  # NQ cible ; MES1/YM1 = juge de paix cross-instrument
+EXP_HUNT_TIMEZONE = "America/New_York"
+EXP_HUNT_SESSION_OPEN = (9, 30)
+EXP_HUNT_SESSION_END = (16, 0)
+EXP_HUNT_PIVOT_W = 2  # fenêtre pivot (swings M5), révélé avec délai (causal)
+EXP_HUNT_ATR_PERIOD = 14
+EXP_HUNT_EQ_TOL_ATR = 0.10  # |h1-h2| ≤ tol×ATR (tolérance "equal highs")
+EXP_HUNT_MIN_H_ATR = 0.6  # hauteur range H ≥ x×ATR (structure significative)
+EXP_HUNT_MAX_STRUCT_BARS = 40  # distance max entre les deux sommets (lookback structure)
+EXP_HUNT_ENTRY_EXT = 0.272  # entrée = EH + ext × H
+EXP_HUNT_SL_EXT = 0.618  # SL = EH + ext × H
+EXP_HUNT_ORDER_TIMEOUT_BARS = 12  # annule le sell limit non fillé (~1h M5)
+EXP_HUNT_MAX_TRADES_PER_DAY = 2
+EXP_HUNT_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+# "literal" : si le prix est déjà au-delà de L au moment de l'armement (sweep très
+#             violent), fill au marché (honnête/conservateur). "rest" : skip si déjà au-delà.
+EXP_HUNT_FILL_MODE = "literal"
+
+# ==============================================================================
+# STRATÉGIE RANGE_CARTO (`range-carto-v1`) — Cartographie du Range (fade Volume Profile)
+# ==============================================================================
+# Idée utilisateur 2026-06-08. Volume Profile causal (POC/VAH/VAL) sur la
+# consolidation récente → fade des "poches d'aspiration" (sweep des stops 0.15×W
+# au-delà de la Value Area), TP = POC (retour à la juste valeur), SL = 0.35×W.
+# PRIOR DÉFAVORABLE (documenté) : doublon de DEUX familles abandonnées —
+#   • fade-de-sweep (exp-hunt/liq-hook/asian-sweep, 🔴) et
+#   • Volume Profile reconstruit depuis barres (vpc-v4, 🔴 « trop approximatif »).
+# Testé « tel quel » sur demande explicite (constantes 0.15/0.35 FIXES = identité).
+# Trio NQ1/MES1/YM1 = juge de paix cross-instrument (Gold/Oil impossibles en M5,
+# pas de M1). Entrée LIMIT = fill honnête. Auto-contenu, prod intouchée.
+RANGE_CARTO_STRATEGY_VERSION = "range-carto-v1"
+RANGE_CARTO_TICKERS = ["NQ1", "MES1", "YM1"]
+RANGE_CARTO_TIMEZONE = "America/New_York"
+RANGE_CARTO_SESSION_OPEN = (9, 30)
+RANGE_CARTO_SESSION_END = (16, 0)
+RANGE_CARTO_ATR_PERIOD = 14
+RANGE_CARTO_VP_LOOKBACK_BARS = 78  # profil sur ~1 session M5 (consolidation récente, causal)
+RANGE_CARTO_BIN_TICKS = 10  # granularité du profil = bin_ticks × tick_size
+RANGE_CARTO_VA_PCT = 0.70  # Value Area = 70% du volume autour du POC (standard)
+RANGE_CARTO_ENTRY_EXT = 0.15  # entrée = VAH + ext×W (poche d'aspiration) — FIXE (spec user)
+RANGE_CARTO_SL_EXT = 0.35  # SL = entry + sl_ext×W (cassure fondamentale) — FIXE (spec user)
+RANGE_CARTO_MIN_W_ATR = 0.5  # sanity anti-dégénéré : largeur VA ≥ x×ATR
+RANGE_CARTO_MAX_CONTRACTS = 30  # cap de sizing (évite n_ct absurde si SL micro)
+RANGE_CARTO_ORDER_TIMEOUT_BARS = 12  # annule le limit non fillé (~1h M5)
+RANGE_CARTO_MAX_TRADES_PER_DAY = 2
+RANGE_CARTO_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+RANGE_CARTO_FILL_MODE = "literal"  # cf. exp_hunt : fill au marché si ouverture déjà au-delà
+
+# ==============================================================================
+# STRATÉGIE ODC (`odc-v1`) — Open-Drive Continuation (CONTINUATION, pas fade)
+# ==============================================================================
+# Idée 2026-06-08 : MONÉTISER L'INVERSE de liq-hook (fade du drive d'open → NQ1
+# 0% WR / 11 SL sur 11 = les drives d'open CONTINUENT). Au lieu de fader l'extension,
+# on REJOINT le drive sur un pullback en discount.
+#   1. DRIVE : 3 bougies M5 consécutives de même sens depuis 09:30 NY (cash open).
+#      Jambe = origine (début du drive) → extrême. Filtre force : jambe ≥ k×ATR
+#      (la SÉLECTION qui manquait aux géométries nues — cf. ib-retest « cassure franche »).
+#   2. ENTRÉE : LIMIT au pullback (retrace `pullback_retr` de la jambe) DANS le sens
+#      du drive. Fill HONNÊTE (pas de stop-entry look-ahead, cf. leçon asian-sweep).
+#   3. SL : au-delà de l'ORIGINE du drive ∓ buf×jambe (jamais dans la trajectoire,
+#      cf. leçon liq-hook). TP = rr×SL_dist. 1 trade/jour (setup 1-shot).
+# CONTINUATION dans le sens du flux = aligné avec ce qui MARCHE (OPR/bos-fvg/ib-retest).
+# GATE CLÉ : corrélation avec OPR (s'arme ~09:45 comme OPR → vérifier additivité).
+# M5 resamplé M1, NQ1/MES1/YM1 (juge de paix). Auto-contenu, prod intouchée.
+ODC_STRATEGY_VERSION = "odc-v1"
+ODC_TICKERS = ["NQ1", "MES1", "YM1"]
+ODC_TIMEZONE = "America/New_York"
+ODC_SESSION_OPEN = (9, 30)
+ODC_SESSION_END = (16, 0)
+ODC_DRIVE_BARS = 3  # nb de bougies M5 du drive (09:30/09:35/09:40)
+ODC_ATR_PERIOD = 14
+ODC_MIN_DRIVE_ATR = 0.8  # filtre force : jambe du drive ≥ x×ATR (sélection)
+ODC_PULLBACK_RETR = 0.382  # profondeur du pullback (retrace de la jambe) — entrée LIMIT
+ODC_SL_BUF = 0.25  # SL = origine ∓ buf×jambe (au-delà de l'origine)
+ODC_RR = 2.0  # TP = rr × SL_dist
+ODC_ORDER_TIMEOUT_BARS = 12  # annule le pullback non fillé (~1h M5)
+ODC_MAX_TRADES_PER_DAY = 1
+ODC_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+ODC_FILL_MODE = "literal"  # cf. exp_hunt : fill au marché si ouverture déjà au-delà du niveau
+
+# ==============================================================================
+# STRATÉGIE PHC (`phc-v1`) — Power-Hour Continuation (ib-retest sur range de midi)
+# ==============================================================================
+# Idée 2026-06-08 : appliquer la MÉCANIQUE PROUVÉE d'ib-retest (🟡 survivant —
+# « la cassure FRANCHE ≥0.5×ATR EST l'edge d'un retest-continuation ») à une autre
+# fenêtre de session = DÉCORRÉLÉ par construction du book matmassé sur l'open.
+#   1. RANGE DE MIDI = [12:00, 14:00[ NY (consolidation déjeuner). Fixée à 14:00.
+#   2. CASSURE FRANCHE : close ≥ 0.5×ATR au-delà de la borne, dans [14:00, cutoff[.
+#   3. RETEST : LIMIT sur la borne cassée (flip support/résistance). Fill honnête.
+#   4. SL = borne ∓ sl_buf×range, TP = rr×SL_dist. Invalidation : close borne opposée.
+# CONTINUATION 2e jambe de l'après-midi (power hour). M5 resamplé M1, NQ1/MES1/YM1.
+# 1 trade/jour, pending armé fin barre → fill j+1, SL-prio. Auto-contenu, prod intouchée.
+PHC_STRATEGY_VERSION = "phc-v1"
+PHC_TICKERS = ["NQ1", "MES1", "YM1"]
+PHC_TIMEZONE = "America/New_York"
+PHC_RANGE_START = (12, 0)  # début range de midi NY
+PHC_RANGE_END = (14, 0)  # fin range de midi (causal au-delà)
+PHC_ENTRY_CUTOFF = (15, 0)  # pas de nouvelle cassure armée après 15:00 NY
+PHC_SESSION_END = (16, 0)  # close-all RTH
+PHC_ATR_PERIOD = 14
+PHC_BREAKOUT_BUF_ATR = 0.5  # cassure FRANCHE (= edge prouvé ib-retest)
+PHC_MIN_RANGE_ATR = 0.0  # filtre : range_midi ≥ x×ATR (0 = off)
+PHC_SL_BUF = 0.25  # SL = borne ∓ sl_buf × range
+PHC_RR = 2.0
+PHC_ORDER_TIMEOUT_BARS = 12  # annule le retest non fillé (~1h M5)
+PHC_MAX_TRADES_PER_DAY = 1
+PHC_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+
+# ==============================================================================
+# STRATÉGIE IB_RETEST (`ib-retest-v1`) — Initial Balance retest (variante OPR)
+# ==============================================================================
+# Backlog P3 (ib_retest_opr_variant, source Market Profile L3-4). Setup M5,
+# CONTINUATION dans le sens du flux (pas un fade). Long :
+#   1. IB (Initial Balance) = range de la 1ère heure RTH [09:30,10:30[ NY.
+#      IB_high = plus haut, IB_low = plus bas. Fixé à 10:30.
+#   2. CASSURE : une bougie CLÔTURE au-dessus de IB_high (+ buf×ATR) après 10:30.
+#   3. RETEST : buy limit sur la borne IB_high (retour de la borne en support).
+#   4. SL = IB_high − sl_buf × IB_range. TP = entrée + rr × sl_dist.
+# Short symétrique (cassure sous IB_low, retest, sell limit). Entrée LIMIT =
+# fill HONNÊTE (pullback sur la borne). DISTINCT d'OPR : fenêtre 09:30-10:30 (vs
+# OPR 09:15-09:45) + entrée au RETEST (vs cassure). 1 trade/jour (1ère cassure).
+# RED-FLAG ÉTAPE 0 : variante OPR (corrélation à mesurer si survivant) MAIS
+# mécanisme distinct + dans le sens du flux (≠ fades rejetés liq-hook/exp-hunt).
+IB_RETEST_STRATEGY_VERSION = "ib-retest-v2"  # v2 = filtre de cassure franche (v1 bo=0 = mort)
+IB_RETEST_TICKERS = ["NQ1", "MES1", "YM1"]
+IB_RETEST_TIMEZONE = "America/New_York"
+IB_RETEST_IB_START = (9, 30)
+IB_RETEST_IB_END = (10, 30)  # IB = 1ère heure RTH (Market Profile standard)
+IB_RETEST_ENTRY_CUTOFF = (14, 0)  # pas de nouvelle cassure armée après 14:00 NY
+IB_RETEST_SESSION_END = (16, 0)  # close-all RTH
+IB_RETEST_ATR_PERIOD = 14
+# v2 : la cassure doit être FRANCHE (close ≥ buf×ATR au-delà de la borne) avant
+# d'armer le retest — sinon retests dans le chop = mort (v1 bo=0 : IS+OOS PF 0.95).
+# Relation MONOTONE 0→0.25→0.5→1.0 : PORTF OOS PF 0.92→1.14→1.29→1.33.
+IB_RETEST_BREAKOUT_BUF_ATR = 0.5
+IB_RETEST_MIN_IB_ATR = 0.0  # filtre : IB_range ≥ x×ATR (0 = off)
+IB_RETEST_SL_BUF = 0.25  # SL = borne ∓ sl_buf × IB_range
+IB_RETEST_RR = 2.0
+IB_RETEST_ORDER_TIMEOUT_BARS = 24  # annule le limit de retest non fillé (~2h M5)
+IB_RETEST_MAX_TRADES_PER_DAY = 1  # 1ère cassure du jour seulement
+IB_RETEST_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+
+# ==============================================================================
+# STRATÉGIE GOLDEN_POCKET (`gp-v1`) — Fib 0.618 sur la 1ère impulsion du jour
+# ==============================================================================
+# Backlog P3 (golden_pocket_first_impulse). DISTINCT de fib-v4/fib-fine (qui
+# détectent des impulsions par pivots N'IMPORTE OÙ et tradent 0.382/0.5) :
+#   • Ancré sur LA 1ère impulsion du jour RTH (1 setup / jour).
+#   • Niveau golden pocket 0.618.
+# Logique :
+#   1. Impulsion = plus grand leg directionnel dans [9h30, GP_IMPULSE_DEADLINE[ NY
+#      (swing_low→swing_high pour up ; symétrique down). Requiert range ≥
+#      GP_MIN_IMPULSE_ATR × ATR journalier.
+#   2. Entrée LIMIT au retracement GP_ENTRY (0.618) du leg, valide jusqu'à la cloche.
+#      Long : buy limit @ swing_high - 0.618×range. Short symétrique.
+#   3. SL = origine du swing ∓ GP_SL_BUF × range ; TP = entrée ± GP_RR × sl_dist.
+#   4. 1 position/jour ; close-all GP_SESSION_END NY (intraday).
+# Entrée LIMIT = fill honnête (pas de look-ahead stop-entry). Fill intra-bar
+# SL-prioritaire. Données M15 natives full history. Check doublon : corrélation
+# des trades avec fib-v4 à vérifier avant tout verdict 🟡+.
+GP_STRATEGY_VERSION = "gp-v1"
+GP_TICKERS = ["NQ1", "MES1", "YM1", "MGC1"]
+GP_TIMEZONE = "America/New_York"
+GP_SESSION_OPEN = (9, 30)
+GP_IMPULSE_DEADLINE = (11, 0)  # impulsion figée à 11h00 NY
+GP_SESSION_END = (16, 0)  # close-all RTH NY
+GP_ATR_PERIOD = 14
+GP_MIN_IMPULSE_ATR = 0.5  # taille min de l'impulsion (× ATR journalier)
+GP_ENTRY = 0.618  # niveau golden pocket (retracement)
+GP_SL_BUF = 0.10  # SL = origine swing ∓ buf × range
+GP_RR = 2.0
+GP_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+
+# ==============================================================================
+# STRATÉGIE ASIAN_SWEEP (`asian-sweep-v1`) — sweep range asiatique → reversal Londres
+# ==============================================================================
+# Backlog P3 (asian_range_sweep). Edge : à l'ouverture de Londres, le marché
+# balaie souvent les stops posés au-delà du range de la session asiatique (faux
+# breakout / liquidity sweep), puis revient dans le range. On FADE ce sweep.
+#   • Range asiatique = [ASIAN_RANGE_START_UTC, ASIAN_RANGE_END_UTC[ UTC
+#     (asian_high / asian_low / range).
+#   • Fenêtre de trade = [ASIAN_RANGE_END_UTC, ASIAN_TRADE_END_UTC[ UTC (Londres,
+#     avant l'open US 13h30) : si une bougie pique au-dessus de asian_high PUIS
+#     une bougie CLÔTURE de retour sous asian_high → SHORT (fade). Symétrique LONG.
+#   • SL = extrême du sweep + ASIAN_SWEEP_SL_BUF × range. TP = entrée ∓
+#     ASIAN_SWEEP_TP_MULT × range (réversion vers l'autre bord). Close-all à
+#     ASIAN_TRADE_END_UTC. Intraday only, 1 position à la fois.
+# Marchés : MGC1 (gold, très London-driven) + MCL1 (oil). NON corrélé à la prod
+# (OPR/Fib indices). Données M15 natives full history (sept 2024 → mai 2026).
+# Validation cross-instrument gold vs oil = juge de paix.
+ASIAN_SWEEP_STRATEGY_VERSION = "asian-sweep-v1"
+ASIAN_SWEEP_TICKERS = ["MGC1", "MCL1"]
+ASIAN_RANGE_START_UTC = 0  # [00:00 UTC
+ASIAN_RANGE_END_UTC = 7  # 07:00 UTC) — fin range asiatique = ~open Londres
+ASIAN_TRADE_END_UTC = 13  # 13:00 UTC) — close-all avant open cash US (13h30)
+ASIAN_SWEEP_SL_BUF = 0.10  # SL = extrême sweep + buf × range
+ASIAN_SWEEP_TP_MULT = 1.0  # TP = entrée ∓ tp_mult × range (réversion)
+ASIAN_SWEEP_MIN_RANGE_TICKS = {"MGC1": 0, "MCL1": 0}  # filtre range min (off baseline)
+ASIAN_SWEEP_MAX_TRADES_PER_DAY = 1
+ASIAN_SWEEP_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+
+# ==============================================================================
+# STRATÉGIE OPR_BASE (`opr-base-v1`) — OPR PUR (rebond après cassure), M5 & M15
+# ==============================================================================
+# Demande utilisateur : repartir de la BASE de l'OPR, SANS AUCUN FILTRE, pour ne
+# PAS être biaisé par opr-v4. Une seule règle de signal : rebond après cassure
+# de l'opening range, retest du niveau cassé.
+#
+#   • OPR = opening range des 15 premières minutes du cash NY (9h30-9h45 NY) :
+#       - M15 : 1 bougie (9h30).      - M5 : 3 bougies (9h30, 9h35, 9h40).
+#     opr_high = max(high) ; opr_low = min(low) ; opr_mid = (high+low)/2.
+#   • CASSURE : bougie post-OPR qui CLÔTURE hors de l'OPR (open dedans, close
+#       dehors) → LONG si close > opr_high, SHORT si close < opr_low.
+#   • ENTRÉE : ordre LIMIT au niveau OPR cassé (retest), fillé au retouch
+#       (low <= niveau <= high).  → "rebond après cassure".
+#   • SL : MILIEU de l'OPR. Généralisé : sl_dist = sl_frac × range_OPR
+#       (sl_frac = 0.5 ⇒ milieu exact).
+#   • TP : rr × sl_dist (rr = 2 au départ).
+#
+# AUCUN FILTRE : pas d'ATR, pas de cap trades/jour, pas de timeout d'ordre, pas
+# de z-score volume, pas d'excursion minimale, pas de range minimal. Une seule
+# position à la fois (mécanique, pas un filtre) ; close-all à la cloche RTH
+# (intraday only) ; l'ordre limite reste valide jusqu'à la cloche.
+#
+# DONNÉES : M5 ET M15 RESAMPLÉS depuis le M1 DATA_BACKTEST (fév 2025 → mars 2026)
+# → même période et même back-adjustment pour les deux TF → comparaison M5 vs
+# M15 à périmètre égal + IS (fév-sep 2025) / OOS (oct 2025-mars 2026) propre.
+#
+# Les FEATURES (amélioration du winrate) sont explorées séparément à partir du
+# M1 (scripts/), puis ajoutées dans une version `opr-feat-*` distincte. La base
+# reste volontairement nue.
+OPR_BASE_STRATEGY_VERSION = "opr-base-v1"
+OPR_BASE_TICKERS = ["NQ1"]  # focus Nasdaq (demande utilisateur)
+OPR_BASE_TIMEZONE = "America/New_York"
+OPR_BASE_SESSION_OPEN = (9, 30)  # ouverture cash NY (heure NY, DST-aware)
+OPR_BASE_OPR_END = (9, 45)  # fin de l'opening range (15 min)
+OPR_BASE_SESSION_END = (16, 0)  # close-all RTH (heure NY)
+OPR_BASE_SL_FRAC = 0.5  # SL = milieu OPR (fraction du range depuis l'entrée)
+OPR_BASE_RR = 2.0  # RR initial (TP = rr × sl_dist)
+OPR_BASE_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+
+# ── Version FEATURED (`opr-feat-v1`) — base + qualité de formation OPR ────────
+# Découverte cross-TF (scripts/opr_m1_features.py) : le rebond post-cassure marche
+# nettement mieux quand l'opening range s'est formé comme un mouvement DIRECTIONNEL
+# PROPRE (body_ratio élevé) AVEC accélération de volume (vol_accel). Deux features
+# DIRECTION-AGNOSTIQUES (≠ biais long), mesurées en M1 sur [9h30,9h45[ (causal,
+# OPR clôturé avant tout trigger). Seuils FIXES pré-spécifiés (NON optimisés) :
+#   body_ratio = Σ|c-o|/Σ(h-l) ≥ 0.50  ;  vol_accel = vol(2e moitié)/vol(1re) ≥ 0.65
+# Effet (RR=2, SL=milieu) : WR ~38% → ~52%, OOS PF M5 1.08→1.70 / M15 1.01→1.58.
+# SL/RR optimisés séparément en walk-forward (PARAM_GRID des wrappers featured).
+OPR_FEAT_STRATEGY_VERSION = "opr-feat-v1"
+OPR_FEAT_BODY_RATIO_MIN = 0.50
+OPR_FEAT_VOL_ACCEL_MIN = 0.65
+
+# ==============================================================================
 # STRATÉGIE OPR_H4 (`opr_h4-v1`) — recherche, variante d'opr-v4
 # ==============================================================================
 # Hypothèse H4 (chartist mode idea, NQ1 weeklies) : les setups OPR déclenchés
@@ -1626,3 +1968,279 @@ FIB_FINE_LIVE_BARS_SOURCE = "rest"
 # Nb de barres M5 d'historique à fournir au détecteur live (warmup EMA200 + pivots).
 # EMA_SLOW=200 + marge → ~2 jours de M5 (12*23*2 ≈ 552) ; on prend large.
 FIB_FINE_LIVE_M5_WARMUP_BARS = 800
+
+
+# ==============================================================================
+# STRATÉGIE FIB-ARGREL (variante Fibonacci — pivots scipy.argrelextrema)
+# ==============================================================================
+# Variante data-géométrique du retracement Fib (famille edge prod prouvée), avec
+# des RÈGLES SPÉCIFIÉES PAR L'UTILISATEUR (2026-06-07) :
+#   1. Pivots détectés par scipy.signal.argrelextrema sur les colonnes brutes
+#      `low` (creux) et `high` (sommets), pour PLUSIEURS ordres (≥ 5).
+#   2. Filtre d'incohérence : l'amplitude de l'impulsion (|high−low|) doit être
+#      STRICTEMENT SUPÉRIEURE à la moyenne (causale) des amplitudes détectées.
+#   3. Niveaux Fib calculés sur cette impulsion ; on teste les 3 principaux.
+#   4. Entrée = ordre LIMIT légèrement EN DESSOUS du niveau (long) / au-dessus
+#      (short, mirroir).
+#   5. SL = origine de l'impulsion (le « 0 ») → SL_dist = (1−f)·R. Lecture
+#      canonique : invalidation = origine cassée. (choix utilisateur explicite)
+#   6. TP = rr × SL_dist, rr ≥ 2.
+#
+# Look-ahead : ZÉRO par construction — pivots confirmés à idx+ordre (offset droit
+# de argrelextrema), moyenne causale (legs antérieurs uniquement), entrée LIMIT
+# (fill honnête, pas de stop-entry), résolution intra-bar SL-prioritaire. Aucune
+# feature lue sur la barre de fill → live-équivalent (pattern bos-fvg / fib-fine).
+FIB_ARGREL_STRATEGY_VERSION = "fib-argrel-v1"
+
+# Univers de recherche walk-forward : NQ1/MES1/YM1 (M5 RESAMPLÉ depuis M1
+# DATA_BACKTEST → IS fév-sep 2025 + OOS oct 2025+ propre). MGC1 n'a pas de M1 →
+# bonus OOS-only natif, ajouté manuellement en deep lane si le cœur survit.
+FIB_ARGREL_TICKERS = ["NQ1", "MES1", "YM1"]
+FIB_ARGREL_DEFAULT_TF = "m5"
+FIB_ARGREL_SOURCE_PER_TICKER = {
+    "NQ1": "resampled",
+    "MES1": "resampled",
+    "YM1": "resampled",
+    "MGC1": "native",
+}
+
+# ── Walk-forward (dates fixes projet) ──────────────────────────────────────────
+FIB_ARGREL_IS_END = "2025-09-30"
+FIB_ARGREL_OOS_START = "2025-10-01"
+
+# ── Détection des pivots / impulsion ──────────────────────────────────────────
+# `order` argrelextrema : nb de barres voisines comparées de CHAQUE côté. Un
+# pivot à l'index p n'est CONNU qu'à p+order (offset de confirmation droit) →
+# c'est la garantie no-look-ahead. Défaut hors grille = 8.
+FIB_ARGREL_ORDER = 8
+# Niveau Fib par défaut (hors grille). 0.5 = milieu.
+FIB_ARGREL_DEFAULT_LEVEL = 0.5
+# RR par défaut (hors grille). ≥ 2 (règle utilisateur).
+FIB_ARGREL_RR = 2.0
+# Décalage de l'ordre LIMIT vs le niveau Fib (« légèrement en dessous »), en ticks.
+FIB_ARGREL_ENTRY_OFFSET_TICKS = 1
+# Filtre d'écart : amplitude impulsion > FIB_ARGREL_MEAN_MULT × moyenne causale.
+# 1.0 = strictement « plus que la moyenne » (règle utilisateur, seuil FIXE 0-DoF).
+FIB_ARGREL_MEAN_MULT = 1.0
+# Nb minimal de legs observés avant d'activer le filtre de moyenne (warmup stat).
+FIB_ARGREL_MIN_LEGS_FOR_MEAN = 10
+# Récence : le pivot confirmant l'impulsion doit être à ≤ N barres de la barre
+# courante (on ne trade pas une structure ancienne). En barres M5.
+FIB_ARGREL_IMPULSE_LOOKBACK = 60
+# Durée max de l'impulsion elle-même (origine→extrême), en barres M5.
+FIB_ARGREL_MAX_IMPULSE_BARS = 80
+# Délai max d'attente d'un fill (ordre LIMIT pending), en barres M5.
+FIB_ARGREL_ORDER_TIMEOUT_BARS = 24
+# Durée de détention max d'une position (time-stop intraday), en barres M5.
+FIB_ARGREL_MAX_HOLD_BARS = 48
+# Fenêtre de session NY (DST-aware) pour la GÉNÉRATION d'entrées [h_début, h_fin).
+# Couvre pré-NY + cash NY. Pas d'overnight (cancel pending + close à la frontière jour).
+FIB_ARGREL_SESSION_NY = (8, 16)
+# Saut close-to-close au-delà duquel une barre est marquée « gap de roll » → une
+# impulsion chevauchant un gap est neutralisée (faux swing back-adjust).
+FIB_ARGREL_ROLL_GAP_PCT = 0.02
+# Skip des jours macro (FOMC/CPI/NFP…) ? Défaut False (règle utilisateur pure).
+FIB_ARGREL_SKIP_MACRO = False
+# Sizing dédié. None → RISK_PER_TRADE_USD global ($200) [recherche].
+FIB_ARGREL_RISK_PER_TRADE_USD = None
+
+# ── Grille d'optimisation (PHASE 4) ───────────────────────────────────────────
+# 3 dimensions = règles utilisateur explicites :
+#   fib_level : 3 niveaux principaux (testés tous, exigence utilisateur)
+#   order     : argrelextrema ≥ 5 (« différents ordres minimum 5 »)
+#   rr        : ratio risque/récompense ≥ 2 (« RR 2 minimum »)
+# Le filtre de moyenne (1.0) et l'offset (1 tick) sont FIXES (pré-spécifiés,
+# 0 degré de liberté) → pas dans la grille (anti p-hacking). Bonferroni appliqué
+# par l'optimiseur sur le nombre de configs effectivement testées.
+FIB_ARGREL_PARAM_GRID = {
+    "fib_level": [0.382, 0.5, 0.618],
+    "order": [5, 8, 12, 18, 25],
+    "rr": [2.0, 2.5, 3.0],
+}
+
+
+# ==============================================================================
+# STRATÉGIE WICK_FILL (`wick-fill-v1`) — Rejet de mèche (pin-bar fade)
+# ==============================================================================
+# Source : utilisateur (liste 2026-06-08, idée #1). Setup M15 natif.
+# Sur une bougie M15 CLÔTURÉE en RTH : corps faible (< body_max×range) + longue
+# mèche (≥ wick_min×range) du côté du rejet → on FADE l'extrême.
+#   • Rejet baissier (mèche HAUTE, close<open) → SELL LIMIT au HIGH (rest au-dessus
+#     du marché), TP = LOW, SL = HIGH + buf ticks.
+#   • Rejet haussier (mèche BASSE, close>open) → BUY LIMIT au LOW, TP = HIGH,
+#     SL = LOW − buf ticks.
+# Ordre valide UNIQUEMENT sur la bougie suivante (timeout=1). Entrée LIMIT au reste
+# = fill honnête (le prix doit revenir TOUCHER l'extrême). Résolution intra-bar
+# SL-prioritaire. Close-all à la cloche RTH.
+# ⚠️ SL razor-thin (buf ticks au-delà de l'extrême) → sizing plafonné
+# (WICK_FILL_MAX_CONTRACTS) sinon n_ct explose. PF invariant au plafond (linéaire) ;
+# le plafond ne fixe que la magnitude P&L absolue (Topstep-réaliste).
+WICK_FILL_STRATEGY_VERSION = "wick-fill-v1"
+WICK_FILL_TICKERS = ["NQ1", "MES1", "YM1", "MGC1", "MCL1"]  # YM/NQ/MES/Or/Pétrole
+WICK_FILL_TIMEZONE = "America/New_York"
+WICK_FILL_SESSION_START = (9, 30)  # 1ère bougie de signal éligible (RTH open)
+WICK_FILL_SIGNAL_CUTOFF = (15, 30)  # dernière bougie de signal commence avant (=21:30 Paris)
+WICK_FILL_SESSION_END = (16, 0)  # close-all RTH (TE)
+WICK_FILL_BODY_MAX_FRAC = 0.4  # corps < body_max × range
+WICK_FILL_WICK_MIN_FRAC = 0.6  # mèche du côté rejet ≥ wick_min × range
+WICK_FILL_SL_BUFFER_TICKS = 2  # SL = extrême ± buf ticks (spec : 2 ticks / 2 pts YM)
+WICK_FILL_ATR_PERIOD = 14  # régime ADX uniquement
+WICK_FILL_ORDER_TIMEOUT_BARS = 1  # ordre valide jusqu'à fin de la bougie suivante
+WICK_FILL_MAX_CONTRACTS = 30  # plafond sizing (SL razor → évite explosion n_ct)
+WICK_FILL_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+
+# Grille walk-forward (breadth) : on grid la STRICTESSE de la définition du pin-bar
+# (corps/mèche). SL=buf ticks, TP=extrême opposé, timeout=1 = identité figée (spec,
+# 0 DoF). 9 cellules = Bonferroni honnête, pré-spécifié AVANT run (anti p-hacking).
+WICK_FILL_PARAM_GRID = {
+    "body_max": [0.3, 0.4, 0.5],
+    "wick_min": [0.5, 0.6, 0.7],
+}
+
+
+# ==============================================================================
+# STRATÉGIE FAKEOUT_FIRST (`fakeout-first-v1`) — Fausse cassure de la 1ère bougie M15
+# ==============================================================================
+# Source : utilisateur (liste 2026-06-08, idée #2). Turtle-soup sur l'opening range.
+# 1ère bougie RTH [09:30,09:45) NY → high1/low1. On surveille les 3 bougies suivantes
+# [09:45,10:30) : une FAUSSE CASSURE = une bougie qui dépasse l'extrême de ≥ break_ticks
+# (intra-bar) PUIS CLÔTURE de retour à l'intérieur.
+#   • Fakeout HAUSSIER (high≥high1+break_t, close<high1) → SHORT : SELL LIMIT @ high1
+#     (rest au-dessus du marché), TP = low1, SL = fakeout_high + sl_buf_t.
+#   • Fakeout BAISSIER (low≤low1−break_t, close>low1) → LONG (symétrique).
+# Ordre armé à la clôture de la bougie de fausse cassure, valide 4 bougies (1h).
+# Entrée LIMIT au reste = fill HONNÊTE (fill bar j+1 au plus tôt, zéro same-bar).
+# SL-prio intra-bar, close-all RTH (TE). 1 trade/jour (1ère fausse cassure).
+FAKEOUT_FIRST_STRATEGY_VERSION = "fakeout-first-v1"
+FAKEOUT_FIRST_TICKERS = ["NQ1", "MES1", "YM1", "MGC1", "MCL1"]  # YM/NQ/MES/Or/Pétrole
+FAKEOUT_FIRST_TIMEZONE = "America/New_York"
+FAKEOUT_FIRST_SESSION_OPEN = (9, 30)  # début 1ère bougie RTH
+FAKEOUT_FIRST_FIRST_BAR_END = (9, 45)  # 1ère bougie = [09:30,09:45)
+FAKEOUT_FIRST_WATCH_END = (10, 30)  # surveille 3 bougies [09:45,10:30)
+FAKEOUT_FIRST_SESSION_END = (16, 0)  # close-all RTH (TE)
+FAKEOUT_FIRST_BREAK_TICKS = 5  # cassure ≥ break_ticks au-delà de l'extrême
+FAKEOUT_FIRST_SL_BUFFER_TICKS = 5  # SL = extrême fakeout ± sl_buf ticks
+FAKEOUT_FIRST_ATR_PERIOD = 14  # régime ADX uniquement
+FAKEOUT_FIRST_ORDER_TIMEOUT_BARS = 4  # ordre valide 4 bougies (1h) après armement
+FAKEOUT_FIRST_MAX_CONTRACTS = 40  # plafond sizing (hygiène ; PF invariant)
+FAKEOUT_FIRST_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+
+# Grille walk-forward (breadth) : strictesse de la fausse cassure (break) × distance SL.
+# TP=extrême opposé, timeout=4 = identité figée (spec, 0 DoF). 9 cellules pré-spécifiées
+# AVANT run (anti p-hacking).
+FAKEOUT_FIRST_PARAM_GRID = {
+    "break_ticks": [3, 5, 8],
+    "sl_buffer_ticks": [3, 5, 8],
+}
+
+
+# ==============================================================================
+# STRATÉGIE ODC_V2 (`odc-v2`) — Open-Drive Continuation, EXIT re-spécifié
+# ==============================================================================
+# Re-spec du mécanisme RÉEL d'odc-v1 (audit 2026-06-08) : l'edge est à 90% TE-driven
+# (pari directionnel tenu jusqu'à l'EOD), le TP=rr×SL est cosmétique (WR_TP 7%), et
+# les trades TE atteignent MFE +1.2R PUIS RENDENT. Entrée INCHANGÉE (validée :
+# pullback 38.2%, SL au-delà de l'origine). Seul l'EXIT change.
+#   • exit_mode "tp_rr"    : baseline odc-v1 (TP=rr×SL) — référence.
+#   • exit_mode "eod"      : pas de TP, hold-to-close (SL ou TE) — mécanisme honnête nu.
+#   • exit_mode "be_trail" : DÉCISION pré-engagée — hold-to-EOD + lock SL au breakeven
+#     dès MFE ≥ be_trigger×SL_dist (cible la give-back diagnostiquée).
+# Constantes be_trigger=1.0R / lock=breakeven : PRÉ-SPÉCIFIÉES (prior mécaniste du
+# « +1.2R MFE puis give-back », 0 DoF) — pas optimisées.
+ODC_V2_STRATEGY_VERSION = "odc-v2"
+ODC_V2_EXIT_MODE = "be_trail"  # variante de DÉCISION
+ODC_V2_BE_TRIGGER_R = 1.0  # SL → breakeven dès MFE ≥ 1R (audit : MFE +1.2R puis give-back)
+ODC_V2_SL_BUF = 0.5  # SL = origine ∓ sl_buf×jambe (centre de grille)
+# Reste hérité d'ODC_* (drive, pullback 38.2%, ATR, session, timeout, tickers, risk).
+
+
+# ==============================================================================
+# STRATÉGIE MOM_FADE (`mom-fade-v1`) — Momentum Fade 61.8% (liste user #3, M5)
+# ==============================================================================
+# Bougie M5 de momentum épuisé (range > range_mult×ATR, close à l'extrême) → fade au
+# retracement 61.8% interne. Bull exhaust → sell limit @ high−0.618×range, TP=low,
+# SL=high+buf. ⚠️ fill ambigu (niveau SOUS le marché = liq-hook literal/rest) : on
+# teste les 2 lectures. literal = fill ≈ marché (≈close, razor SL) ; rest = fill au
+# niveau 0.618 (RR≈0.62), skip si déjà au-delà.
+MOM_FADE_STRATEGY_VERSION = "mom-fade-v1"
+MOM_FADE_TICKERS = ["NQ1", "MES1", "YM1", "MGC1", "MCL1"]
+MOM_FADE_TIMEZONE = "America/New_York"
+MOM_FADE_SESSION_START = (9, 30)
+MOM_FADE_SIGNAL_CUTOFF = (15, 0)  # 21:00 Paris
+MOM_FADE_SESSION_END = (16, 0)
+MOM_FADE_ATR_PERIOD = 14
+MOM_FADE_RANGE_MULT = 1.5  # range > x×ATR
+MOM_FADE_CLOSE_EXTREME = 0.15  # close dans les x% extrêmes du range
+MOM_FADE_RETR = 0.618  # niveau de fade (interne à la bougie)
+MOM_FADE_SL_BUFFER_TICKS = 2
+MOM_FADE_FILL_MODE = "literal"  # "literal" (substantif = fade extreme) | "rest" (= 0 trade)
+MOM_FADE_ORDER_TIMEOUT_BARS = 3  # 3 bougies M5
+MOM_FADE_MAX_CONTRACTS = 40
+MOM_FADE_RISK_PER_TRADE_USD = None
+MOM_FADE_PARAM_GRID = {"range_mult": [1.2, 1.5, 2.0], "close_extreme": [0.10, 0.15, 0.20]}
+
+# ==============================================================================
+# STRATÉGIE SPIKE_1M (`spike-1m-v1`) — Initial Micro Spike (liste user #4, M1, MES/YM)
+# ==============================================================================
+# Bougie M1 de 09:31 NY (1ère minute cash) : range > range_mult×ATR_étendu, close dans
+# les close_extreme% extrêmes → fade. SELL LIMIT @ high (rest au-dessus), TP=low,
+# SL=high+buf. 1 trade/jour. ⚠️ DOUBLON opr_v10 (spike M1 rejeté AUC 0.50) + frictions M1.
+SPIKE_1M_STRATEGY_VERSION = "spike-1m-v1"
+SPIKE_1M_TICKERS = ["MES1", "YM1"]
+SPIKE_1M_TIMEZONE = "America/New_York"
+SPIKE_1M_OPEN = (9, 30)  # 1ère minute = [09:30,09:31)
+SPIKE_1M_ATR_BARS = 20  # ATR « étendu » = moyenne range des 20 M1 précédentes
+SPIKE_1M_SESSION_END = (16, 0)
+SPIKE_1M_RANGE_MULT = 1.8
+SPIKE_1M_CLOSE_EXTREME = 0.10
+SPIKE_1M_SL_BUFFER_TICKS = 2
+SPIKE_1M_ORDER_TIMEOUT_BARS = 3  # 3 minutes
+SPIKE_1M_MAX_CONTRACTS = 40
+SPIKE_1M_RISK_PER_TRADE_USD = None
+SPIKE_1M_PARAM_GRID = {"range_mult": [1.5, 1.8, 2.2], "close_extreme": [0.05, 0.10, 0.15]}
+
+# ==============================================================================
+# STRATÉGIE LONDON_REV (`london-rev-v1`) — London Close Reversal (liste user #5, M15, Or/Pétrole)
+# ==============================================================================
+# À 11:30 ET (fin fixing Londres), si le prix s'est éloigné de l'open US (1ère M15 RTH)
+# de ≥ move_atr×ATR sur [09:30,11:30) → fade vers l'open US. Monté → SELL LIMIT @ plus
+# haut de la fenêtre, TP=open US, SL=high+buf. 1 trade/jour. ⚠️ fade gold/oil session
+# (asian-sweep déjà mort) + event-driven + SL razor à l'extrême.
+LONDON_REV_STRATEGY_VERSION = "london-rev-v1"
+LONDON_REV_TICKERS = ["MGC1", "MCL1"]
+LONDON_REV_TIMEZONE = "America/New_York"
+LONDON_REV_US_OPEN = (9, 30)
+LONDON_REV_FIX_TIME = (11, 30)  # fin fixing Londres (= 17:30 Paris)
+LONDON_REV_ENTRY_END = (14, 30)  # ordre valide ~3h (18:30 Paris ≈ 12:30 ET ; on laisse 3h)
+LONDON_REV_SESSION_END = (16, 0)
+LONDON_REV_ATR_PERIOD = 14
+LONDON_REV_MOVE_ATR = 0.6  # déplacement min depuis l'open US
+LONDON_REV_SL_BUFFER_TICKS = 3
+LONDON_REV_ORDER_TIMEOUT_BARS = 12  # ~3h M15
+LONDON_REV_MAX_CONTRACTS = 40
+LONDON_REV_RISK_PER_TRADE_USD = None
+LONDON_REV_PARAM_GRID = {"move_atr": [0.4, 0.6, 0.8], "sl_buffer_ticks": [3, 5, 8]}
+
+# ==============================================================================
+# STRATÉGIE YMNQ_DIV (`ymnq-div-v1`) — Divergence YM/NQ extrema (liste user #6, M5, trade YM)
+# ==============================================================================
+# Ratio R=YM_close/NQ_close, médiane+σ glissantes (lookback bars). |R−med| > sigma×σ ET
+# ranges YM&NQ > 0.3×ATR → fade sur YM. R>med+σ (YM trop haut) → SELL LIMIT @ high YM,
+# TP=low YM, SL=high+sl_ticks. ⚠️ DOUBLON xmkt-rv-v1 (RV inter-marché rejeté, OOS 0.77,
+# HFT capte l'index-arb sub-seconde).
+YMNQ_DIV_STRATEGY_VERSION = "ymnq-div-v1"
+YMNQ_DIV_TICKERS = ["YM1"]  # trade YM uniquement (NQ = référence)
+YMNQ_DIV_REF_TICKER = "NQ1"
+YMNQ_DIV_TIMEZONE = "America/New_York"
+YMNQ_DIV_SESSION_START = (9, 30)
+YMNQ_DIV_SIGNAL_CUTOFF = (15, 30)
+YMNQ_DIV_SESSION_END = (16, 0)
+YMNQ_DIV_ATR_PERIOD = 14
+YMNQ_DIV_LOOKBACK = 30  # barres M5 pour médiane/σ du ratio
+YMNQ_DIV_SIGMA = 2.5
+YMNQ_DIV_MIN_RANGE_ATR = 0.3  # ranges YM & NQ ≥ 0.3×ATR (anti-compression)
+YMNQ_DIV_SL_TICKS = 10
+YMNQ_DIV_ORDER_TIMEOUT_BARS = 2  # 2 bougies M5
+YMNQ_DIV_MAX_CONTRACTS = 60
+YMNQ_DIV_RISK_PER_TRADE_USD = None
+YMNQ_DIV_PARAM_GRID = {"sigma": [2.0, 2.5, 3.0], "sl_ticks": [10, 15, 20]}

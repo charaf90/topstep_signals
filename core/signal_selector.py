@@ -41,6 +41,9 @@ TICKER_PRIORITY: dict[str, dict[str, int]] = {
     # vpc-v4 OOS : NQ1 PF≈1.85 > MES1 PF≈1.40 (YM1 hors-périmètre)
     "vpc": {"NQ1": 1, "MES1": 2},
     "VPC": {"NQ1": 1, "MES1": 2},  # tolérance casse sur la clé strategy
+    # bos-fvg-v1 OOS (M5, ICT BOS+FVG) : NQ1 PF=2.44 > MES1 PF=1.93 (univers NQ1+MES1).
+    # Clé strategy distincte → jamais fusionnée avec OPR/fib.
+    "BOS_FVG": {"NQ1": 1, "MES1": 2},
 }
 
 # Score OOS de référence (utilisé pour info / logging uniquement)
@@ -51,6 +54,7 @@ TICKER_OOS_SCORE: dict[str, dict[str, float]] = {
     "fib-v4": {"NQ1": 6.47, "MES1": 6.01, "MGC1": 2.53},
     "fib-fine": {"NQ1": 2.41, "MES1": 1.47},
     "vpc": {"NQ1": 1.85, "MES1": 1.40},
+    "BOS_FVG": {"NQ1": 2.44, "MES1": 1.93},
 }
 
 

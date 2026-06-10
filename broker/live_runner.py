@@ -34,6 +34,11 @@ from broker.projectx_market_realtime import ProjectXMarketRealtimeClient
 from broker.projectx_realtime import ProjectXRealtimeClient, RealtimeEvent
 from broker.telegram_bot import TelegramBot
 from config import (
+    BOS_FVG_ENABLED,
+    BOS_FVG_LIVE_M5_WARMUP_BARS,
+    BOS_FVG_LIVE_TICKERS,
+    BOS_FVG_MAX_HOLD_BARS_M5,
+    BOS_FVG_SESSION_END,
     CHALLENGE_ADAPTIVE_SIZING_ENABLED,
     CHALLENGE_BYPASS_USER_DAILY_LIMIT,
     CHALLENGE_NOTIFY_OVERRIDE_THRESHOLD_USD,
@@ -76,6 +81,7 @@ from config import (
     YM1_ENABLED,
 )
 from core.adaptive_sizing import adaptive_risk_usd
+from core.bos_fvg import get_bos_fvg_live_signal
 from core.event_logger import EventLogger
 from core.fib_fine_v2 import get_fib_fine_live_signal
 from core.opr_v5_1 import get_opr_v5_1_live_signals
@@ -93,6 +99,51 @@ _ST_PENDING = "PENDING"  # ordre limite pas encore filé
 _ST_ACTIVE = "ACTIVE"  # position ouverte (fill confirmé)
 _ST_CANCELLED = "CANCELLED"  # annulé ou expiré sans fill
 _ST_CLOSED = "CLOSED"  # position fermée (TP/SL/TE/market)
+
+# Suffixes de customTag des ordres bracket / clôture (hérités du tag d'entrée).
+# Un ordre d'entrée porte customTag = <tag> ; ProjectX crée les brackets avec
+# customTag = <tag>-SL / <tag>-TP, et nos clôtures market avec <tag>-EXIT.
+_BRACKET_SUFFIXES = ("-SL", "-TP", "-EXIT")
+
+
+def _owner_tag(custom_tag: str | None) -> str | None:
+    """Retire le suffixe bracket (-SL/-TP/-EXIT) d'un customTag → tag propriétaire.
+
+    Permet de rattacher un closing trade (qui porte l'orderId d'un bracket) au tag
+    d'entrée exact, au lieu de l'attribuer au niveau du contrat (source du
+    double-comptage quand plusieurs stratégies tradent le même contrat).
+    """
+    if not custom_tag:
+        return None
+    for suf in _BRACKET_SUFFIXES:
+        if custom_tag.endswith(suf):
+            return custom_tag[: -len(suf)]
+    return custom_tag
+
+
+def _build_close_attribution(
+    trades: list[dict], orders: list[dict], exit_order_ids: dict[int, str] | None = None
+) -> dict[str, list[dict]]:
+    """Indexe les closing trades (profitAndLoss ≠ None, non voided) PAR TAG propriétaire.
+
+    Résolution de l'owner : `trade.orderId → order.customTag → _owner_tag`. Pour les
+    clôtures market (dont le customTag peut ne pas être persisté côté broker), on
+    rabat sur `exit_order_ids` (orderId du market order → tag, connu au placement).
+
+    Renvoie `{tag: [closing_trade, ...]}`. Chaque closing trade est attribué à AU
+    PLUS un tag → plus de double-comptage.
+    """
+    tag_of_order = {o.get("id"): _owner_tag(o.get("customTag")) for o in orders}
+    exit_order_ids = exit_order_ids or {}
+    by_tag: dict[str, list[dict]] = {}
+    for t in trades:
+        if t.get("profitAndLoss") is None or t.get("voided"):
+            continue
+        oid = t.get("orderId")
+        owner = tag_of_order.get(oid) or exit_order_ids.get(oid)
+        if owner:
+            by_tag.setdefault(owner, []).append(t)
+    return by_tag
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,6 +372,11 @@ class SessionRunner:
         # Tickers couverts par fib-fine-v2 (NQ1/MES1 déjà inclus ; flag OFF par défaut).
         if FIB_FINE_ENABLED:
             for t in FIB_FINE_LIVE_TICKERS:
+                if t not in tickers:
+                    tickers.append(t)
+        # Tickers couverts par bos-fvg-v1 (NQ1/MES1 déjà inclus ; promu 2026-06-03).
+        if BOS_FVG_ENABLED:
+            for t in BOS_FVG_LIVE_TICKERS:
                 if t not in tickers:
                     tickers.append(t)
         return tickers
@@ -690,6 +746,64 @@ class SessionRunner:
         # ACTIVE : broker gère via brackets — rien à faire ici
         return None
 
+    def _get_bos_fvg_signal(self, ticker: str) -> dict | None:
+        """
+        Appelle get_bos_fvg_live_signal (bos-fvg-v1, M5) et retourne le signal
+        ou une action d'annulation. Calqué sur `_get_fib_fine_signal` :
+          • barres M5 fetchées en REST dédié (_fetch_bars_m5), pas le df M15.
+          • strategy="BOS_FVG" posé par core.bos_fvg → chemins SÉPARÉS (event_logger,
+            signal_selector, time-stop _sync_broker).
+          • entrée LIMIT @ CE (fill honnête) ; pas de "CANCEL_FILL".
+
+        Retourne :
+          • None si rien d'actif (flag OFF, ticker hors univers, ACTIVE géré
+            broker-side, ou erreur).
+          • dict signal "à placer" si state == "PENDING" (avec tag BOSFVG_...).
+          • dict {"_action": "cancel", "tag": ...} si state == "CANCEL"
+            (invalidation FVG sur M5 closes pendant la phase pending).
+        """
+        if not BOS_FVG_ENABLED:
+            return None
+        if ticker not in BOS_FVG_LIVE_TICKERS:
+            return None
+
+        try:
+            df_m5 = self._fetch_bars_m5(ticker, BOS_FVG_LIVE_M5_WARMUP_BARS)
+        except Exception as exc:
+            _log.error("_fetch_bars_m5 %s échoué : %s", ticker, exc)
+            return None
+        if df_m5 is None or df_m5.empty:
+            return None
+
+        try:
+            live_state = get_bos_fvg_live_signal(df_m5, ticker)
+        except Exception as exc:
+            _log.error("get_bos_fvg_live_signal %s échoué : %s", ticker, exc)
+            return None
+
+        if live_state is None:
+            return None
+
+        state = live_state["state"]
+        sig = live_state["signal"]
+        imp_key = live_state["impulse_key"]
+        today = _current_day_ny(datetime.utcnow()).strftime("%Y%m%d")
+        tag = f"BOSFVG_{ticker}_{today}_{imp_key}"
+
+        if state == "PENDING":
+            return {**sig, "tag": tag}
+
+        if state == "CANCEL":
+            return {
+                "_action": "cancel",
+                "tag": tag,
+                "ticker": ticker,
+                "reason": live_state.get("reason", "bos-fvg invalidation FVG"),
+            }
+
+        # ACTIVE : broker gère via brackets — rien à faire ici
+        return None
+
     # ─────────────────────────────────────────────────────────────────────
     # Placement d'ordre
     # ─────────────────────────────────────────────────────────────────────
@@ -1006,19 +1120,20 @@ class SessionRunner:
         positions = self.client.get_positions(self.account_id)
         pos_by_cid = {p["contractId"]: p for p in positions}
 
-        # ── Trades du jour (pour récupérer les P&L de clôture) ───────────
+        # ── Trades + ordres du jour (P&L de clôture, attribution par tag) ──
         day_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
             hours=5
         )  # marge DST
         trades_today = self.client.get_trades_since(self.account_id, day_start)
-        # Index par contractId → liste des closing trades (profitAndLoss ≠ None).
-        # On n'indexe PAS par orderId car le trade de clôture (bracket TP/SL)
-        # a un orderId différent de l'ordre d'entrée stocké dans placed_tags.
-        closing_by_cid: dict[str, list[dict]] = {}
-        for t in trades_today:
-            if t.get("profitAndLoss") is not None and not t.get("voided"):
-                cid_key = str(t.get("contractId", ""))
-                closing_by_cid.setdefault(cid_key, []).append(t)
+        orders_today = self.client.get_orders_since(self.account_id, day_start)
+        # Attribution PAR TAG via le customTag des ordres (bracket <tag>-SL/-TP,
+        # clôture market <tag>-EXIT) + fallback sur l'orderId des clôtures market
+        # connues (`_exit_order_id`). Un closing trade est attribué à AU PLUS un
+        # tag → corrige le double-comptage qui sommait par contractId.
+        exit_order_ids = {
+            int(i["_exit_order_id"]): tag for tag, i in placed.items() if i.get("_exit_order_id")
+        }
+        closing_by_tag = _build_close_attribution(trades_today, orders_today, exit_order_ids)
 
         # ── Traitement par tag ────────────────────────────────────────────
         for tag, info in list(placed.items()):
@@ -1031,19 +1146,34 @@ class SessionRunner:
             if status == _ST_PENDING:
                 if order_id in open_ids:
                     continue  # toujours en attente — rien à faire
-                # L'ordre n'est plus dans les ordres ouverts
-                cid = info["contract_id"]
-                if cid in pos_by_cid:
-                    # Fill confirmé : une position est ouverte pour ce contrat
+                # L'ordre n'est plus ouvert → fill ou annulation ?
+                # Fill = un opening trade (profitAndLoss None) porte cet order_id
+                # d'entrée. Signal définitif, non ambigu (vs contractId netté).
+                filled = any(
+                    t.get("orderId") == order_id
+                    and t.get("profitAndLoss") is None
+                    and not t.get("voided")
+                    for t in trades_today
+                )
+                if filled or info["contract_id"] in pos_by_cid:
                     self._handle_fill_transition(tag, info, now_utc)
                 else:
-                    # Pas de position → ordre annulé ou expiré sans fill
                     self._handle_cancel_transition(tag, info, "expiré sans fill")
                 continue
 
             if status == _ST_ACTIVE:
-                cid = info["contract_id"]
-                if cid in pos_by_cid:
+                # 1) Clôture détectée PAR TAG via customTag (autoritatif, sans
+                #    double-comptage) : closing trade(s) <tag>-SL/-TP/-EXIT ≥ n_ct.
+                tag_closes = closing_by_tag.get(tag, [])
+                closed_sz = sum(int(t.get("size", 0)) for t in tag_closes)
+                if tag_closes and closed_sz >= int(info.get("n_ct", 1)):
+                    pnl = sum(float(t["profitAndLoss"]) for t in tag_closes)
+                    self._handle_close_transition(tag, info, pnl, now_utc)
+                    continue
+                # 2) Position encore ouverte → time-stops éventuels (clôture market).
+                #    `_exit_sent` (posé par _close_position_market) évite de renvoyer
+                #    un market order à chaque sync en attendant le closing trade.
+                if not info.get("_exit_sent"):
                     strat = info.get("strategy")
                     ft_iso = info.get("fill_time")
                     if ft_iso and strat == "FIB":
@@ -1066,31 +1196,28 @@ class SessionRunner:
                         new_day = _current_day_ny(now_utc) != _current_day_ny(fill_dt)
                         if elapsed_bars >= max_hold or new_day:
                             self._close_position_market(tag, info, now_utc)
-                    continue
-
-                # Position disparue → clôturée (TP/SL/TE/market)
-                # Cherche le(s) closing trade(s) pour ce contrat apparus
-                # après le fill (les brackets TP/SL ont un orderId distinct
-                # de l'ordre d'entrée — on ne peut pas matcher par orderId).
-                fill_ts = info.get("fill_time", "")
-                cid_key = str(info["contract_id"])
-                candidates = [
-                    t
-                    for t in closing_by_cid.get(cid_key, [])
-                    if t.get("creationTimestamp", "") >= fill_ts
-                ]
-                if not candidates:
-                    _log.warning(
-                        "[%s] Aucun closing trade trouvé "
-                        "(contract_id=%s, fill_ts=%s). "
-                        "Clés closing_by_cid disponibles : %s",
-                        tag,
-                        cid_key,
-                        fill_ts,
-                        list(closing_by_cid.keys()),
-                    )
-                pnl = sum(float(t["profitAndLoss"]) for t in candidates) if candidates else 0.0
-                self._handle_close_transition(tag, info, pnl, now_utc)
+                    elif ft_iso and strat == "BOS_FVG":
+                        # Time-stop bos-fvg-v2 (intraday) : close à la cloche RTH
+                        # (BOS_FVG_SESSION_END NY), au changement de jour NY, OU après
+                        # BOS_FVG_MAX_HOLD_BARS_M5 barres M5 écoulées depuis le fill
+                        # (mirror du max_hold fib-fine ci-dessus). NB off-by-one assumé :
+                        # le backtest mesure en index de barre (j - fill_idx), le live en
+                        # secondes écoulées depuis un fill potentiellement intra-bar →
+                        # dérive ±1 barre, sans impact (plateau N∈[3,9], PF>2 partout).
+                        fill_dt = datetime.fromisoformat(ft_iso.replace("Z", "+00:00")).replace(
+                            tzinfo=None
+                        )
+                        now_ny = now_utc.replace(tzinfo=UTC).astimezone(_NY_TZ)
+                        e_h, e_m = BOS_FVG_SESSION_END
+                        past_close = (now_ny.hour * 60 + now_ny.minute) >= (e_h * 60 + e_m)
+                        new_day = _current_day_ny(now_utc) != _current_day_ny(fill_dt)
+                        elapsed_bars = int((now_utc - fill_dt).total_seconds() / 300)
+                        if past_close or new_day or elapsed_bars >= BOS_FVG_MAX_HOLD_BARS_M5:
+                            self._close_position_market(tag, info, now_utc)
+                # Position encore ouverte (aucun closing trade attribué à ce tag) →
+                # on réessaiera au prochain sync. Plus d'attribution contrat-level
+                # (source du double-comptage) : la clôture passe par closing_by_tag.
+                continue
 
     # ─────────────────────────────────────────────────────────────────────
     # Helpers idempotents de transition d'état
@@ -1167,6 +1294,74 @@ class SessionRunner:
             self.tg.notify_risk_breach(reason)
         else:
             self._maybe_warn_daily_limit(status_snap)
+
+    def _heal_phantom_positions(self, now_utc: datetime) -> bool:
+        """Self-heal one-shot au démarrage : purge de `rm.active_positions` les tags
+        sans position ouverte correspondante côté broker (fantômes laissés par une
+        clôture non réconciliée — ils réservaient du slack à tort).
+
+        Sécurité : ne purge une position RÉCENTE (ouverte aujourd'hui) que si le
+        broker répond une liste NON VIDE (un broker momentanément vide ne doit pas
+        faire purger une position légitime du jour). Les positions d'un jour passé
+        sont purgées même si le broker renvoie vide (fantômes overnight certains).
+        NE touche PAS cum_pnl/peak (recalage = action délibérée, cf. brouillon
+        correct_live_state.py). Retourne True si la passe a pu s'exécuter.
+        """
+        contracts = self.state.get("contracts", {})
+        if not contracts:
+            return False  # contrats pas encore résolus → retenter au prochain tick
+        try:
+            positions = self.client.get_positions(self.account_id)
+        except Exception as exc:
+            _log.warning("self-heal fantômes : get_positions échoué (%s) — retry", exc)
+            return False
+
+        open_cids = {p.get("contractId") for p in positions}
+        day_ny = _current_day_ny(now_utc)
+        removed, freed, kept_prudence = [], 0.0, []
+        for tag, order in list(self.rm.active_positions.items()):
+            ticker = (order.metadata or {}).get("ticker")
+            cid = contracts.get(ticker)
+            if cid in open_cids:
+                continue  # position réelle confirmée par le broker → garder
+            opened = order.opened_at.date() if order.opened_at else None
+            stale = opened is None or opened < day_ny
+            if positions or stale:
+                freed += float(order.risk_usd)
+                self.rm.active_positions.pop(tag, None)
+                if tag in self.state.get("placed_tags", {}):
+                    self.state["placed_tags"][tag]["status"] = _ST_CLOSED
+                removed.append(tag)
+            else:
+                kept_prudence.append(tag)  # récent + broker vide → prudence, on garde
+
+        if kept_prudence:
+            _log.warning(
+                "self-heal : %d position(s) sans contrepartie broker MAIS récente(s) "
+                "et broker vide → gardée(s) par prudence : %s",
+                len(kept_prudence),
+                kept_prudence,
+            )
+        if removed:
+            _log.warning(
+                "self-heal : %d position(s) fantôme(s) purgée(s), slack libéré $%.0f : %s",
+                len(removed),
+                freed,
+                removed,
+            )
+            try:
+                _evlog.error("phantom_heal", f"{len(removed)} fantômes, ${freed:.0f} libérés")
+            except Exception:
+                pass
+            try:
+                self.tg.notify_system_error(
+                    "phantom_heal",
+                    f"Démarrage : {len(removed)} position(s) fantôme(s) purgée(s), "
+                    f"slack libéré ${freed:.0f}. Tags : {', '.join(removed)}",
+                )
+            except Exception:
+                pass
+        return True
 
     # ─────────────────────────────────────────────────────────────────────
     # Helpers fib-v4 — invalidation intra-bar (CANCEL / CANCEL_FILL)
@@ -1260,6 +1455,32 @@ class SessionRunner:
             tag,
             info,
             reason=action.get("reason", "fib-fine invalidation pivot break"),
+        )
+
+    def _handle_bos_fvg_cancel(self, action: dict):
+        """
+        bos-fvg-v1 invalidation pendant la phase PENDING (close au-delà du FVG sur
+        barres M5 closes) : annule l'ordre limite côté broker et passe le tag local
+        en CANCELLED. Calqué sur `_handle_fib_fine_cancel`. No-op si le tag n'existe
+        pas ou n'est pas PENDING.
+        """
+        tag = action["tag"]
+        placed = self.state.get("placed_tags", {})
+        info = placed.get(tag)
+        if info is None or info.get("status") != _ST_PENDING:
+            return
+
+        order_id = info.get("order_id", -1)
+        if not self.dry_run and order_id and order_id > 0:
+            try:
+                self.client.cancel_order(self.account_id, order_id)
+            except Exception as exc:
+                _log.warning("[%s] cancel_order API échec : %s", tag, exc)
+
+        self._handle_cancel_transition(
+            tag,
+            info,
+            reason=action.get("reason", "bos-fvg invalidation FVG"),
         )
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1487,8 +1708,12 @@ class SessionRunner:
 
         # ── Dispatch par kind ────────────────────────────────────────────
         if evt.kind == "trade" and evt.pnl is not None:
-            # Closing trade → ACTIVE → CLOSED (helper idempotent)
-            self._handle_close_transition(tag, info, float(evt.pnl), now_utc)
+            # Closing trade : NE PAS attribuer le P&L ici. Les trades ne portent
+            # pas de customTag → le lookup ci-dessus retombe sur le 1er tag du
+            # contrat (faux quand plusieurs stratégies partagent le contrat, et
+            # fige le mauvais tag en CLOSED, bloquant la correction REST). La
+            # clôture + le P&L réel PAR TAG sont réconciliés par `_sync_broker`
+            # (closing_by_tag via orderId→customTag), path REST autoritatif.
             return
 
         if evt.kind == "position":
@@ -1526,23 +1751,33 @@ class SessionRunner:
     # ─────────────────────────────────────────────────────────────────────
 
     def _close_position_market(self, tag: str, info: dict, now_utc: datetime):
-        """Envoie un ordre Market pour clôturer la position et met à jour l'état."""
-        ticker = info["ticker"]
+        """Envoie un ordre Market pour clôturer la position.
+
+        Ne fixe PAS `status=CLOSED` en live : la clôture (et son P&L RÉEL) est
+        réconciliée par `_sync_broker` via le closing trade de l'ordre market
+        (customTag `<tag>-EXIT`, ou en repli son orderId mémorisé dans
+        `_exit_order_id`). `_exit_sent` empêche de renvoyer un market order tant
+        que le closing trade n'est pas vu.
+        """
         cid = info["contract_id"]
         n_ct = int(info["n_ct"])
         # Pour clôturer : sens inverse de l'entrée
         close_side = 1 if info["direction"] == "long" else 0  # Sell / Buy
 
         _log.info("[%s] Clôture forcée market (%s×%d)", tag, cid, n_ct)
-        if not self.dry_run:
-            self.client.place_market_order(
-                account_id=self.account_id,
-                contract_id=cid,
-                side=close_side,
-                size=n_ct,
-                custom_tag=f"CLOSE_{tag}"[:64],
-            )
-        info["status"] = _ST_CLOSED
+        info["_exit_sent"] = True
+        if self.dry_run:
+            info["status"] = _ST_CLOSED  # pas de broker à réconcilier en simu
+            return
+        exit_oid = self.client.place_market_order(
+            account_id=self.account_id,
+            contract_id=cid,
+            side=close_side,
+            size=n_ct,
+            custom_tag=f"{tag}-EXIT"[:64],
+        )
+        if exit_oid:
+            info["_exit_order_id"] = exit_oid
 
     # ─────────────────────────────────────────────────────────────────────
     # Alertes limites approchantes
@@ -1698,6 +1933,14 @@ class SessionRunner:
             _log.error("_sync_broker échoué : %s", exc)
             _evlog.error("sync_broker", exc)
             self.tg.notify_system_error("sync_broker", exc)
+
+        # 3c. Self-heal one-shot au démarrage : purge les positions fantômes
+        #     (active_positions sans contrepartie broker → slack réservé à tort).
+        #     Garde d'instance → s'exécute une seule fois par vie du daemon, et
+        #     retente tant qu'elle n'a pas pu tourner (contrats/broker indispo).
+        if not getattr(self, "_phantom_healed", False):
+            if self._heal_phantom_positions(now_utc):
+                self._phantom_healed = True
 
         # ── 4. Commandes Telegram entrantes (/status) — toujours actif ──────
         today_str = _current_day_ny(now_utc).isoformat()
@@ -1863,6 +2106,18 @@ class SessionRunner:
                     action = sig.get("_action")
                     if action == "cancel":
                         self._handle_fib_fine_cancel(sig)
+                    elif not self._already_placed(sig["tag"]):
+                        new_signals.append(sig)
+
+            # bos-fvg-v1 — NQ1, MES1 (cf. BOS_FVG_LIVE_TICKERS ; promu 2026-06-03).
+            # Barres M5 fetchées en REST dédié (_fetch_bars_m5) — n'utilise PAS le
+            # df M15 ci-dessus. Chemin entièrement séparé d'OPR/fib-v4/fib-fine.
+            if BOS_FVG_ENABLED and ticker in BOS_FVG_LIVE_TICKERS:
+                sig = self._get_bos_fvg_signal(ticker)
+                if sig is not None:
+                    action = sig.get("_action")
+                    if action == "cancel":
+                        self._handle_bos_fvg_cancel(sig)
                     elif not self._already_placed(sig["tag"]):
                         new_signals.append(sig)
 
