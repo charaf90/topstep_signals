@@ -193,6 +193,29 @@ TOPSTEP_TRAILING_DD = 2_000
 TOPSTEP_SAFETY_MULT = 1.1
 
 # ==============================================================================
+# WALK-FORWARD GLOBAL (méthodologie de validation — toutes stratégies)
+# ==============================================================================
+# Dates du split standard. IS_START est appliqué explicitement (2026-06-10) —
+# avant, le filtre IS n'avait pas de borne basse (= début des données, sept 2024
+# pour le m15) ; 2024-09-01 rend le code honnête SANS changer le comportement.
+WF_IS_START = "2024-09-01"
+WF_IS_END = "2025-09-30"
+WF_OOS_START = "2025-10-01"
+# HOLD-OUT TERMINAL (ajout 2026-06-10) : les ~8 dernières semaines de données
+# sont EXCLUES de l'OOS de sélection/robustesse par défaut. Motif : l'OOS fixe
+# oct-2025→today a été consommé par des dizaines de tests d'hypothèses — les
+# survivants sur-fittent le régime de cette fenêtre. Le hold-out n'est consulté
+# qu'UNE fois, explicitement (optimize.py --holdout), juste avant promotion.
+# À avancer chaque trimestre (rituel : nouvelles dates + re-calibration prod).
+WF_HOLDOUT_START = "2026-04-15"
+# Multi-folds ancrés (optimize.py --multifold) : K folds expanding-IS dont les
+# OOS de WF_FOLD_MONTHS mois se suivent en remontant depuis WF_HOLDOUT_START.
+# La stabilité inter-folds (params + PF par fold + OOS recousu) prédit mieux
+# la tenue live qu'un split unique.
+WF_N_FOLDS = 5
+WF_FOLD_MONTHS = 2
+
+# ==============================================================================
 # CIRCUIT BREAKERS INTRA-JOUR
 # ==============================================================================
 DAILY_STOP_AFTER_SL = False  # stopper après 1 SL (désactivé)

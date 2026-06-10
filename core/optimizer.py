@@ -21,16 +21,23 @@ from pathlib import Path
 import pandas as pd
 from joblib import Parallel, delayed
 
-from config import OPTIMIZER_PARALLEL_N_JOBS
+from config import (
+    OPTIMIZER_PARALLEL_N_JOBS,
+    WF_HOLDOUT_START,
+    WF_IS_END,
+    WF_IS_START,
+    WF_OOS_START,
+)
 from core import metrics as m
 from core import robustness as rb
 
-# ── Dates walk-forward (cohérentes sur toutes les stratégies) ───────────────
-IS_START = "2024-12-01"
-IS_END = "2025-09-30"
-OOS_START = "2025-10-01"
-IS_LABEL = "déc 2024 – sept 2025"
-OOS_LABEL = "oct 2025 – mars 2026"
+# ── Dates walk-forward (source de vérité : config.py, section WALK-FORWARD) ──
+IS_START = WF_IS_START
+IS_END = WF_IS_END
+OOS_START = WF_OOS_START
+HOLDOUT_START = WF_HOLDOUT_START
+IS_LABEL = f"{IS_START} – {IS_END}"
+OOS_LABEL = f"{OOS_START} – {HOLDOUT_START} (hold-out exclu)"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -38,11 +45,19 @@ OOS_LABEL = "oct 2025 – mars 2026"
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _evaluate_combo(combo, keys, dfs, strategy, score_fn, is_end, oos_start):
+def _evaluate_combo(
+    combo, keys, dfs, strategy, score_fn, is_end, oos_start, is_start=IS_START, oos_end=None
+):
     """Évalue une combinaison de paramètres sur tous les tickers d'un sous-set.
 
     Fonction pure — ne touche à aucun état partagé. Conçue pour être
     appelée en parallèle via joblib (workers indépendants).
+
+    Args:
+        is_start : borne basse IS (défaut IS_START — no-op historique, le m15
+                   démarre sept 2024 ; indispensable pour le multi-fold).
+        oos_end  : borne haute EXCLUSIVE de l'OOS (None = jusqu'au bout).
+                   Sert au hold-out terminal et aux folds.
 
     Returns:
         dict {"params", "is", "oos", "score"} ou None si aucun ticker n'a
@@ -54,8 +69,12 @@ def _evaluate_combo(combo, keys, dfs, strategy, score_fn, is_end, oos_start):
         df_all = strategy.run_backtest(df_15m, ticker, tf=tf, params=params, topstep_guard=False)
         if len(df_all) == 0 or "date" not in df_all.columns:
             continue
-        df_is = df_all[df_all["date"] <= is_end]
-        df_oos = df_all[df_all["date"] >= oos_start]
+        dates = df_all["date"].astype(str)
+        df_is = df_all[(dates >= is_start) & (dates <= is_end)]
+        oos_mask = dates >= oos_start
+        if oos_end is not None:
+            oos_mask &= dates < oos_end
+        df_oos = df_all[oos_mask]
         rows.append({"ticker": ticker, "is": df_is, "oos": df_oos})
     if not rows:
         return None
@@ -83,6 +102,9 @@ def optimize(
     robustness_report: bool = True,
     output_dir: str | None = "output",
     n_jobs: int | None = None,
+    is_start: str = IS_START,
+    oos_end: str | None = HOLDOUT_START,
+    evaluate_holdout: bool = False,
 ) -> dict:
     """
     Walk-forward IS/OOS sur toutes les combinaisons de PARAM_GRID.
@@ -99,6 +121,14 @@ def optimize(
         n_jobs      : nombre de workers joblib pour la grille de combos.
                       None → utilise config.OPTIMIZER_PARALLEL_N_JOBS (-1 par
                       défaut = tous les CPU). 1 = séquentiel (debug).
+        is_start    : borne basse IS (défaut WF_IS_START — no-op historique).
+        oos_end     : borne haute EXCLUSIVE de l'OOS de sélection/robustesse.
+                      Défaut WF_HOLDOUT_START : le hold-out terminal n'est
+                      JAMAIS consommé par la sélection. None = ancien
+                      comportement (OOS jusqu'au bout des données).
+        evaluate_holdout : True = évalue UNE fois les params retenus sur le
+                      hold-out [oos_end, ∞) et l'affiche. À ne faire qu'en
+                      pré-promotion — chaque consultation consomme le hold-out.
 
     Returns:
         {ticker: {"params": dict, "is": stats, "oos": stats, "oos_topstep": dict}}
@@ -119,10 +149,11 @@ def optimize(
     combos = list(itertools.product(*param_grid.values()))
     total = len(combos)
 
+    oos_label = f"{oos_start} – {oos_end} (hold-out exclu)" if oos_end else f"{oos_start} – fin"
     print(f"\n{'=' * 62}")
     print(f"  OPTIMISATION — {strategy_id}")
-    print(f"  IS  : {IS_LABEL}")
-    print(f"  OOS : {OOS_LABEL}")
+    print(f"  IS  : {is_start} – {is_end}")
+    print(f"  OOS : {oos_label}")
     print(f"  Grille : {total} combinaisons × {len(data)} actifs")
     print(f"{'=' * 62}")
 
@@ -151,7 +182,9 @@ def optimize(
         # déterministe (seed fixé dans chaque module strategies/*.py), et
         # joblib préserve l'ordre des résultats.
         raw_results = Parallel(n_jobs=n_jobs, backend="loky", verbose=0)(
-            delayed(_evaluate_combo)(combo, keys, dfs, strategy, score_fn, is_end, oos_start)
+            delayed(_evaluate_combo)(
+                combo, keys, dfs, strategy, score_fn, is_end, oos_start, is_start, oos_end
+            )
             for combo in combos
         )
         results = [r for r in raw_results if r is not None]
@@ -181,7 +214,11 @@ def optimize(
                 df_15m, t, tf=tf, params=best["params"], topstep_guard=False
             )
             if len(df_all) > 0 and "date" in df_all.columns:
-                oos_trades_list.append(df_all[df_all["date"] >= oos_start])
+                dates = df_all["date"].astype(str)
+                mask = dates >= oos_start
+                if oos_end is not None:
+                    mask &= dates < oos_end
+                oos_trades_list.append(df_all[mask])
 
         oos_combined = (
             pd.concat(oos_trades_list, ignore_index=True) if oos_trades_list else pd.DataFrame()
@@ -201,6 +238,11 @@ def optimize(
     # Rapport global
     _print_global_report(strategy_id, best_per_ticker)
 
+    # Hold-out terminal — consultation EXPLICITE et unique (pré-promotion).
+    # Jamais utilisé pour la sélection : simple évaluation des params retenus.
+    if evaluate_holdout and oos_end is not None and best_per_ticker:
+        _evaluate_holdout(strategy, data, best_per_ticker, holdout_start=oos_end)
+
     # Robustesse statistique (post-optimisation, all-in-one) — n'invalide pas
     # le verdict de base, mais le rapport est complet : Bonferroni, PSR,
     # Monte-Carlo, stress par régime, worst-case clustering.
@@ -214,6 +256,7 @@ def optimize(
                 oos_start=oos_start,
                 n_combos=len(combos),
                 output_dir=output_dir,
+                oos_end=oos_end,
             )
         except Exception as exc:
             print(f"  [!] Robustesse non générée : {exc}")
@@ -234,10 +277,12 @@ def _run_and_dump_robustness(
     oos_start: str,
     n_combos: int,
     output_dir: str | None,
+    oos_end: str | None = None,
 ):
     """
     Recalcule les trades OOS portfolio (all tickers, params optimaux) et lance
     le pipeline core/robustness.py. Exporte un JSON + un Markdown.
+    `oos_end` (exclusif) borne l'OOS au hold-out, comme la sélection.
     """
     # Recalcul trades OOS portfolio avec les params optimaux par ticker
     parts = []
@@ -250,7 +295,11 @@ def _run_and_dump_robustness(
         )
         if len(df_all) == 0 or "date" not in df_all.columns:
             continue
-        df_oos = df_all[df_all["date"] >= oos_start].copy()
+        dates = df_all["date"].astype(str)
+        mask = dates >= oos_start
+        if oos_end is not None:
+            mask &= dates < oos_end
+        df_oos = df_all[mask].copy()
         if "ticker" not in df_oos.columns:
             df_oos["ticker"] = ticker
         parts.append(df_oos)
@@ -306,6 +355,43 @@ def _run_and_dump_robustness(
 # ══════════════════════════════════════════════════════════════════════════════
 # Helpers
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+def _evaluate_holdout(strategy, data: dict, best_per_ticker: dict, holdout_start: str):
+    """Évalue les params retenus sur le hold-out terminal [holdout_start, ∞).
+
+    AUCUN rôle dans la sélection — pure mesure de confirmation pré-promotion.
+    Chaque consultation « consomme » le hold-out : si on itère sur les params
+    après l'avoir vu, il devient un OOS ordinaire (à documenter dans le
+    rapport de la stratégie).
+    """
+    print(f"\n{'=' * 62}")
+    print(f"  HOLD-OUT TERMINAL — [{holdout_start} → fin]  (consultation unique)")
+    print(f"{'=' * 62}")
+    parts = []
+    for ticker, res in best_per_ticker.items():
+        if ticker not in data:
+            continue
+        df_15m, tf = data[ticker]
+        df_all = strategy.run_backtest(
+            df_15m, ticker, tf=tf, params=res["params"], topstep_guard=False
+        )
+        if len(df_all) == 0 or "date" not in df_all.columns:
+            continue
+        df_ho = df_all[df_all["date"].astype(str) >= holdout_start]
+        s = m.compute_stats(df_ho)
+        print(
+            f"  {ticker:<6} n={s['n']:>4}  WR={s['wr'] * 100:.0f}%  "
+            f"PF={s['pf']:.2f}  P&L=${s['pnl']:>+,.0f}"
+        )
+        parts.append(df_ho)
+    if parts:
+        s = m.compute_stats(pd.concat(parts, ignore_index=True))
+        print(
+            f"  {'TOTAL':<6} n={s['n']:>4}  WR={s['wr'] * 100:.0f}%  "
+            f"PF={s['pf']:.2f}  P&L=${s['pnl']:>+,.0f}"
+        )
+        print("  ⚠  Hold-out consulté — ne plus itérer sur les params après cette lecture.")
 
 
 def _default_score(is_s: dict, oos_s: dict) -> float:

@@ -17,8 +17,9 @@ from pathlib import Path
 
 from config import INSTRUMENTS
 from core.data import build_timeframes, load_csv
-from core.optimizer import optimize
+from core.optimizer import HOLDOUT_START, IS_END, OOS_START, optimize
 from core.registry import discover_strategies, load_strategy
+from core.walkforward import run_multifold
 
 
 def main():
@@ -32,10 +33,32 @@ def main():
     )
     parser.add_argument("--ticker", type=str, default=None)
     parser.add_argument(
-        "--is-end", type=str, default="2025-09-30", help="Fin de la période IS (YYYY-MM-DD)"
+        "--is-end", type=str, default=IS_END, help=f"Fin de la période IS (défaut {IS_END})"
     )
     parser.add_argument(
-        "--oos-start", type=str, default="2025-10-01", help="Début de la période OOS (YYYY-MM-DD)"
+        "--oos-start",
+        type=str,
+        default=OOS_START,
+        help=f"Début de la période OOS (défaut {OOS_START})",
+    )
+    parser.add_argument(
+        "--oos-end",
+        type=str,
+        default=HOLDOUT_START,
+        help=f"Fin EXCLUSIVE de l'OOS (défaut {HOLDOUT_START} = hold-out exclu ; "
+        "'none' = OOS jusqu'au bout, ancien comportement)",
+    )
+    parser.add_argument(
+        "--holdout",
+        action="store_true",
+        help="Évalue UNE fois les params retenus sur le hold-out terminal "
+        "(pré-promotion uniquement — chaque consultation le consomme)",
+    )
+    parser.add_argument(
+        "--multifold",
+        action="store_true",
+        help="Walk-forward multi-folds ancré (stabilité inter-folds + OOS recousu) "
+        "au lieu du split unique",
     )
     parser.add_argument(
         "--no-robustness", action="store_true", help="Ne pas générer le rapport de robustesse"
@@ -89,11 +112,18 @@ def main():
             print(f"  [!] Aucune donnée disponible pour {strat_name}")
             continue
 
+        if args.multifold:
+            run_multifold(module, data, output_dir=args.output_dir)
+            continue
+
+        oos_end = None if str(args.oos_end).lower() == "none" else args.oos_end
         optimize(
             module,
             data,
             is_end=args.is_end,
             oos_start=args.oos_start,
+            oos_end=oos_end,
+            evaluate_holdout=args.holdout,
             robustness_report=not args.no_robustness,
             output_dir=args.output_dir,
         )
