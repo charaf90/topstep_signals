@@ -105,9 +105,18 @@ en live tel quel. Vérifier dans cet ordre :
 - [ ] Pas de mutation silencieuse du schéma
 
 ### 5. Walk-forward correctement appliqué
-- [ ] Actifs standards : `IS_END=2025-09-30 / OOS_START=2025-10-01` respecté
+- [ ] Actifs standards : dates de `config.py` (`WF_IS_END / WF_OOS_START`) respectées
+- [ ] **Hold-out terminal exclu** : l'OOS de sélection/robustesse s'arrête à `WF_HOLDOUT_START`.
+      Si le rapport cite des métriques hold-out, vérifier qu'elles n'ont été consultées
+      qu'UNE fois (pas d'itération de params post-lecture — sinon rétrograder)
 - [ ] Nouveaux actifs : split 60/40 ou équivalent justifié dans le rapport
 - [ ] Aucune fuite IS→OOS (pas de paramètre re-optimisé sur l'OOS)
+- [ ] **Si `score_fn` custom utilisé dans l'optimisation : il ne lit QUE l'IS.** Toute condition
+      sur `oos_s` dans le score de classement contamine la sélection (les params retenus
+      auraient un OOS positif par construction) → verdict invalide, rétrograder 🔴.
+      (Fuite de ce type corrigée dans `_default_score` le 2026-06-10 — ne pas la réintroduire.)
+- [ ] Si multifold disponible (`output/multifold_<id>.json`) : majorité de folds positifs
+      et params stables inter-folds ? Params qui changent à chaque fold = edge fragile
 
 ### 6. Cohérence verdict ↔ métriques (BLOCANT)
 - [ ] 🟢 ⇔ PF OOS ≥ 1.5 ET bootstrap ≥ 80 % ET n ≥ 50 ET P&L > 0

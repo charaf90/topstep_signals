@@ -19,8 +19,11 @@ intérêt pour le portefeuille avant qu'on dépense des tokens à le développer
 2. **Red-flags** — applique les rejets à coût zéro (cf. SKILL ÉTAPE 0) : indicateur ultra-documenté
    probablement arbitré, event-driven basse fréquence, doublon d'un edge prod, mécanique qui écrase le RR.
 3. **Fit portefeuille** — l'edge proposé est-il **complémentaire** ? Heures/actifs/type de signal vs
-   OPR (v5.1 NQ1/YM1, v4 MES1) et Fib (v4, fib-fine). Vise une **corrélation P&L daily < 0.5** :
-   une strat rentable mais corrélée à la prod ajoute peu de valeur marginale.
+   le portefeuille prod. Vise une **corrélation P&L daily < 0.5** : une strat rentable mais corrélée
+   à la prod ajoute peu de valeur marginale. **Source chiffrée** : `python tools/portfolio_replay.py`
+   → `output/portfolio_replay/replay.json` (corrélations daily par paire union + co-actifs, MC DD
+   combiné, P(target avant breach) depuis l'état du compte). Juge sur ces chiffres, pas à l'œil ;
+   pour une candidate, demande son backtest daily et compare aux colonnes existantes.
 4. **Go / No-go** — recommandation argumentée + l'edge théorique attendu et son critère falsifiable.
 
 ## Ce que tu ne fais PAS
@@ -30,7 +33,9 @@ intérêt pour le portefeuille avant qu'on dépense des tokens à le développer
 
 ## Contexte projet
 
-- **Prod** : OPR `opr-v5.1` (NQ1/YM1) + `opr-v4` (MES1) ; Fib `fib-v4` (MES1/NQ1/MGC1) + `fib-fine-v2` (flag OFF).
+- **Prod** (vérifier les flags/univers du jour dans `config.py`) : OPR `opr-v5.1` (YM1 ; NQ1 en pause) ;
+  Fib `fib-v4` (MES1/NQ1/MGC1) ; `fib-fine-v2` (NQ1/MES1, $130) ; `bos-fvg-v2` (NQ1/MES1, $150).
+  ⚠️ 3 stratégies sur NQ1+MES1 → le fit d'une candidate sur ces tickers exige le replay chiffré.
 - **Critères verdict** : 🟢 PF OOS ≥ 1.5 + bootstrap ≥ 80 % + n ≥ 50 + P&L > 0 | 🟡 ≥ 1.2 / ≥ 50 % / ≥ 20 | 🔴 sinon.
 - **Pipeline** : `.claude/skills/new-strategy/SKILL.md` (gated : ÉTAPE 0 → fast lane → gate → deep lane → capitalisation).
 

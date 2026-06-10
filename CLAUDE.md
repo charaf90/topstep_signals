@@ -118,7 +118,7 @@ Les écritures dans `core/**` et `broker/**` déclenchent un prompt (`.claude/se
 - **Fib `fib-v4`** — Retracement Fibonacci data-driven (3 cellules 🟢) : MES1 + NQ1 + MGC1.
   Invalidation pivot break + wick excess intra-bar via M1Buffer.
 - **Fib `fib-fine-v2`** — Fibonacci NATIF M5, filtre causal d'expansion de volatilité. Univers NQ1 + MES1,
-  sizing $130. **Flag `FIB_FINE_ENABLED=False` (OFF)** — inerte jusqu'à activation + restart délibéré.
+  sizing $130. **Flag `FIB_FINE_ENABLED=True`** — actif en live depuis le restart du 2026-06.
   Barres M5 en REST dédié (`_fetch_bars_m5`), pas de M1Buffer.
 - **`bos-fvg-v1`** — ICT Break of Structure + FVG, NATIF M5. Entrée LIMIT au Consequent Encroachment
   (50% FVG) en discount, SL sous swing origine, TP = rr×SL. Univers NQ1 + MES1, sizing $150
@@ -159,8 +159,14 @@ python backtest.py --strategy all    --csv-dir ./data            # tout le regis
 python backtest.py --strategy opr_v5_1 --csv-dir ./data --plot   # + 10 charts aléatoires
 
 # Optimisation walk-forward (génère output/robustness_<id>.{json,md} si n_oos suffisant)
+# OOS borné à WF_HOLDOUT_START par défaut (hold-out terminal jamais consommé)
 python optimize.py --strategy fib_v4 --csv-dir ./data --ticker NQ1
 python optimize.py --strategy all    --csv-dir ./data
+python optimize.py --strategy <nom> --csv-dir ./data --multifold   # stabilité inter-folds + OOS recousu
+python optimize.py --strategy <nom> --csv-dir ./data --holdout     # ⚠️ consulte le hold-out (1 fois, pré-promotion)
+
+# Risque portefeuille combiné (corrélations inter-stratégies, MC DD, P(target avant breach))
+python tools/portfolio_replay.py        # input du fit portefeuille @athena
 
 # Production (live)
 tmux ls ; tmux attach -t topstep        # daemon
@@ -212,15 +218,20 @@ tail -f logs/trading_events.log          # fills, closes, erreurs, risk
 
 | Section | Variables clés |
 |---|---|
-| Global / Utilisateur | `RISK_PER_TRADE_USD`, `MAX_TRADES_PER_DAY`, `USER_DAILY_LOSS_MAX`, `USER_MAX_TRADES_PER_DAY` |
+| Global / Utilisateur | `RISK_PER_TRADE_USD`, `MAX_TRADES_PER_DAY`, `USER_DAILY_LOSS_MAX`, `USER_MAX_TRADES_PER_DAY`, `USER_MAX_ARMED_RISK_USD` (cap pending+actifs $600) |
+| Walk-forward | `WF_IS_START/END`, `WF_OOS_START`, `WF_HOLDOUT_START`, `WF_N_FOLDS`, `WF_FOLD_MONTHS` |
 | Topstep | `TOPSTEP_DAILY_LOSS_MAX=1000`, `TOPSTEP_TRAILING_DD=2000` |
 | Frictions | `SLIPPAGE_TICKS_PER_TICKER`, `COMMISSION_RT_PER_CONTRACT` |
 | Macro / Circuit breakers | `MACRO_EVENT_DATES`, `CONSEC_LOSS_PAUSE_DAYS`, `DAILY_STOP_AFTER_SL` |
 | Stratégies | `OPR_*`, `FIB_*`, `FIB_FINE_*`, `BOS_FVG_*` + flags `*_ENABLED` |
 | Broker / Telegram | `PROJECTX_LIVE_MODE`, `LIVE_STATE_FILE`, `TELEGRAM_*` |
 
-**Walk-forward IS/OOS (dates fixes)** : IS sept 2024 → `IS_END="2025-09-30"` · OOS `OOS_START="2025-10-01"` → today.
+**Walk-forward IS/OOS (source de vérité : `config.py` section WALK-FORWARD GLOBAL)** :
+IS `WF_IS_START="2024-09-01"` → `WF_IS_END="2025-09-30"` · OOS `WF_OOS_START="2025-10-01"` →
+`WF_HOLDOUT_START="2026-04-15"` (**hold-out terminal EXCLU** de la sélection/robustesse —
+consulté UNE fois via `--holdout` en pré-promotion ; `--multifold` pour la stabilité inter-folds).
 Critère d'acceptation : `OOS PF ≥ 1.2 ET n ≥ 8 ET P&L OOS > 0`.
+**Rituel trimestriel** : avancer les dates WF (+1 trimestre) et re-calibrer les stratégies prod.
 
 ---
 
@@ -245,7 +256,7 @@ Critère d'acceptation : `OOS PF ≥ 1.2 ET n ≥ 8 ET P&L OOS > 0`.
 
 - [ ] Schéma colonnes respecté (`pnl` net) · `<STRAT>_STRATEGY_VERSION` bumpé si structurel
 - [ ] Aucun fichier `core/{opr,opr_v5_1,strategy_fib_v4,fib_fine_v2,bos_fvg,fib_helpers}.py` ni `broker/` modifié sans confirmation
-- [ ] Tous les paramètres dans `config.py` · Walk-forward IS=2025-09-30 / OOS=2025-10-01 respecté
+- [ ] Tous les paramètres dans `config.py` · Walk-forward = dates `WF_*` de config.py, hold-out exclu de la sélection
 - [ ] Slippage + commissions dans `pnl` · seed fixé · DST-aware (`zoneinfo`, pas `pytz`)
 - [ ] Toute nouvelle fonctionnalité live démarre flag OFF + read-only ; activation au restart délibéré
 - [ ] **Jamais de VPN sur le trafic Topstep** (Tailscale = dashboard uniquement, jamais `--exit-node`)

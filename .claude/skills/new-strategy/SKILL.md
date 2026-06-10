@@ -56,7 +56,9 @@ pas 100k. La machinerie lourde (live-equivalence, quant, audit) ne sert que les 
   Migration vers `config.py` uniquement à la **promotion** (`@forge`).
 - **`np.random.seed(42)`** si tirage aléatoire.
 - **Schéma colonnes standard** (sinon casse `core/optimizer.py`) — voir FAST LANE §2.
-- **Walk-forward fixe** : actifs standards `IS_END=2025-09-30 / OOS_START=2025-10-01`.
+- **Walk-forward fixe** : dates `WF_*` de `config.py` (IS fin 2025-09-30 · OOS 2025-10-01 →
+  `WF_HOLDOUT_START`, **hold-out terminal exclu** — consulté 1 fois via `optimize.py --holdout`
+  en pré-promotion ; `--multifold` recommandé en deep lane pour la stabilité inter-folds).
 - **Bump `<STRATEGY_ID>_STRATEGY_VERSION`** à chaque changement structurel.
 - **Jamais toucher `core/**` ou `broker/**`** (sauf `@forge` sur confirmation explicite).
 
