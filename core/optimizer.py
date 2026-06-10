@@ -309,9 +309,16 @@ def _run_and_dump_robustness(
 
 
 def _default_score(is_s: dict, oos_s: dict) -> float:
-    """Score IS utilisé pour le classement. Pénalise si OOS négatif."""
-    if oos_s["pnl"] <= 0 or oos_s["pf"] < 1.0:
-        return 0.0
+    """Score de classement des combos — STRICTEMENT in-sample.
+
+    INVARIANT MÉTHODOLOGIQUE : ce score ne doit JAMAIS lire `oos_s`.
+    Toute condition sur l'OOS ici contamine la sélection des paramètres
+    (les combos survivantes auraient un OOS positif par construction) et
+    invalide le walk-forward. L'OOS n'est consulté qu'APRÈS sélection,
+    pour le verdict. Le paramètre `oos_s` n'est conservé que pour la
+    compatibilité de signature avec les `score_fn` custom.
+    """
+    del oos_s  # jamais utilisé — voir invariant ci-dessus
     return is_s["pf"] * is_s["pnl"] if is_s["pnl"] > 0 else 0.0
 
 
