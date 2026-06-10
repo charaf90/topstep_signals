@@ -1085,6 +1085,10 @@ PROJECTX_BARS_WARMUP = 2000
 
 # Fichier d'état persistant du live runner
 LIVE_STATE_FILE = "state/live_state.json"
+# Rétention des tags TERMINAUX (CANCELLED/CLOSED) dans placed_tags — au-delà,
+# archivés dans state/archive/placed_tags_archive.jsonl puis retirés du state
+# (ajout 2026-06-10 : 160 tags accumulés depuis mai, state réécrit à chaque tick).
+STATE_TAGS_RETENTION_DAYS = 14
 
 # ==============================================================================
 # REALTIME (SignalR User Hub) — fast path event-driven

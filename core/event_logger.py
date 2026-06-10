@@ -18,15 +18,22 @@ Seuls les événements significatifs sont enregistrés :
 """
 
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 _py_log = logging.getLogger("event_logger")
 
+# Chemin par défaut surchargeable par variable d'environnement. Indispensable
+# pour l'isolation des TESTS : sans elle, pytest écrit ses événements de
+# fixtures (fills/clôtures/phantom_heal factices) dans le journal de PROD —
+# source de fausses alertes constatée le 2026-06-10 (cf. tests/conftest.py).
+_DEFAULT_LOG = "logs/trading_events.log"
+
 
 class EventLogger:
-    def __init__(self, path: str = "logs/trading_events.log"):
-        self.path = Path(path)
+    def __init__(self, path: str | None = None):
+        self.path = Path(path or os.environ.get("TRADING_EVENTS_LOG", _DEFAULT_LOG))
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     # ─────────────────────────────────────────────────────────────────────
@@ -70,8 +77,10 @@ class EventLogger:
         )
 
     def order_placed(self, tag: str, order_id, dry_run: bool = False):
-        mode = "DRY-RUN" if dry_run else "LIVE"
-        self._write("ORDRE", f"Placé  {tag}", order_id=order_id, mode=mode)
+        # `execution=` (et non `mode=`) : évite la confusion avec le `account=`
+        # de SESSION — deux sémantiques différentes portaient le même mot.
+        execution = "DRY-RUN" if dry_run else "LIVE"
+        self._write("ORDRE", f"Placé  {tag}", order_id=order_id, execution=execution)
 
     def order_failed(self, tag: str, reason: str):
         self._write("ERROR", f"Placement échoué  {tag}", raison=reason)
@@ -171,8 +180,15 @@ class EventLogger:
     def error(self, context: str, exc):
         self._write("ERROR", f"Erreur système  {context}", detail=str(exc))
 
-    def session_start(self, date_str: str, tickers: list, mode: str):
-        self._write("SESSION", f"Démarrage  {date_str}", actifs=",".join(tickers), mode=mode)
+    def warn(self, context: str, detail):
+        """WARN générique — anomalie auto-réparée ou situation à surveiller
+        (ex. phantom_heal). ERROR reste réservé aux échecs réels."""
+        self._write("WARN", context, detail=str(detail))
+
+    def session_start(self, date_str: str, tickers: list, account: str):
+        # `account=` : type de compte broker (CHALLENGE_SIM / FUNDED) — ne pas
+        # confondre avec `execution=` des ordres (LIVE / DRY-RUN).
+        self._write("SESSION", f"Démarrage  {date_str}", actifs=",".join(tickers), account=account)
 
     def session_end(self, date_str: str, session_pnl: float, n_fills: int):
         self._write(

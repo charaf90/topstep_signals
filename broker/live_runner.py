@@ -75,6 +75,7 @@ from config import (
     PROJECTX_REALTIME_RECONNECT_DELAYS,
     PROJECTX_SYMBOLS,
     RISK_PER_TRADE_USD,
+    STATE_TAGS_RETENTION_DAYS,
     TOPSTEP_ACCOUNT_SIZE,
     USER_DAILY_LOSS_MAX,
     USER_MAX_TRADES_PER_DAY,
@@ -90,7 +91,7 @@ from core.signal_selector import filter_correlated_signals
 from core.strategy_fib_v4 import get_fib_v4_live_signal
 
 _log = logging.getLogger(__name__)
-_evlog = EventLogger("logs/trading_events.log")
+_evlog = EventLogger()  # chemin via env TRADING_EVENTS_LOG (isolation tests) ou défaut prod
 
 _NY_TZ = ZoneInfo(OPR_TIMEZONE)
 
@@ -395,6 +396,7 @@ class SessionRunner:
                 # Restaure l'offset Telegram getUpdates
                 tg_offset = self.state.get("telegram_update_id", -1)
                 self.tg.restore_update_id(tg_offset)
+                self._purge_terminal_tags()
                 return
             except Exception as exc:
                 _log.warning("Lecture state échouée (%s) — réinitialisation", exc)
@@ -437,6 +439,50 @@ class SessionRunner:
         self.state_file.write_text(
             json.dumps(self.state, indent=2, ensure_ascii=False),
             encoding="utf-8",
+        )
+
+    def _purge_terminal_tags(self):
+        """Archive puis retire de placed_tags les tags TERMINAUX (CANCELLED /
+        CLOSED) plus vieux que STATE_TAGS_RETENTION_DAYS.
+
+        Sans purge, le state croît sans borne (160 tags accumulés au
+        2026-06-10) et est réécrit à chaque tick. Les tags PENDING/ACTIVE ne
+        sont JAMAIS touchés, quel que soit leur âge. L'archive est un JSONL
+        append-only — aucune information n'est perdue.
+        """
+        tags = self.state.get("placed_tags", {})
+        if not tags:
+            return
+        cutoff = datetime.utcnow() - timedelta(days=STATE_TAGS_RETENTION_DAYS)
+        purged: dict[str, dict] = {}
+        for tag, rec in list(tags.items()):
+            if rec.get("status") not in (_ST_CANCELLED, _ST_CLOSED):
+                continue
+            placed_at = str(rec.get("placed_at") or "")
+            try:
+                ts = datetime.strptime(placed_at[:19], "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                continue  # timestamp illisible → on garde (prudence)
+            if ts < cutoff:
+                purged[tag] = tags.pop(tag)
+        if not purged:
+            return
+        try:
+            archive = self.state_file.parent / "archive" / "placed_tags_archive.jsonl"
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open("a", encoding="utf-8") as f:
+                for tag, rec in purged.items():
+                    f.write(json.dumps({"tag": tag, **rec}, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            # Échec d'archivage → on restaure (ne jamais perdre de données)
+            tags.update(purged)
+            _log.warning("Archivage placed_tags échoué (%s) — purge annulée", exc)
+            return
+        _log.info(
+            "%d tag(s) terminaux archivés (> %d jours) → %s",
+            len(purged),
+            STATE_TAGS_RETENTION_DAYS,
+            archive,
         )
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1350,7 +1396,9 @@ class SessionRunner:
                 removed,
             )
             try:
-                _evlog.error("phantom_heal", f"{len(removed)} fantômes, ${freed:.0f} libérés")
+                # WARN (pas ERROR) : c'est une auto-réparation réussie. Si ça
+                # se répète à chaque démarrage → bug de cycle de vie à creuser.
+                _evlog.warn("phantom_heal", f"{len(removed)} fantômes, ${freed:.0f} libérés")
             except Exception:
                 pass
             try:
@@ -2043,8 +2091,11 @@ class SessionRunner:
                 _log.warning("Impossible de calculer le solde d'ouverture : %s", exc)
 
         if self.state.get("session_start_notified") != today_str:
-            mode = "LIVE" if self.live_mode else "SIMULÉ"
-            _evlog.session_start(today_str, self.tickers, mode)
+            # Type de COMPTE broker (≠ execution= des ordres) : un compte
+            # challenge Topstep est "simulated" côté ProjectX mais les ordres
+            # partent réellement (execution=LIVE).
+            account = "FUNDED" if self.live_mode else "CHALLENGE_SIM"
+            _evlog.session_start(today_str, self.tickers, account)
             self.tg.notify_session_start(
                 today_str,
                 self.tickers,
