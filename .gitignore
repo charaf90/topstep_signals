@@ -3,6 +3,7 @@ __pycache__/
 output/
 data/
 DATA_BACKTEST/
+backups/
 *.csv
 *Zone.Identifier
 .env
@@ -26,3 +27,16 @@ htmlcov/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Brouillon : dossier de travail jetable — contenu ignoré, scaffold conservé.
+# Tout essai vit ici ; vider avec scripts/clear_brouillon.sh. La base committée
+# = le projet SANS brouillon (les essais ne polluent jamais l'historique git).
+brouillon/**
+!brouillon/README.md
+!brouillon/__init__.py
+!brouillon/strategies/
+!brouillon/strategies/__init__.py
+!brouillon/scripts/
+!brouillon/scripts/.gitkeep
+!brouillon/notes/
+!brouillon/notes/.gitkeep

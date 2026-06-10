@@ -356,6 +356,27 @@ class BrokerData:
             "n_total": n_total,
         }
 
+    def daily_net_pnl(self, days_back: int = 60) -> dict[str, float]:
+        """P&L NET par jour (date du closing trade) — source de vérité broker.
+
+        Utilisé pour le « best day » (consistency) et le peak : on agrège les
+        ``profitAndLoss`` des closing trades moins frais+commissions, groupés par
+        date de ``creationTimestamp``. Évite l'incohérence du state local (brut,
+        sans frais, sujet aux doublons d'enregistrement).
+        """
+        trades = self.trades_history(days_back=days_back)
+        out: dict[str, float] = {}
+        for t in trades:
+            pnl = t.get("profitAndLoss")
+            if pnl is None:
+                continue
+            day = (t.get("creationTimestamp") or "")[:10]
+            if not day:
+                continue
+            fees = float(t.get("fees", 0) or 0) + float(t.get("commissions", 0) or 0)
+            out[day] = round(out.get(day, 0.0) + float(pnl) - fees, 2)
+        return out
+
 
 # Singleton — un seul login par process
 _broker_instance: BrokerData | None = None

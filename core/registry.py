@@ -18,6 +18,12 @@ Optionnel :
 
 Modules ignorés : ceux dont le nom commence par `_` ou qui n'exposent pas
 le contrat minimal.
+
+Dossier de travail jetable : les stratégies d'essai placées dans
+`brouillon/strategies/` sont AUSSI découvertes (workflow CLI identique). Les
+stratégies de base (`strategies/`) ont la priorité — un essai ne peut jamais
+masquer un wrapper live. `brouillon/` est gitignoré et vidable à la demande
+(`scripts/clear_brouillon.sh`) sans impacter la base.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import importlib
 import pkgutil
 
 _STRATEGIES_PACKAGE = "strategies"
+_BROUILLON_PACKAGE = "brouillon.strategies"
 
 
 def _has_min_contract(module) -> bool:
@@ -36,33 +43,47 @@ def _has_min_contract(module) -> bool:
     )
 
 
-def discover_strategies() -> dict[str, str]:
-    """
-    Scanne le package `strategies/` et retourne {nom_court: chemin_module}.
+def _scan_package(pkg_name: str) -> dict[str, str]:
+    """Scanne un package de stratégies → {nom_court: chemin_module}.
 
-    Le nom_court est le nom de fichier sans extension (ex: "opr"), c'est
-    ce qu'on attend en CLI `--strategy opr`.
-
-    Chargement tolérant aux erreurs : un module qui plante au chargement
-    est ignoré avec un avertissement (pas de crash global).
+    Tolérant : si le package n'est pas importable (ex: `brouillon/` absent) ou
+    qu'un module plante au chargement, on ignore sans crash global.
     """
-    out: dict[str, str] = {}
+    found: dict[str, str] = {}
     try:
-        pkg = importlib.import_module(_STRATEGIES_PACKAGE)
+        pkg = importlib.import_module(pkg_name)
     except ImportError:
-        return out
+        return found
 
-    for finder, name, is_pkg in pkgutil.iter_modules(pkg.__path__):
+    for _finder, name, is_pkg in pkgutil.iter_modules(pkg.__path__):
         if name.startswith("_") or is_pkg:
             continue
-        full = f"{_STRATEGIES_PACKAGE}.{name}"
+        full = f"{pkg_name}.{name}"
         try:
             mod = importlib.import_module(full)
         except Exception as exc:
             print(f"  [registry] {full} ignoré ({type(exc).__name__}: {exc})")
             continue
         if _has_min_contract(mod):
-            out[name] = full
+            found[name] = full
+    return found
+
+
+def discover_strategies() -> dict[str, str]:
+    """
+    Scanne `strategies/` PUIS `brouillon/strategies/` et retourne
+    {nom_court: chemin_module}.
+
+    Le nom_court est le nom de fichier sans extension (ex: "opr"), c'est
+    ce qu'on attend en CLI `--strategy opr`. Les stratégies de base ont la
+    priorité : un essai du brouillon portant le même nom est ignoré (warning).
+    """
+    out = _scan_package(_STRATEGIES_PACKAGE)
+    for name, full in _scan_package(_BROUILLON_PACKAGE).items():
+        if name in out:
+            print(f"  [registry] brouillon '{name}' ignoré (collision avec une strat de base)")
+            continue
+        out[name] = full
     return out
 
 

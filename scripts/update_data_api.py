@@ -40,7 +40,7 @@ PRODUCTION_TICKERS: dict[str, str] = {
     "MGC1": "MGC",
 }
 
-TIMEFRAME = "m15"
+TIMEFRAME = "m15"  # défaut historique ; surchargeable via --timeframe
 
 
 def build_client(live: bool) -> ProjectXClient:
@@ -95,10 +95,11 @@ def process_ticker(
     data_dir: Path,
     dry_run: bool,
     live: bool,
+    timeframe: str = TIMEFRAME,
 ) -> dict:
-    csv_path = data_dir / f"{ticker}_data_{TIMEFRAME}.csv"
+    csv_path = data_dir / f"{ticker}_data_{timeframe}.csv"
 
-    df_api = fetch_history(client, symbol=symbol, days_back=days, timeframe=TIMEFRAME, live=live)
+    df_api = fetch_history(client, symbol=symbol, days_back=days, timeframe=timeframe, live=live)
     if df_api.empty:
         return {"ticker": ticker, "ok": False, "msg": "API retourne 0 bougies"}
 
@@ -157,6 +158,9 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true", help="Rapport sans écriture des CSV")
     parser.add_argument(
+        "--timeframe", default=TIMEFRAME, help="Timeframe à mettre à jour (défaut m15 ; ex. m5)"
+    )
+    parser.add_argument(
         "--live", action="store_true", help="Utiliser les contrats live (défaut : sim/paper)"
     )
     parser.add_argument(
@@ -189,7 +193,9 @@ def main() -> None:
     for ticker in args.tickers:
         symbol = PRODUCTION_TICKERS[ticker]
         print(f"  → {ticker} ({symbol}) ...", end=" ", flush=True)
-        r = process_ticker(client, ticker, symbol, args.days, data_dir, args.dry_run, args.live)
+        r = process_ticker(
+            client, ticker, symbol, args.days, data_dir, args.dry_run, args.live, args.timeframe
+        )
         results.append(r)
         if r["ok"]:
             print(f"+{r['n_new']} barres  (API {r['api_start']} → {r['api_end']})")

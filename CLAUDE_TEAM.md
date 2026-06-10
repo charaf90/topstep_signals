@@ -117,7 +117,7 @@ spawn une team de teammates basés sur les subagents restants (auditor, new-stra
 
 - `strategie_futur/BACKLOG.md` — idées priorisées, source de vérité des candidats.
 - `REGISTRE_HYPOTHESES.md` — hypothèses testées 🟢/🟡/🔴 + leçons (consulter avant, écrire après).
-- `docs/strategies_abandoned.md` + mémoire `feedback_strategies_abandoned_lessons` — leçons compactes.
+- Mémoire persistante (`MEMORY.md` + fichiers) — leçons transversales. Repart vide après reset baseline.
 
 ## Référence aux sources
 

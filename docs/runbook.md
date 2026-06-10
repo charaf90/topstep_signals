@@ -359,7 +359,7 @@ tail -f logs/trading_events.log
 
 ## ⚠️ Encart sécurité Tailscale
 
-> **Invariant Topstep #8 (ROADMAP_SOLO) — Jamais de VPN sur le trafic Topstep.**
+> **Invariant Topstep (cf. CLAUDE.md) — Jamais de VPN sur le trafic Topstep.**
 > Tailscale est utilisé **uniquement** pour le dashboard iPhone (mesh privé,
 > n'affecte pas la route internet par défaut). Si Tailscale prend la route
 > par défaut (mode exit-node), le trafic Topstep transite via Tailscale, ce
@@ -431,4 +431,4 @@ git tag -a v$(date +%Y%m%d-%H%M)-pre-intervention -m "État avant intervention"
 
 ---
 
-*Mis à jour : 2026-05-24 (création — ROADMAP_SOLO PHASE 1.3).*
+*Runbook d'incident — réponse opérationnelle live.*

@@ -145,20 +145,33 @@ def equity_curve_pro(
             f"Cumul: <b>${eq:+,.0f}</b>"
         )
 
+    # Ligne épurée (pas de marqueur par point — moins de bruit sur mobile),
+    # hover conservé via hovertext sur la trace.
     fig.add_trace(
         go.Scatter(
             x=timestamps,
             y=equity,
-            mode="lines+markers",
+            mode="lines",
             line={"color": color, "width": 2.5, "shape": "linear"},
             fill="tozeroy",
             fillcolor=rgba(color, 0.13),
-            marker={"size": 5, "color": color, "line": {"color": BG, "width": 1}},
             hovertext=hover_text,
             hoverinfo="text",
             name="Equity",
         )
     )
+    # Marqueur unique sur le dernier point (valeur courante)
+    if timestamps:
+        fig.add_trace(
+            go.Scatter(
+                x=[timestamps[-1]],
+                y=[equity[-1]],
+                mode="markers",
+                marker={"size": 8, "color": color, "line": {"color": BG, "width": 2}},
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
 
     if peak > 0:
         fig.add_hline(

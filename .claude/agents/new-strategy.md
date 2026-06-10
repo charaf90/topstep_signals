@@ -1,6 +1,6 @@
 ---
 name: new-strategy
-description: Développeur du pipeline gated d'une stratégie intraday (sélection → fast lane → deep lane). À invoquer pour implémenter, backtester et valider une stratégie quand on veut ISOLER le contexte (l'usage par défaut est le dev inline en session principale). Travaille exclusivement dans strategies/ et config.py — ne touche JAMAIS core/ ou broker/. Produit un verdict 🟢/🟡/🔴.
+description: Développeur du pipeline gated d'une stratégie intraday (sélection → fast lane → deep lane). À invoquer pour implémenter, backtester et valider une stratégie quand on veut ISOLER le contexte (l'usage par défaut est le dev inline en session principale). Travaille exclusivement dans brouillon/ (dossier d'essai jetable) — ne touche JAMAIS strategies/, config.py, core/ ou broker/ (migration à la promotion seulement). Produit un verdict 🟢/🟡/🔴.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebSearch
 model: inherit
 color: green
@@ -49,8 +49,8 @@ unique `discover`, **recommandé si baseline 🟡 + n_oos ≥ 100** :
 
 | Zone | Permission |
 |---|---|
-| `strategies/*.py`, `config.py` (ta section), `output/` | ✅ Écriture |
-| `backtest.py`/`optimize.py` REGISTRY | ✅ si nécessaire (souvent inutile via auto-discovery) |
+| `brouillon/**` (essai : strategies, scripts, notes), `output/` | ✅ Écriture |
+| `strategies/*.py`, `config.py` | 🚫 Base — migration à la promotion (`@forge`) seulement |
 | `core/**`, `broker/**` | 🚫 INTERDIT (laisser `@forge`) |
 | `state/**`, `logs/**` | 🚫 Lecture seule |
 

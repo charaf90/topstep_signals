@@ -58,12 +58,19 @@ def screenshot(
         page = context.new_page()
         page.goto(url, wait_until="networkidle", timeout=15000)
 
-        # Attendre que Streamlit ait au moins commencé à rendre (selector tab)
-        try:
-            page.wait_for_selector('[role="tablist"]', timeout=timeout_ms)
-        except Exception:
+        # Attendre que le dashboard ait commencé à rendre. Dash expose .dash-tabs,
+        # Streamlit expose [role="tablist"] — on tente les deux.
+        rendered = False
+        for sel in (".dash-tabs", ".dash-tab", '[role="tablist"]'):
+            try:
+                page.wait_for_selector(sel, timeout=timeout_ms // 3)
+                rendered = True
+                break
+            except Exception:  # noqa: PERF203
+                continue
+        if not rendered:
             print(
-                f"⚠️  Pas de tablist trouvé après {timeout_ms}ms — screenshot tel quel.",
+                f"⚠️  Aucun conteneur d'onglets trouvé après {timeout_ms}ms — screenshot tel quel.",
                 file=sys.stderr,
             )
 

@@ -8,6 +8,8 @@
     "allow": [
       "Bash(tmux ls)",
       "Bash(tmux capture-pane *)",
+      "Write(brouillon/**)",
+      "Edit(brouillon/**)",
       "Write(strategies/*)",
       "Edit(strategies/*)",
       "Write(output/*)"

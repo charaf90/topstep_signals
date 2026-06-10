@@ -51,7 +51,9 @@ pas 100k. La machinerie lourde (live-equivalence, quant, audit) ne sert que les 
   Jamais `bar["close"]` de la barre `i` pour décider à `i`.
 - **Frictions dans `pnl` net** : `SLIPPAGE_TICKS_PER_TICKER` (entrée + sortie) + `COMMISSION_RT_PER_CONTRACT`.
 - **Fill conservatif** : si SL et TP dans le range d'une même barre M15 → **SL prioritaire**.
-- **Tout paramètre dans `config.py`**, jamais hardcodé dans `strategies/<id>.py`.
+- **Essai = dans `brouillon/strategies/<id>.py`** (dossier jetable). Les **params d'essai restent
+  auto-contenus** dans ce fichier (constantes module + `PARAM_GRID`) — on ne pollue PAS `config.py`.
+  Migration vers `config.py` uniquement à la **promotion** (`@forge`).
 - **`np.random.seed(42)`** si tirage aléatoire.
 - **Schéma colonnes standard** (sinon casse `core/optimizer.py`) — voir FAST LANE §2.
 - **Walk-forward fixe** : actifs standards `IS_END=2025-09-30 / OOS_START=2025-10-01`.
@@ -82,7 +84,7 @@ Avant d'écrire la moindre ligne :
 1. **Consulter les actifs de capitalisation** :
    - `strategie_futur/BACKLOG.md` (priorité P1 > P2 > P3 ; préférer une idée déjà priorisée)
    - `REGISTRE_HYPOTHESES.md` — **ne pas re-tester une hypothèse déjà 🔴** sous une autre forme
-   - Mémoire `feedback_strategies_abandoned_lessons` (leçons compactes)
+   - Mémoire persistante (`MEMORY.md` + fichiers) — leçons transversales accumulées
 2. **Préférer une variante d'edge prouvé** (OPR/Fib) à un concept novateur — base-rate de succès
    bien plus élevé.
 3. **RED-FLAGS — rejet à coût zéro AVANT tout backtest** (si l'un s'applique, dire pourquoi et stop) :
@@ -101,19 +103,21 @@ Avant d'écrire la moindre ligne :
 - Concept vraiment inconnu → `WebSearch` ponctuel inline (pas de subagent).
 
 ### 2. Scaffold
-- `strategies/<strategy_id>.py` — `run_backtest()` (+ `plot_day()` minimal, optionnel).
-  Référence : [templates/strategy_template.md](templates/strategy_template.md).
+- `brouillon/strategies/<strategy_id>.py` — `run_backtest()` (+ `plot_day()` minimal, optionnel).
+  Référence : [templates/strategy_template.md](templates/strategy_template.md). **Dossier jetable** :
+  tout l'essai (code + params + `PARAM_GRID`) reste auto-contenu ici.
 - **Schéma de colonnes obligatoire** :
   ```
   date, dir, entry, sl, tp, sl_dist, tp_dist, rr, n_ct,
   result (TP|SL|TE|NOT_FILLED), pnl, fill_time, exit_time, exit, regime
   ```
   `pnl` = **net**. Optionnelles tolérées : `pnl_gross`, `adx`, `atr_pct`, `is_macro_day`.
-- `config.py` — section `# STRATÉGIE <NOM>` avec tous les params + `<STRATEGY_ID>_STRATEGY_VERSION`.
+- **Params auto-contenus** dans le fichier d'essai (constantes + `<STRATEGY_ID>_STRATEGY_VERSION`).
+  On n'écrit dans `config.py` qu'à la **promotion** (`@forge`).
 - **Breadth** : coder les variantes naturelles (triggers, tickers, seuils) comme dimensions du
   `PARAM_GRID` (≤ 4) — elles seront testées **en un seul run** walk-forward, pas en cycles séparés.
-- Auto-discovery `core/registry.py` : un fichier dans `strategies/` suffit (pas besoin d'éditer
-  `backtest.py`/`optimize.py` en général).
+- Auto-discovery `core/registry.py` : un fichier dans `brouillon/strategies/` suffit (pas besoin
+  d'éditer `backtest.py`/`optimize.py`).
 
 ### 3. Backtest + Optimize
 ```bash
@@ -149,8 +153,8 @@ Si **non** (dépend du low/high/close FINAL de la bougie de fill ou d'une barre 
 - **Path A (préféré)** — wirage `M1Buffer` : écrire `get_<id>_live_signal(df_15m, ticker, m1_buffer, contract_id)`
   qui reconstruit le low/high COURANT via `broker/m1_buffer.py` et annule si le seuil est franchi
   pendant le pending. Pattern : `core/opr.py` + `broker/live_runner.py`.
-- **Path B (fallback)** — `scripts/live_eq_<id>.py` sur le modèle `scripts/live_eq_v5_1.py` :
-  décale la décision à la barre M15 SUIVANTE. **Le verdict est RECALCULÉ sur les métriques live-eq.**
+- **Path B (fallback)** — `brouillon/scripts/live_eq_<id>.py` : décale la décision à la barre M15
+  SUIVANTE. **Le verdict est RECALCULÉ sur les métriques live-eq.**
 - **Ni A ni B** → le PF est un upper bound non-atteignable. `@auditor` rétrograde 🟢→🟡 minimum.
 
 > Cas d'école **fib-v4** : verdict 🟢 initial basé sur un PF naïf (`wick_through_atr` lu sur la

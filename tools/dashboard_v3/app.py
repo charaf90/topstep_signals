@@ -25,13 +25,7 @@ from dash import Input, Output, dcc, html
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from config import (  # noqa: E402
-    CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
-    TOPSTEP_DAILY_LOSS_MAX,
-    TOPSTEP_PROFIT_TARGET,
-    TOPSTEP_TRAILING_DD,
-    USER_DAILY_LOSS_MAX,
-)
+from config import TOPSTEP_PROFIT_TARGET  # noqa: E402
 from tools.dashboard_v3 import charts as ch  # noqa: E402
 from tools.dashboard_v3 import data as dt  # noqa: E402
 from tools.dashboard_v3.broker import get_broker  # noqa: E402
@@ -50,8 +44,16 @@ app = dash.Dash(
     title="Topstep Live",
     update_title=None,  # supprime "Updating..." dans le title
     meta_tags=[
-        {"name": "viewport", "content": "width=device-width, initial-scale=1.0"},
-        {"name": "theme-color", "content": "#0e1117"},
+        {
+            "name": "viewport",
+            "content": "width=device-width, initial-scale=1.0, viewport-fit=cover",
+        },
+        {"name": "theme-color", "content": "#000000"},
+        # PWA iPhone — plein écran « Ajouter à l'écran d'accueil »
+        {"name": "apple-mobile-web-app-capable", "content": "yes"},
+        {"name": "mobile-web-app-capable", "content": "yes"},
+        {"name": "apple-mobile-web-app-status-bar-style", "content": "black-translucent"},
+        {"name": "apple-mobile-web-app-title", "content": "Topstep"},
     ],
 )
 
@@ -63,6 +65,9 @@ app.index_string = """
     {%metas%}
     <title>{%title%}</title>
     {%favicon%}
+    <link rel="manifest" href="/assets/manifest.json">
+    <link rel="apple-touch-icon" href="/assets/icon-180.png">
+    <link rel="icon" type="image/png" href="/assets/icon-192.png">
     {%css%}
     <style>
         :root {
@@ -97,12 +102,16 @@ app.index_string = """
         }
         ._dash-undo-redo, .dash-debug-menu, .dash-debug-menu__outer { display: none !important; }
 
-        /* Container responsive (iOS-style centered) */
+        /* Container responsive (iOS-style centered) + safe-area notch */
         .v3-container {
             max-width: 480px;
             margin: 0 auto;
-            padding: 20px 16px 32px 16px;
+            padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+                     max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
         }
+
+        /* Icônes monochromes (Bootstrap Icons vendorisé dans assets/) */
+        .bi { display: inline-block; line-height: 1; vertical-align: -1.5px; }
 
         /* Header iOS Large Title */
         .v3-header {
@@ -118,7 +127,11 @@ app.index_string = """
             letter-spacing: -0.5px; /* Apple negative tracking */
             line-height: 1;
             color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 9px;
         }
+        .v3-title .bi { font-size: 26px; color: var(--green); }
         .v3-subtitle {
             font-size: 12px;
             color: var(--text-secondary);
@@ -138,6 +151,137 @@ app.index_string = """
             animation: slideUp 0.5s var(--ease-ios);
         }
         .v3-meta b { color: var(--text); font-weight: 600; }
+
+        /* ── HERO challenge — gros chiffre net + progression objectif ─────── */
+        .v3-hero {
+            background: var(--bg2);
+            border-radius: 22px;
+            padding: 22px 20px 20px 20px;
+            margin-bottom: 14px;
+            animation: slideUp 0.5s var(--ease-ios) backwards;
+        }
+        .v3-hero-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+        .v3-hero-value {
+            font-size: 46px;
+            font-weight: 700;
+            letter-spacing: -2px;
+            line-height: 1;
+            margin-bottom: 16px;
+        }
+        .v3-hero-value.green { color: var(--green); }
+        .v3-hero-value.red   { color: var(--red); }
+        .v3-hero-value.grey  { color: var(--text-secondary); }
+        .v3-hero-meta {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-top: 12px;
+        }
+        .v3-hero-meta b { color: var(--text); font-weight: 600; }
+
+        /* Progress bar (objectif profit) */
+        .v3-progress-track {
+            height: 8px;
+            border-radius: 999px;
+            background: var(--bg3);
+            overflow: hidden;
+        }
+        .v3-progress-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: var(--green);
+            transition: width 0.6s var(--ease-ios);
+        }
+        .v3-progress-cap {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 7px;
+            font-weight: 500;
+        }
+        .v3-progress-cap b { color: var(--text); font-weight: 600; }
+
+        /* ── Panneau Sécurité — barres de marge ───────────────────────────── */
+        .v3-risk {
+            background: var(--bg2);
+            border-radius: 16px;
+            padding: 16px 16px 6px 16px;
+        }
+        .v3-risk-row { margin-bottom: 16px; }
+        .v3-risk-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 7px;
+        }
+        .v3-risk-label { font-size: 13px; font-weight: 600; color: var(--text); }
+        .v3-risk-label .sub { font-size: 11px; color: var(--text-secondary); font-weight: 500; margin-left: 6px; }
+        .v3-risk-headroom { font-size: 14px; font-weight: 700; letter-spacing: -0.3px; }
+        .v3-risk-track {
+            position: relative;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--bg3);
+            overflow: hidden;
+        }
+        .v3-risk-fill {
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            border-radius: 999px;
+            transition: width 0.6s var(--ease-ios);
+        }
+        .v3-risk-mark {
+            position: absolute;
+            top: -3px; bottom: -3px;
+            width: 2px;
+            background: var(--text);
+            opacity: 0.55;
+        }
+
+        /* ── Portefeuille — stratégies + flags statut ─────────────────────── */
+        .v3-portfolio {
+            background: var(--bg2);
+            border-radius: 14px;
+            overflow: hidden;
+        }
+        .v3-strat-row {
+            display: flex;
+            align-items: center;
+            gap: 11px;
+            padding: 13px 14px;
+            border-top: 0.5px solid var(--grey-dim);
+        }
+        .v3-strat-row:first-child { border-top: none; }
+        .v3-strat-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+        .v3-strat-dot.green { background: var(--green); }
+        .v3-strat-dot.blue  { background: var(--blue); }
+        .v3-strat-dot.grey  { background: var(--grey-dim); }
+        .v3-strat-body { min-width: 0; }
+        .v3-strat-name { font-weight: 600; font-size: 14px; color: var(--text); }
+        .v3-strat-sub { font-size: 11px; color: var(--text-secondary); font-weight: 500; }
+        .v3-status-pill {
+            margin-left: auto;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            padding: 4px 9px;
+            border-radius: 999px;
+            flex: 0 0 auto;
+        }
+        .v3-status-pill.green { color: var(--green); background: rgba(52, 199, 89, 0.15); }
+        .v3-status-pill.blue  { color: var(--blue);  background: rgba(0, 122, 255, 0.15); }
+        .v3-status-pill.grey  { color: var(--text-secondary); background: var(--bg3); }
 
         /* KPI cards — iOS style avec glow subtil */
         .v3-kpi-grid {
@@ -230,6 +374,11 @@ app.index_string = """
         .v3-section-title .emoji {
             margin-right: 6px;
             font-size: 15px;
+        }
+        .v3-section-title .bi {
+            margin-right: 7px;
+            font-size: 14px;
+            opacity: 0.85;
         }
 
         /* Gauges grid — espacement plus généreux */
@@ -371,14 +520,96 @@ def badge(label: str, value: str, color: str = "") -> html.Span:
     return html.Span([label, " ", html.B(value)], className=cls)
 
 
-def section_title(text: str, emoji: str = "") -> html.Div:
-    """Section title style Apple — emoji optionnel devant."""
-    if emoji:
-        return html.Div(
-            [html.Span(emoji, className="emoji"), text],
-            className="v3-section-title",
-        )
+def icon(name: str, color: str | None = None, size: int | None = None) -> html.I:
+    """Glyphe monochrome (Bootstrap Icons vendorisé). Ex: icon('graph-up-arrow')."""
+    style: dict = {}
+    if color:
+        style["color"] = color
+    if size:
+        style["fontSize"] = f"{size}px"
+    return html.I(className=f"bi bi-{name}", style=style or None)
+
+
+def section_title(text: str, icon_name: str = "") -> html.Div:
+    """Section title style Apple — icône monochrome optionnelle devant."""
+    if icon_name:
+        return html.Div([icon(icon_name), text], className="v3-section-title")
     return html.Div(text, className="v3-section-title")
+
+
+def risk_bar(margin: dict) -> html.Div:
+    """Barre de marge : label + reste $ dominant + piste avec seuil soft.
+
+    `margin` provient de dt.risk_margins() : used/soft_limit/track_max/headroom/
+    fill_ratio/soft_ratio/color_ratio/over.
+    """
+    cr = margin["color_ratio"]
+    if margin["over"] or cr >= 0.8:
+        color = ch.RED
+    elif cr >= 0.5:
+        color = ch.YELLOW
+    else:
+        color = ch.GREEN
+
+    if margin["over"]:
+        headroom_txt = "DÉPASSÉ"
+    else:
+        headroom_txt = f"reste ${margin['headroom']:,.0f}"
+
+    children = [
+        html.Div(
+            className="v3-risk-fill",
+            style={"width": f"{margin['fill_ratio'] * 100:.1f}%", "background": color},
+        )
+    ]
+    if margin["soft_ratio"]:
+        children.append(
+            html.Div(className="v3-risk-mark", style={"left": f"{margin['soft_ratio'] * 100:.1f}%"})
+        )
+
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Span(
+                        [
+                            margin["label"],
+                            html.Span(
+                                f"${margin['used']:,.0f} / ${margin['soft_limit']:,.0f}",
+                                className="sub",
+                            ),
+                        ],
+                        className="v3-risk-label",
+                    ),
+                    html.Span(headroom_txt, className="v3-risk-headroom", style={"color": color}),
+                ],
+                className="v3-risk-head",
+            ),
+            html.Div(children, className="v3-risk-track"),
+        ],
+        className="v3-risk-row",
+    )
+
+
+def strat_row(p: dict) -> html.Div:
+    """Ligne portefeuille : pastille + nom/univers + version/sizing + pill statut."""
+    sizing = f"${p['sizing']:,.0f}" if p["sizing"] is not None else "—"
+    return html.Div(
+        [
+            html.Div(className=f"v3-strat-dot {p['color']}"),
+            html.Div(
+                [
+                    html.Div(p["name"], className="v3-strat-name"),
+                    html.Div(
+                        f"{p['version']} · {sizing} · {p['universe']}", className="v3-strat-sub"
+                    ),
+                ],
+                className="v3-strat-body",
+            ),
+            html.Span(p["status"], className=f"v3-status-pill {p['color']}"),
+        ],
+        className="v3-strat-row",
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -395,103 +626,107 @@ def build_pulse(state: dict, pnl: dict, trades: list[dict]) -> html.Div:
     acc = broker.account_summary()
     day = broker.realized_day_pnl() if acc else None
 
-    # KPI 1 — P&L Jour
-    if acc and day and day["n_total"] == 0:
-        kpi_jour = kpi_card("P&L Jour", "$0", "Aucun trade aujourd'hui", "grey")
-    elif acc and day:
-        v = day["pnl_net"]
-        color = "green" if v > 0 else ("red" if v < 0 else "grey")
-        kpi_jour = kpi_card(
-            "P&L Jour (broker)",
-            f"${v:+,.0f}",
-            f"{day['n_closing']} trades · frais ${day['fees']:.0f}",
-            color,
-        )
-    elif pnl["stale_day"]:
-        kpi_jour = kpi_card(
-            "P&L Jour", "$0", f"pas de session · dernière {pnl['stale_day']}", "grey"
-        )
-    else:
-        v = pnl["realized_day_pnl"]
-        color = "green" if v > 0 else ("red" if v < 0 else "grey")
-        kpi_jour = kpi_card(
-            "P&L Jour", f"${v:+,.0f}", f"{pnl['daily_fills_count']} fills (local)", color
-        )
-
-    # KPI 2 — P&L Cumul (broker absolu)
+    # ── P&L net (héros) + P&L jour — broker prioritaire, fallback state ──────
     if acc:
-        cum = acc["cum_pnl_net"]
-        cum_color = "green" if cum > 0 else ("red" if cum < 0 else "grey")
-        cum_sub = f"Balance ${acc['balance']:,.0f} · start ${acc['starting_balance']:,.0f}"
-        kpi_cum = kpi_card("P&L Net (broker)", f"${cum:+,.0f}", cum_sub, cum_color)
+        net = acc["cum_pnl_net"]
+        balance = acc["balance"]
+        net_source = "broker"
     else:
-        cum = pnl["cum_pnl"]
-        cum_color = "green" if cum > 0 else ("red" if cum < 0 else "grey")
-        cum_sub = f"Peak ${pnl['peak_pnl']:+,.0f} · state local (broker KO)"
-        if pnl["active_drawdown"] > 0:
-            cum_sub += f" · DD ${pnl['active_drawdown']:.0f}"
-        kpi_cum = kpi_card("P&L Cumul Challenge", f"${cum:+,.0f}", cum_sub, cum_color)
+        net = pnl["cum_pnl"]
+        balance = None
+        net_source = "state local"
 
-    # Badges comparaisons temporelles
-    badges = []
+    if acc and day and day["n_total"] > 0:
+        day_pnl, day_known = day["pnl_net"], True
+    elif acc and day:
+        day_pnl, day_known = 0.0, True
+    elif pnl["stale_day"]:
+        day_pnl, day_known = 0.0, False
+    else:
+        day_pnl, day_known = pnl["realized_day_pnl"], True
+
+    net_color = "green" if net > 0 else ("red" if net < 0 else "grey")
+    target = TOPSTEP_PROFIT_TARGET
+    prog = max(0.0, min(1.0, net / target)) if target > 0 else 0.0
+
+    # Peak & best day — broker-first (cohérent avec le hero net ; le state local
+    # est brut/sans frais et sujet aux doublons → on ne l'utilise qu'en fallback).
+    if acc:
+        dnp = broker.daily_net_pnl(days_back=60)
+        best_day = max(dnp.values()) if dnp else 0.0
+        eq = broker.equity_curve_from_trades(days_back=60)
+        broker_peak = max(eq["equity_net"]) if (eq and eq["equity_net"]) else net
+        peak = max(broker_peak, net, pnl["peak_pnl"])
+    else:
+        bd = comp["best_day"]
+        best_day = bd[1] if bd[0] else 0.0
+        peak = pnl["peak_pnl"]
+    drawdown = max(0.0, peak - net)
+
+    # ── HERO ─────────────────────────────────────────────────────────────────
+    hero_meta = []
+    if balance is not None:
+        hero_meta.append(html.Span(["Balance ", html.B(f"${balance:,.0f}")]))
+    if not day_known:
+        hero_meta.append(html.Span(["  ·  hors session"]))
+    hero = html.Div(
+        [
+            html.Div(
+                [icon("graph-up-arrow", color=ch.GREY), f"P&L net challenge · {net_source}"],
+                className="v3-hero-label",
+            ),
+            html.Div(f"${net:+,.0f}", className=f"v3-hero-value {net_color}"),
+            html.Div(
+                html.Div(
+                    className="v3-progress-fill",
+                    style={
+                        "width": f"{prog * 100:.1f}%",
+                        "background": ch.GREEN if net >= 0 else ch.RED,
+                    },
+                ),
+                className="v3-progress-track",
+            ),
+            html.Div(
+                [
+                    html.Span([html.B(f"${net:+,.0f}"), f" / ${target:,.0f}"]),
+                    html.Span(html.B(f"{prog * 100:.0f}%")),
+                ],
+                className="v3-progress-cap",
+            ),
+            html.Div(hero_meta, className="v3-hero-meta") if hero_meta else html.Div(),
+        ],
+        className="v3-hero",
+    )
+
+    # ── Badges (pill jour + comparaisons temporelles) ────────────────────────
+    if day_known:
+        d_color = "green" if day_pnl > 0 else ("red" if day_pnl < 0 else "")
+        day_pill = html.Span(
+            ["Aujourd'hui ", html.B(f"${day_pnl:+,.0f}")],
+            className=f"v3-badge {d_color}".strip(),
+        )
+    else:
+        day_pill = html.Span(["Aujourd'hui ", html.B("—")], className="v3-badge")
+    badges = [day_pill]
     if comp["yesterday_pnl"] != 0:
         delta = comp["delta_yesterday"]
-        color = "green" if delta > 0 else "red" if delta < 0 else ""
-        badges.append(badge("vs hier", f"${delta:+,.0f}", color))
+        c = "green" if delta > 0 else "red" if delta < 0 else ""
+        badges.append(badge("vs hier", f"${delta:+,.0f}", c))
     if comp["avg_7d"] != 0:
         badges.append(badge("avg 7j", f"${comp['avg_7d']:+,.0f}"))
     if comp["streak_win_days"] > 1:
         badges.append(badge("streak win", f"{comp['streak_win_days']}j", "green"))
     elif comp["streak_loss_days"] > 1:
         badges.append(badge("streak loss", f"{comp['streak_loss_days']}j", "red"))
-    if comp["best_day"][0]:
-        badges.append(badge("best day", f"${comp['best_day'][1]:+,.0f}"))
+    if best_day:
+        badges.append(badge("best day", f"${best_day:+,.0f}"))
 
-    # Gauges Topstep (radial speedometer) — utilise les valeurs broker si dispo
-    if acc and day:
-        rdp = day["pnl_net"]  # vrai P&L jour broker
-        cum_for_gauges = acc["cum_pnl_net"]  # vrai cumul net
-        peak_for_gauges = max(pnl["peak_pnl"], cum_for_gauges)  # peak >= cum
-    else:
-        rdp = pnl["realized_day_pnl"]
-        cum_for_gauges = cum
-        peak_for_gauges = pnl["peak_pnl"]
-    gauges_data = [
-        (f"DLL user ${USER_DAILY_LOSS_MAX}", max(0.0, -rdp), USER_DAILY_LOSS_MAX, "loss"),
-        (f"DLL Topstep ${TOPSTEP_DAILY_LOSS_MAX}", max(0.0, -rdp), TOPSTEP_DAILY_LOSS_MAX, "loss"),
-        (
-            f"Trailing DD ${TOPSTEP_TRAILING_DD}",
-            max(0.0, peak_for_gauges - cum_for_gauges),
-            TOPSTEP_TRAILING_DD,
-            "loss",
-        ),
-        (
-            f"Consistency ${CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD}",
-            max(0.0, rdp),
-            CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
-            "gain",
-        ),
-        (
-            f"Profit target ${TOPSTEP_PROFIT_TARGET}",
-            max(0.0, cum_for_gauges),
-            TOPSTEP_PROFIT_TARGET,
-            "gain",
-        ),
-    ]
-    gauges = []
-    for label, used, limit, kind in gauges_data:
-        ratio = used / limit if limit > 0 else 0
-        if kind == "loss":
-            color = ch.RED if ratio > 0.8 else (ch.YELLOW if ratio > 0.5 else ch.GREEN)
-        else:
-            color = ch.GREEN if ratio > 0.5 else (ch.BLUE if ratio > 0.2 else ch.GREY)
-        gauges.append(
-            dcc.Graph(
-                figure=ch.radial_gauge(used, limit, label, color, height=170),
-                config={"displayModeBar": False, "staticPlot": False},
-                style={"marginBottom": "4px"},
-            )
-        )
+    # ── Barres de marge (sécurité Topstep) + statut portefeuille ─────────────
+    margins = dt.risk_margins(day_pnl, drawdown, best_day)
+    risk_panel = html.Div([risk_bar(m) for m in margins], className="v3-risk")
+
+    portfolio = dt.portfolio_status(state)
+    portfolio_panel = html.Div([strat_row(p) for p in portfolio], className="v3-portfolio")
 
     return html.Div(
         [
@@ -503,11 +738,16 @@ def build_pulse(state: dict, pnl: dict, trades: list[dict]) -> html.Div:
                 ],
                 className="v3-meta",
             ),
-            html.Div([kpi_jour, kpi_cum], className="v3-kpi-grid"),
-            html.Div(badges, className="v3-badges") if badges else html.Div(),
-            section_title("Limites Topstep", emoji="🎯"),
-            html.Div(gauges, className="v3-gauges-grid"),
-            section_title("Equity (broker net)" if acc else "Equity (state local)", emoji="📈"),
+            hero,
+            html.Div(badges, className="v3-badges"),
+            section_title("Sécurité — marges Topstep", icon_name="shield-check"),
+            risk_panel,
+            section_title("Portefeuille", icon_name="grid-3x3-gap"),
+            portfolio_panel,
+            section_title(
+                "Equity (broker net)" if acc else "Equity (state local)",
+                icon_name="graph-up-arrow",
+            ),
             dcc.Graph(
                 figure=_pulse_equity_chart(acc, broker, pnl, trades),
                 config={"displayModeBar": False},
@@ -595,7 +835,7 @@ def build_strats(trades: list[dict]) -> html.Div:
                     )
                 )
             contract_section = [
-                section_title("Par contrat (broker, net)", emoji="💹"),
+                section_title("Par contrat (broker, net)", icon_name="currency-dollar"),
                 html.Table(
                     [
                         html.Thead(
@@ -646,7 +886,7 @@ def build_strats(trades: list[dict]) -> html.Div:
                 )
             )
         strat_section = [
-            section_title("Par stratégie (state local, brut)", emoji="🎯"),
+            section_title("Par stratégie (state local, brut)", icon_name="bullseye"),
             html.Div(
                 "Note : ne tient pas compte des frais broker — utilisez 'Par contrat' pour le net réel.",
                 style={"color": ch.GREY, "fontSize": "10px", "marginBottom": "6px"},
@@ -729,7 +969,7 @@ def build_equity(trades: list[dict], pnl: dict) -> html.Div:
 
         return html.Div(
             [
-                section_title("Equity nette (broker)", emoji="📈"),
+                section_title("Equity nette (broker)", icon_name="graph-up-arrow"),
                 html.Div(
                     dcc.Markdown(note, dangerously_allow_html=True),
                     style={"color": ch.GREY, "fontSize": "10px", "marginBottom": "8px"},
@@ -738,12 +978,12 @@ def build_equity(trades: list[dict], pnl: dict) -> html.Div:
                     figure=ch.equity_curve_pro(timestamps, equity_net, hover_trades, peak_net),
                     config={"displayModeBar": False},
                 ),
-                section_title("Drawdown underwater", emoji="🌊"),
+                section_title("Drawdown underwater", icon_name="water"),
                 dcc.Graph(
                     figure=ch.drawdown_underwater_pro(timestamps, equity_net),
                     config={"displayModeBar": False},
                 ),
-                section_title("Distribution P&L par trade (net)", emoji="📊"),
+                section_title("Distribution P&L par trade (net)", icon_name="bar-chart"),
                 dcc.Graph(
                     figure=ch.pnl_distribution_pro(hover_trades),
                     config={"displayModeBar": False},
@@ -941,10 +1181,10 @@ def build_trades(state: dict, trades: list[dict]) -> html.Div:
 
     return html.Div(
         [
-            section_title(f"Trades aujourd'hui ({today_count})", emoji="📋"),
+            section_title(f"Trades aujourd'hui ({today_count})", icon_name="list-ul"),
             *today_section,
             *pos_orders_section,
-            section_title("Heatmap P&L journalier", emoji="🗓️"),
+            section_title("Heatmap P&L journalier", icon_name="calendar3"),
             dcc.Graph(figure=ch.heatmap_github_style(trades), config={"displayModeBar": False}),
         ]
     )
@@ -1000,9 +1240,9 @@ def build_sys(state: dict) -> html.Div:
                 ],
                 className="v3-kpi-grid",
             ),
-            section_title("Shadow vs Live", emoji="👥"),
+            section_title("Shadow vs Live", icon_name="people"),
             *shadow_section,
-            section_title("Logs récents", emoji="📝"),
+            section_title("Logs récents", icon_name="terminal"),
             html.Div(
                 [
                     html.Div(line, className="v3-log")
@@ -1025,8 +1265,8 @@ app.layout = html.Div(
             [
                 html.Div(
                     [
-                        html.Div("📊 Topstep Live", className="v3-title"),
-                        html.Div("v3 · 30s", className="v3-subtitle"),
+                        html.Div([icon("graph-up-arrow"), "Topstep Live"], className="v3-title"),
+                        html.Div("30s · net", className="v3-subtitle"),
                     ],
                     className="v3-header",
                 ),
@@ -1035,31 +1275,31 @@ app.layout = html.Div(
                     value="pulse",
                     children=[
                         dcc.Tab(
-                            label="💓 Pulse",
+                            label="Pulse",
                             value="pulse",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
                         ),
                         dcc.Tab(
-                            label="🎯 Strats",
+                            label="Strats",
                             value="strats",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
                         ),
                         dcc.Tab(
-                            label="📈 Equity",
+                            label="Equity",
                             value="equity",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
                         ),
                         dcc.Tab(
-                            label="📋 Trades",
+                            label="Trades",
                             value="trades",
                             className="dash-tab",
                             selected_className="dash-tab--selected",
                         ),
                         dcc.Tab(
-                            label="⚙️ Sys",
+                            label="Sys",
                             value="sys",
                             className="dash-tab",
                             selected_className="dash-tab--selected",

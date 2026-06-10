@@ -290,3 +290,182 @@ def _infer_strategy_from_tag(tag_name: str) -> str:
     if first.startswith("OPR"):
         return "OPR"
     return "—"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# RISQUE & PORTEFEUILLE — adaptation projet (cockpit challenge Topstep)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def risk_margins(day_pnl: float, drawdown: float, best_day: float) -> list[dict]:
+    """Marges restantes avant chaque limite Topstep (barres de marge).
+
+    Reçoit des scalaires DÉJÀ résolus broker-first par l'appelant (cohérence
+    avec le hero net) :
+
+    - ``day_pnl``  : P&L net du jour (négatif = perte)
+    - ``drawdown`` : ``peak - cum`` net courant (>= 0)
+    - ``best_day`` : meilleur jour net (consistency)
+
+    Chaque entrée décrit une barre :
+
+    - ``track_max`` : dénominateur de la barre (mur dur quand il existe)
+    - ``soft_limit`` : limite réellement appliquée par le bot (→ marge + couleur)
+    - ``headroom`` : ``soft_limit - used`` (le « reste $X », info dominante)
+    - ``fill_ratio`` : ``used / track_max`` (largeur visuelle)
+    - ``soft_ratio`` : position du marqueur soft sur la piste (None si == 1)
+    - ``color_ratio`` : ``used / soft_limit`` (escalade vert→orange→rouge)
+    """
+    from config import (  # noqa: PLC0415
+        CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+        TOPSTEP_DAILY_LOSS_MAX,
+        TOPSTEP_PROFIT_TARGET,
+        TOPSTEP_TRAILING_DD,
+        USER_DAILY_LOSS_MAX,
+    )
+
+    def _bar(
+        label: str,
+        used: float,
+        limit: float,
+        track_max: float | None = None,
+        guardrail: float | None = None,
+    ) -> dict:
+        """`limit` = ligne de référence Topstep (dénominateur, marge « reste $X »,
+        couleur, état DÉPASSÉ). `track_max` = fin de piste (mur dur si > limit).
+        `guardrail` = marqueur optionnel (garde-fou bot, plus serré). À défaut, on
+        marque `limit` lui-même quand il est sous le mur (cas perte du jour)."""
+        used = max(0.0, float(used))
+        track_max = float(track_max or limit)
+        mark_val = guardrail if guardrail is not None else (limit if limit < track_max else None)
+        soft_ratio = (
+            (mark_val / track_max)
+            if (mark_val and track_max > 0 and mark_val < track_max)
+            else None
+        )
+        return {
+            "label": label,
+            "used": used,
+            "soft_limit": float(limit),
+            "track_max": track_max,
+            "headroom": max(0.0, limit - used),
+            "fill_ratio": min(1.0, used / track_max) if track_max > 0 else 0.0,
+            "soft_ratio": soft_ratio,
+            "color_ratio": (used / limit) if limit > 0 else 0.0,
+            "over": used > limit,
+        }
+
+    # Vraie limite consistency Topstep = 50% du profit target ($1500 pour $3000).
+    # Le bot vise plus serré (CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD, $1400) = garde-fou.
+    consistency_real = 0.5 * TOPSTEP_PROFIT_TARGET
+    return [
+        # Piste jusqu'au mur dur Topstep ($1000), seuil bot ($950) marqué dessus.
+        _bar("Perte du jour", -day_pnl, USER_DAILY_LOSS_MAX, track_max=TOPSTEP_DAILY_LOSS_MAX),
+        _bar("Trailing drawdown", drawdown, TOPSTEP_TRAILING_DD),
+        _bar(
+            "Consistency (best day)",
+            best_day,
+            consistency_real,
+            guardrail=CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
+        ),
+    ]
+
+
+# (state_key, nom affiché, univers, var flag, var version, var sizing)
+_PORTFOLIO_SPEC: list[tuple[str, str, str, str, str, str]] = [
+    (
+        "OPR",
+        "OPR",
+        "NQ1 · YM1 · MES1",
+        "OPR_ENABLED",
+        "OPR_V5_1_STRATEGY_VERSION",
+        "RISK_PER_TRADE_USD",
+    ),
+    (
+        "FIB",
+        "Fib",
+        "MES1 · NQ1 · MGC1",
+        "FIB_V4_ENABLED",
+        "FIB_V4_STRATEGY_VERSION",
+        "RISK_PER_TRADE_USD",
+    ),
+    (
+        "FIB_FINE",
+        "Fib Fine",
+        "NQ1 · MES1",
+        "FIB_FINE_ENABLED",
+        "FIB_FINE_STRATEGY_VERSION",
+        "FIB_FINE_RISK_USD",
+    ),
+    (
+        "BOS_FVG",
+        "BOS-FVG",
+        "NQ1 · MES1",
+        "BOS_FVG_ENABLED",
+        "BOS_FVG_STRATEGY_VERSION",
+        "BOS_FVG_RISK_USD",
+    ),
+]
+
+
+def last_fill_by_strategy(state: dict | None) -> dict[str, str]:
+    """Dernier fill_time (ISO) par stratégie, lu depuis state.placed_tags."""
+    last: dict[str, str] = {}
+    if not state:
+        return last
+    for info in state.get("placed_tags", {}).values():
+        ft = info.get("fill_time")
+        if not ft:
+            continue
+        st = info.get("strategy", "?")
+        if st not in last or ft > last[st]:
+            last[st] = ft
+    return last
+
+
+def portfolio_status(state: dict | None = None, days_active: int = 10) -> list[dict]:
+    """Statut du portefeuille — lit les flags config.py EN DIRECT (jamais hardcodé).
+
+    Statut par stratégie :
+    - ``OFF``  (gris) : flag désactivé dans config.py
+    - ``LIVE`` (vert) : flag activé ET fill vu dans les ``days_active`` derniers jours
+    - ``ARMÉ`` (bleu) : flag activé mais aucune activité récente (ex : promu mais
+      inerte jusqu'au restart du daemon, ou simplement pas de signal récemment)
+
+    Caveat : le dashboard ne connaît pas la config réellement chargée par le
+    daemon — ``LIVE`` est inféré via l'activité observée dans le state.
+    """
+    import config  # noqa: PLC0415
+
+    last_fill = last_fill_by_strategy(state)
+    cutoff = (datetime.now(UTC) - timedelta(days=days_active)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    global_risk = getattr(config, "RISK_PER_TRADE_USD", None)
+
+    out: list[dict] = []
+    for key, name, universe, en_var, ver_var, size_var in _PORTFOLIO_SPEC:
+        enabled = bool(getattr(config, en_var, False))
+        version = getattr(config, ver_var, "?")
+        sizing = getattr(config, size_var, global_risk)
+        lf = last_fill.get(key)
+        active = bool(lf and lf >= cutoff)
+        if not enabled:
+            status, color = "OFF", "grey"
+        elif active:
+            status, color = "LIVE", "green"
+        else:
+            status, color = "ARMÉ", "blue"
+        out.append(
+            {
+                "key": key,
+                "name": name,
+                "universe": universe,
+                "version": version,
+                "sizing": sizing,
+                "enabled": enabled,
+                "last_fill": lf,
+                "active": active,
+                "status": status,
+                "color": color,
+            }
+        )
+    return out
