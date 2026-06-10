@@ -49,12 +49,26 @@ def _truncate_at(df: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
     return df[df.index < cutoff]
 
 
+@pytest.fixture()
+def v51_routage_force(monkeypatch):
+    """Force le routage v5.1 = {NQ1, YM1} (et MES1 = pass-through v4),
+    indépendamment de config.py.
+
+    OPR_V5_1_LIVE_TICKERS est un réglage PROD susceptible de changer (NQ1
+    retiré le 2026-06-01 — pause edge). Les tests du chemin filtre v5.1
+    valident le CODE, pas le routage du jour : sans ce pin, retirer un
+    ticker de la prod casse les tests (cas constaté, stale depuis 1eb58c2)."""
+    import core.opr_v5_1 as mod
+
+    monkeypatch.setattr(mod, "OPR_V5_1_LIVE_TICKERS", ["NQ1", "YM1"])
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 1 : MES1 → pass-through strict (v4)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_mes1_passthrough_to_v4(df_mes1):
+def test_mes1_passthrough_to_v4(df_mes1, v51_routage_force):
     """MES1 n'étant PAS dans OPR_V5_1_LIVE_TICKERS, le wrapper doit retourner
     exactement le même output que run_opr_day."""
     day = _trading_day("2025-11-03")  # un lundi OOS aléatoire
@@ -73,7 +87,7 @@ def test_mes1_passthrough_to_v4(df_mes1):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_nq1_with_full_day_emits_signal(df_nq1):
+def test_nq1_with_full_day_emits_signal(df_nq1, v51_routage_force):
     """Sur une journée complète où v5.1 backtest a fillé, le wrapper avec
     bars complètes (= fin de session) doit émettre le signal car F2 cross
     naturellement."""
@@ -105,7 +119,7 @@ def test_nq1_with_full_day_emits_signal(df_nq1):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_nq1_at_trigger_time_emits_nothing(df_nq1):
+def test_nq1_at_trigger_time_emits_nothing(df_nq1, v51_routage_force):
     """
     Si on tronque les bars EXACTEMENT au trigger_time, il n'y a pas encore
     de bars post-trigger fermées → running F2 ne peut pas être calculé →
@@ -146,7 +160,7 @@ def test_nq1_at_trigger_time_emits_nothing(df_nq1):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_idempotent_repeated_calls(df_nq1):
+def test_idempotent_repeated_calls(df_nq1, v51_routage_force):
     """Appeler le wrapper plusieurs fois sur les mêmes données doit produire
     exactement le même résultat (déterministe, sans état caché)."""
     day = _trading_day("2025-12-01")
@@ -181,7 +195,7 @@ def test_unknown_ticker_passthrough(df_mes1, monkeypatch):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_threshold_none_yields_v4(df_nq1, monkeypatch):
+def test_threshold_none_yields_v4(df_nq1, monkeypatch, v51_routage_force):
     """Si f2_min_atr est None pour un ticker, le wrapper retourne v4 strict."""
     import core.opr_v5_1 as mod
 
@@ -209,7 +223,7 @@ def _trigger_ts_for(df, ticker: str, day: pd.Timestamp) -> pd.Timestamp:
     return t
 
 
-def test_m1_buffer_overrides_m15_extremum(df_nq1):
+def test_m1_buffer_overrides_m15_extremum(df_nq1, v51_routage_force):
     """
     Si un buffer M1 contient un bar avec un high SUPÉRIEUR au max des bars M15
     post-trigger, l'excursion calculée doit utiliser le high M1 (et donc
@@ -260,7 +274,7 @@ def test_m1_buffer_overrides_m15_extremum(df_nq1):
     assert sigs_m1[0]["v5_1_f2_running_at_emit"] >= baseline_f2
 
 
-def test_m1_buffer_empty_falls_back_to_m15(df_nq1):
+def test_m1_buffer_empty_falls_back_to_m15(df_nq1, v51_routage_force):
     """Buffer M1 fourni mais aucun bar depuis trigger → fallback M15 +
     annotation source=M15."""
     from broker.m1_buffer import M1Buffer
@@ -286,7 +300,7 @@ def test_m1_buffer_empty_falls_back_to_m15(df_nq1):
         assert s["v5_1_f2_source"] == "M15"
 
 
-def test_m1_buffer_without_contract_id_uses_m15(df_nq1):
+def test_m1_buffer_without_contract_id_uses_m15(df_nq1, v51_routage_force):
     """Buffer M1 fourni SANS contract_id → fallback M15 (sécurité)."""
     from broker.m1_buffer import M1Buffer
 
