@@ -59,7 +59,7 @@ pour la DEEP LANE et les rôles dédiés (live, promotion). Voir [CLAUDE_TEAM.md
 | « Audite cette stratégie / ce verdict » | `@auditor` (lit `summary.json` + `git diff` + `robustness_<id>.json`) |
 | « Découvre un filtre data-driven / repêche ce 🟡 » | `@quant` (discover, on-demand) |
 | « Quelle idée prioriser ? / fit portefeuille ? » | `@athena` (conseil one-shot) |
-| « État du live ? / Comment va le compte ? » | `@argus` |
+| « État du live ? / Comment va le compte ? » | `python tools/account_status.py` (vérité broker) ; `@argus` pour un diagnostic complet |
 | « Promeut <strategy_id> en production » | `@forge` (après 🟢 audité + confirmation par fichier) |
 | Question simple (un param, un calcul, un log court) | Réponse directe sans subagent |
 
@@ -169,6 +169,7 @@ python optimize.py --strategy <nom> --csv-dir ./data --holdout     # ⚠️ cons
 python tools/portfolio_replay.py        # input du fit portefeuille @athena
 
 # Production (live) — le PROCESS fait foi, pas la session tmux (verrou PID)
+python tools/account_status.py           # ÉTAT DU COMPTE = vérité broker (balance, P&L jour net, Δ vs local)
 bash scripts/restart_daemon.sh status    # health-check canonique (pid, log, risk)
 bash scripts/restart_daemon.sh restart   # SEULE procédure de restart (refuse en session NY sauf --force)
 tmux attach -t topstep                   # voir la console du daemon
