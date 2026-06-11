@@ -269,10 +269,17 @@ def lookup_strategy_for_pair(state: dict, pair: dict) -> str:
 
 
 def _normalize_strategy(s: str) -> str:
-    """Normalise une stratégie (OPR, FIB) — supprime versions/préfixes."""
+    """Normalise une stratégie vers les clés du portefeuille (OPR, FIB,
+    FIB_FINE, BOS_FVG). ⚠️ Tester FIB_FINE AVANT FIB : « FIB_FINE » commence
+    par « FIB » — bug constaté 2026-06-11 (stats fib-fine fusionnées dans Fib,
+    BOS_FVG classé « — »)."""
     if not s:
         return ""
-    s_up = s.upper()
+    s_up = s.upper().replace("-", "_")
+    if s_up.startswith("FIB_FINE") or s_up.startswith("FIBFINE"):
+        return "FIB_FINE"
+    if s_up.startswith("BOS"):
+        return "BOS_FVG"
     if s_up.startswith("FIB"):
         return "FIB"
     if s_up.startswith("OPR"):
@@ -281,10 +288,15 @@ def _normalize_strategy(s: str) -> str:
 
 
 def _infer_strategy_from_tag(tag_name: str) -> str:
-    """Devine la stratégie depuis le préfixe d'un tag : OPR_NQ1_... → OPR."""
+    """Devine la stratégie depuis le préfixe d'un tag : OPR_NQ1_… → OPR,
+    FIBFINE_MES1_… → FIB_FINE, BOSFVG_MES1_… → BOS_FVG, FIBV4_… → FIB."""
     if not tag_name:
         return "—"
     first = tag_name.split("_")[0].upper()
+    if first.startswith("FIBFINE"):
+        return "FIB_FINE"
+    if first.startswith("BOS"):
+        return "BOS_FVG"
     if first.startswith("FIB"):
         return "FIB"
     if first.startswith("OPR"):
@@ -371,12 +383,15 @@ def risk_margins(day_pnl: float, drawdown: float, best_day: float) -> list[dict]
     ]
 
 
-# (state_key, nom affiché, univers, var flag, var version, var sizing)
-_PORTFOLIO_SPEC: list[tuple[str, str, str, str, str, str]] = [
+# (state_key, nom affiché, vars config des LISTES de tickers live, var flag,
+#  var version, var sizing). L'univers est résolu EN DIRECT depuis config.py à
+# chaque appel — un hardcode ici avait affiché « OPR : NQ1 · YM1 · MES1 »
+# pendant des jours alors que la prod ne routait plus que YM1 (constat 2026-06-11).
+_PORTFOLIO_SPEC: list[tuple[str, str, tuple[str, ...], str, str, str]] = [
     (
         "OPR",
         "OPR",
-        "NQ1 · YM1 · MES1",
+        ("OPR_V5_1_LIVE_TICKERS", "OPR_V4_LIVE_TICKERS"),
         "OPR_ENABLED",
         "OPR_V5_1_STRATEGY_VERSION",
         "RISK_PER_TRADE_USD",
@@ -384,7 +399,7 @@ _PORTFOLIO_SPEC: list[tuple[str, str, str, str, str, str]] = [
     (
         "FIB",
         "Fib",
-        "MES1 · NQ1 · MGC1",
+        ("FIB_V4_TICKERS",),
         "FIB_V4_ENABLED",
         "FIB_V4_STRATEGY_VERSION",
         "RISK_PER_TRADE_USD",
@@ -392,7 +407,7 @@ _PORTFOLIO_SPEC: list[tuple[str, str, str, str, str, str]] = [
     (
         "FIB_FINE",
         "Fib Fine",
-        "NQ1 · MES1",
+        ("FIB_FINE_LIVE_TICKERS",),
         "FIB_FINE_ENABLED",
         "FIB_FINE_STRATEGY_VERSION",
         "FIB_FINE_RISK_USD",
@@ -400,12 +415,22 @@ _PORTFOLIO_SPEC: list[tuple[str, str, str, str, str, str]] = [
     (
         "BOS_FVG",
         "BOS-FVG",
-        "NQ1 · MES1",
+        ("BOS_FVG_LIVE_TICKERS",),
         "BOS_FVG_ENABLED",
         "BOS_FVG_STRATEGY_VERSION",
         "BOS_FVG_RISK_USD",
     ),
 ]
+
+
+def _resolve_universe(config, ticker_vars: tuple[str, ...]) -> str:
+    """Univers affiché = union ordonnée (dédupliquée) des listes config live."""
+    seen: list[str] = []
+    for var in ticker_vars:
+        for t in getattr(config, var, []) or []:
+            if t not in seen:
+                seen.append(t)
+    return " · ".join(seen) if seen else "—"
 
 
 def last_fill_by_strategy(state: dict | None) -> dict[str, str]:
@@ -442,7 +467,8 @@ def portfolio_status(state: dict | None = None, days_active: int = 10) -> list[d
     global_risk = getattr(config, "RISK_PER_TRADE_USD", None)
 
     out: list[dict] = []
-    for key, name, universe, en_var, ver_var, size_var in _PORTFOLIO_SPEC:
+    for key, name, ticker_vars, en_var, ver_var, size_var in _PORTFOLIO_SPEC:
+        universe = _resolve_universe(config, ticker_vars)
         enabled = bool(getattr(config, en_var, False))
         version = getattr(config, ver_var, "?")
         sizing = getattr(config, size_var, global_risk)
