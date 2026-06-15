@@ -32,6 +32,8 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from config import (
+    OPTIMIZER_N_TRIALS,
+    OPTIMIZER_OPTUNA_SEED,
     OPTIMIZER_PARALLEL_N_JOBS,
     WF_FOLD_MONTHS,
     WF_HOLDOUT_START,
@@ -39,7 +41,7 @@ from config import (
     WF_N_FOLDS,
 )
 from core import metrics as m
-from core.optimizer import _default_score, _evaluate_combo
+from core.optimizer import _default_score, _evaluate_combo, _resolve_search
 
 
 def build_folds(
@@ -81,8 +83,17 @@ def run_multifold(
     score_fn=None,
     n_jobs: int | None = None,
     output_dir: str | None = "output",
+    search: str = "auto",
+    n_trials: int | None = None,
 ) -> dict:
     """Walk-forward multi-folds par ticker (sélection IS-only par fold).
+
+    Args:
+        search   : "grid" | "optuna" | "auto" (cf. core/optimizer._resolve_search).
+                   En optuna : une study TPE INDÉPENDANTE par (ticker, fold),
+                   seed = OPTIMIZER_OPTUNA_SEED + 1000 × fold (déterministe,
+                   séquence distincte par fold puisque l'IS change).
+        n_trials : trials TPE par (ticker, fold) — None → OPTIMIZER_N_TRIALS.
 
     Returns:
         {ticker: {"folds": [...], "stitched": stats, "stability": {...}}}
@@ -94,12 +105,19 @@ def run_multifold(
 
     strategy_id = getattr(strategy, "STRATEGY_ID", "unknown")
     param_grid = getattr(strategy, "PARAM_GRID", {})
-    if not param_grid:
-        print(f"  [{strategy_id}] Aucun PARAM_GRID — multifold impossible.")
+    param_space = getattr(strategy, "PARAM_SPACE", None)
+    if not param_grid and not param_space:
+        print(f"  [{strategy_id}] Aucun PARAM_GRID/PARAM_SPACE — multifold impossible.")
         return {}
 
     keys = list(param_grid.keys())
-    combos = list(itertools.product(*param_grid.values()))
+    combos = list(itertools.product(*param_grid.values())) if param_grid else []
+    backend = _resolve_search(search, strategy, len(combos))
+    if backend == "grid" and not combos:
+        print(f"  [{strategy_id}] PARAM_SPACE seul défini — utiliser --search optuna.")
+        return {}
+    if n_trials is None:
+        n_trials = OPTIMIZER_N_TRIALS
     folds = build_folds(holdout_start, n_folds, fold_months)
 
     print(f"\n{'=' * 66}")
@@ -107,7 +125,10 @@ def run_multifold(
     print(f"  {len(folds)} folds × {fold_months} mois · hold-out ≥ {holdout_start} exclu")
     for i, f in enumerate(folds, 1):
         print(f"    fold {i} : IS …{f['is_end']}  →  OOS [{f['oos_start']}, {f['oos_end']})")
-    print(f"  Grille : {len(combos)} combos × {len(data)} actifs")
+    if backend == "grid":
+        print(f"  Grille : {len(combos)} combos × {len(data)} actifs")
+    else:
+        print(f"  Recherche : Optuna TPE — {n_trials} trials par (ticker, fold)")
     print(f"{'=' * 66}")
 
     results: dict[str, dict] = {}
@@ -118,21 +139,38 @@ def run_multifold(
         stitched_parts = []
 
         for i, f in enumerate(folds, 1):
-            raw = Parallel(n_jobs=n_jobs, backend="loky", verbose=0)(
-                delayed(_evaluate_combo)(
-                    combo,
-                    keys,
-                    dfs,
+            if backend == "grid":
+                raw = Parallel(n_jobs=n_jobs, backend="loky", verbose=0)(
+                    delayed(_evaluate_combo)(
+                        combo,
+                        keys,
+                        dfs,
+                        strategy,
+                        score_fn,
+                        f["is_end"],
+                        f["oos_start"],
+                        f["is_start"],
+                        f["oos_end"],
+                    )
+                    for combo in combos
+                )
+                evals = [r for r in raw if r is not None]
+            else:
+                from core.search_optuna import run_optuna_search
+
+                out = run_optuna_search(
                     strategy,
+                    dfs,
                     score_fn,
                     f["is_end"],
                     f["oos_start"],
                     f["is_start"],
                     f["oos_end"],
+                    n_trials,
+                    seed=OPTIMIZER_OPTUNA_SEED + 1000 * i,
+                    label=f"{ticker}/fold{i}",
                 )
-                for combo in combos
-            )
-            evals = [r for r in raw if r is not None]
+                evals = out["results"]
             if not evals:
                 fold_rows.append({"fold": i, **f, "params": None, "oos": None})
                 continue
@@ -195,6 +233,10 @@ def run_multifold(
                 ],
                 "stitched": res["stitched"],
                 "stability": res["stability"],
+                "search": {
+                    "backend": backend,
+                    "n_trials": n_trials if backend == "optuna" else None,
+                },
             }
             for t, res in results.items()
         }

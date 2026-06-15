@@ -49,6 +49,9 @@ from config import (
     FIB_MAX_HOLD_BARS,
     FIB_V4_ENABLED,
     FIB_V4_TICKERS,
+    IB_RETEST_ENABLED,
+    IB_RETEST_SESSION_END,
+    IB_RETEST_TICKERS,
     INSTRUMENTS,
     LIVE_STATE_FILE,
     OPR_ENABLED,
@@ -85,6 +88,7 @@ from core.adaptive_sizing import adaptive_risk_usd
 from core.bos_fvg import get_bos_fvg_live_signal
 from core.event_logger import EventLogger
 from core.fib_fine_v2 import get_fib_fine_live_signal
+from core.ib_retest import get_ib_retest_live_signal
 from core.opr_v5_1 import get_opr_v5_1_live_signals
 from core.risk_portfolio import PortfolioRiskManager, _Order
 from core.signal_selector import filter_correlated_signals
@@ -378,6 +382,11 @@ class SessionRunner:
         # Tickers couverts par bos-fvg-v1 (NQ1/MES1 déjà inclus ; promu 2026-06-03).
         if BOS_FVG_ENABLED:
             for t in BOS_FVG_LIVE_TICKERS:
+                if t not in tickers:
+                    tickers.append(t)
+        # Tickers couverts par ib-retest-v3 (NQ1/MES1 déjà inclus ; flag OFF par défaut).
+        if IB_RETEST_ENABLED:
+            for t in IB_RETEST_TICKERS:
                 if t not in tickers:
                     tickers.append(t)
         return tickers
@@ -850,6 +859,62 @@ class SessionRunner:
         # ACTIVE : broker gère via brackets — rien à faire ici
         return None
 
+    def _get_ib_retest_signal(self, df: pd.DataFrame, ticker: str) -> dict | None:
+        """
+        Appelle get_ib_retest_live_signal (ib-retest-v3, NATIF M15) et retourne le
+        signal ou une action d'annulation.
+
+        Calqué sur `_get_bos_fvg_signal` pour la gestion d'état PENDING/ACTIVE/CANCEL,
+        mais NATIF M15 comme `_get_fib_v4_signal` : consomme le df M15 déjà fetché
+        par run_tick (PAS de _fetch_bars_m5, PAS de M1Buffer). Chemin séparé via la
+        clé strategy="IB_RETEST" posée par core.ib_retest (event_logger,
+        signal_selector, time-stop _sync_broker).
+
+        Invalidation = EOD/timeout SEULE (PAS de CANCEL_FILL ni de close-based) :
+        le CANCEL n'est émis par le core que sur timeout pending ou fin de session,
+        jamais quand la barre courante a fillé (anti-race fill, cf. core.ib_retest).
+
+        Retourne :
+          • None si rien d'actif (flag OFF, ticker hors univers, ACTIVE géré
+            broker-side, ou erreur).
+          • dict signal "à placer" si state == "PENDING" (avec tag IBRETEST_...).
+          • dict {"_action": "cancel", "tag": ...} si state == "CANCEL"
+            (timeout pending ou EOD sur la dernière barre M15 close).
+        """
+        if not IB_RETEST_ENABLED:
+            return None
+        if ticker not in IB_RETEST_TICKERS:
+            return None
+
+        try:
+            live_state = get_ib_retest_live_signal(df, ticker)
+        except Exception as exc:
+            _log.error("get_ib_retest_live_signal %s échoué : %s", ticker, exc)
+            return None
+
+        if live_state is None:
+            return None
+
+        state = live_state["state"]
+        sig = live_state["signal"]
+        imp_key = live_state["impulse_key"]
+        today = _current_day_ny(datetime.utcnow()).strftime("%Y%m%d")
+        tag = f"IBRETEST_{ticker}_{today}_{imp_key}"
+
+        if state == "PENDING":
+            return {**sig, "tag": tag}
+
+        if state == "CANCEL":
+            return {
+                "_action": "cancel",
+                "tag": tag,
+                "ticker": ticker,
+                "reason": live_state.get("reason", "ib-retest timeout/EOD"),
+            }
+
+        # ACTIVE : broker gère via brackets — rien à faire ici
+        return None
+
     # ─────────────────────────────────────────────────────────────────────
     # Placement d'ordre
     # ─────────────────────────────────────────────────────────────────────
@@ -1260,6 +1325,23 @@ class SessionRunner:
                         elapsed_bars = int((now_utc - fill_dt).total_seconds() / 300)
                         if past_close or new_day or elapsed_bars >= BOS_FVG_MAX_HOLD_BARS_M5:
                             self._close_position_market(tag, info, now_utc)
+                    elif ft_iso and strat == "IB_RETEST":
+                        # Time-stop ib-retest-v3 : close à la cloche RTH
+                        # (IB_RETEST_SESSION_END NY) OU au changement de jour NY.
+                        # PAS de max_hold sur la position (≠ bos-fvg/fib-fine) : le
+                        # backtest sort sur SL/TP, sinon TE à la close de session
+                        # (mins >= sess_end_min) ou au changement de jour. La sortie
+                        # SL/TP réelle est tenue broker-side via les brackets ; ce
+                        # time-stop ne couvre que le TE de fin de session.
+                        fill_dt = datetime.fromisoformat(ft_iso.replace("Z", "+00:00")).replace(
+                            tzinfo=None
+                        )
+                        now_ny = now_utc.replace(tzinfo=UTC).astimezone(_NY_TZ)
+                        e_h, e_m = IB_RETEST_SESSION_END
+                        past_close = (now_ny.hour * 60 + now_ny.minute) >= (e_h * 60 + e_m)
+                        new_day = _current_day_ny(now_utc) != _current_day_ny(fill_dt)
+                        if past_close or new_day:
+                            self._close_position_market(tag, info, now_utc)
                 # Position encore ouverte (aucun closing trade attribué à ce tag) →
                 # on réessaiera au prochain sync. Plus d'attribution contrat-level
                 # (source du double-comptage) : la clôture passe par closing_by_tag.
@@ -1529,6 +1611,37 @@ class SessionRunner:
             tag,
             info,
             reason=action.get("reason", "bos-fvg invalidation FVG"),
+        )
+
+    def _handle_ib_retest_cancel(self, action: dict):
+        """
+        ib-retest-v3 annulation pendant la phase PENDING (timeout du retest non
+        fillé OU fin de session 16:00 NY, mesurés sur barres M15 closes) : annule
+        l'ordre limite côté broker et passe le tag local en CANCELLED. Calqué sur
+        `_handle_bos_fvg_cancel`. No-op si le tag n'existe pas ou n'est pas PENDING.
+
+        NB : ce n'est PAS un cancel close-based — le core n'émet CANCEL que sur
+        timeout/EOD, et tout fill a déjà été converti en position ACTIVE en amont
+        (anti-race, cf. core.ib_retest). Aucun risque d'annuler un ordre qui vient
+        de filler.
+        """
+        tag = action["tag"]
+        placed = self.state.get("placed_tags", {})
+        info = placed.get(tag)
+        if info is None or info.get("status") != _ST_PENDING:
+            return
+
+        order_id = info.get("order_id", -1)
+        if not self.dry_run and order_id and order_id > 0:
+            try:
+                self.client.cancel_order(self.account_id, order_id)
+            except Exception as exc:
+                _log.warning("[%s] cancel_order API échec : %s", tag, exc)
+
+        self._handle_cancel_transition(
+            tag,
+            info,
+            reason=action.get("reason", "ib-retest timeout/EOD"),
         )
 
     # ─────────────────────────────────────────────────────────────────────
@@ -2169,6 +2282,19 @@ class SessionRunner:
                     action = sig.get("_action")
                     if action == "cancel":
                         self._handle_bos_fvg_cancel(sig)
+                    elif not self._already_placed(sig["tag"]):
+                        new_signals.append(sig)
+
+            # ib-retest-v3 — NQ1, MES1 (cf. IB_RETEST_TICKERS ; flag OFF par défaut).
+            # NATIF M15 : consomme le df M15 ci-dessus (comme fib-v4), PAS de
+            # _fetch_bars_m5 ni de M1Buffer. Chemin séparé via strategy="IB_RETEST".
+            # Pas de "cancel_fill" : invalidation = timeout/EOD seule (anti-race fill).
+            if IB_RETEST_ENABLED and ticker in IB_RETEST_TICKERS:
+                sig = self._get_ib_retest_signal(df, ticker)
+                if sig is not None:
+                    action = sig.get("_action")
+                    if action == "cancel":
+                        self._handle_ib_retest_cancel(sig)
                     elif not self._already_placed(sig["tag"]):
                         new_signals.append(sig)
 

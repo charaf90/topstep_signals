@@ -23,6 +23,11 @@ dev = [
     "mypy>=1.10",
     "hypothesis>=6.100",
 ]
+research = [
+    # Backend de recherche Optuna (core/search_optuna.py, import lazy).
+    # JAMAIS importé par broker/ ni le chemin live — le daemon démarre sans.
+    "optuna>=4.0",
+]
 
 # ------------------------------------------------------------------------------
 # Ruff — linter

@@ -63,6 +63,20 @@ def main():
     parser.add_argument(
         "--no-robustness", action="store_true", help="Ne pas générer le rapport de robustesse"
     )
+    parser.add_argument(
+        "--search",
+        choices=["grid", "optuna", "auto"],
+        default="auto",
+        help="Backend de recherche : grid exhaustif, optuna (TPE), ou auto "
+        "(grid si grille ≤ OPTIMIZER_GRID_MAX_COMBOS et pas de PARAM_SPACE)",
+    )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=None,
+        help="Trials Optuna par ticker, et par fold en --multifold "
+        "(défaut config.OPTIMIZER_N_TRIALS)",
+    )
     parser.add_argument("--output-dir", type=str, default="output")
     args = parser.parse_args()
 
@@ -113,7 +127,13 @@ def main():
             continue
 
         if args.multifold:
-            run_multifold(module, data, output_dir=args.output_dir)
+            run_multifold(
+                module,
+                data,
+                output_dir=args.output_dir,
+                search=args.search,
+                n_trials=args.n_trials,
+            )
             continue
 
         oos_end = None if str(args.oos_end).lower() == "none" else args.oos_end
@@ -126,6 +146,8 @@ def main():
             evaluate_holdout=args.holdout,
             robustness_report=not args.no_robustness,
             output_dir=args.output_dir,
+            search=args.search,
+            n_trials=args.n_trials,
         )
 
 

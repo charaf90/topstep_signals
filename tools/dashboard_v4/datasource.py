@@ -312,6 +312,14 @@ _PORTFOLIO_SPEC: list[tuple[str, str, tuple[str, ...], str, str, str]] = [
         "BOS_FVG_STRATEGY_VERSION",
         "BOS_FVG_RISK_USD",
     ),
+    (
+        "IB_RETEST",
+        "IB-Retest",
+        ("IB_RETEST_TICKERS",),
+        "IB_RETEST_ENABLED",
+        "IB_RETEST_STRATEGY_VERSION",
+        "RISK_PER_TRADE_USD",  # IB_RETEST_RISK_PER_TRADE_USD=None → global $200
+    ),
 ]
 
 

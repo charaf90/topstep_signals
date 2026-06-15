@@ -105,6 +105,23 @@ REALISTIC_SLIPPAGE_SEED = 42
 #    N = N workers (ex: 4 pour ne pas saturer la machine pendant le live)
 OPTIMIZER_PARALLEL_N_JOBS = -1
 
+# ── Backend de recherche de paramètres (grid exhaustif vs Optuna TPE) ─────────
+# En mode "auto" (défaut CLI), le grid exhaustif est conservé tant que la grille
+# reste ≤ OPTIMIZER_GRID_MAX_COMBOS ; au-delà (ou si la stratégie définit un
+# PARAM_SPACE continu), bascule sur Optuna TPE (core/search_optuna.py).
+# Seuil abaissé 10_000 → 60 le 2026-06-12 après re-validation (grid bit-à-bit
+# identique à HEAD sur fib_v4/fib_fine ; optuna ≡ grid sur les params cœur
+# fib_v4 avec 5.7× moins de backtests — cf. output/revalidation_grid_2026-06-12.log
+# et output/optuna_fib_v4_2026-06-12.log).
+OPTIMIZER_GRID_MAX_COMBOS = 60
+
+# Nombre de trials TPE par ticker (et par fold en --multifold).
+OPTIMIZER_N_TRIALS = 80
+
+# Seed du TPESampler — trials séquentiels + seed fixe = recherche déterministe.
+# En multifold : seed + 1000 × index_du_fold (séquence distincte par fold).
+OPTIMIZER_OPTUNA_SEED = 42
+
 # ── Shadow Mode (PHASE 3.2 ROADMAP_SOLO) ──────────────────────────────────────
 # Le shadow runner tourne en parallèle du daemon live, dans un process tmux
 # séparé, avec ses propres fichiers d'état et de logs. Il utilise la même
@@ -198,15 +215,22 @@ TOPSTEP_SAFETY_MULT = 1.1
 # Dates du split standard. IS_START est appliqué explicitement (2026-06-10) —
 # avant, le filtre IS n'avait pas de borne basse (= début des données, sept 2024
 # pour le m15) ; 2024-09-01 rend le code honnête SANS changer le comportement.
+# RITUEL TRIMESTRIEL exécuté le 2026-06-12 : IS_END/OOS_START avancés +1
+# trimestre (l'OOS oct-déc 2025, consommé par des dizaines de tests, bascule
+# en IS). IS_START reste au début des données (IS expanding — données rares).
+# L'OOS de sélection est court (3,5 mois) → la stabilité inter-folds
+# (--multifold, OOS recousu ~10 mois) porte le verdict de robustesse.
 WF_IS_START = "2024-09-01"
-WF_IS_END = "2025-09-30"
-WF_OOS_START = "2025-10-01"
+WF_IS_END = "2025-12-31"  # avant 2026-06-12 : "2025-09-30"
+WF_OOS_START = "2026-01-01"  # avant 2026-06-12 : "2025-10-01"
 # HOLD-OUT TERMINAL (ajout 2026-06-10) : les ~8 dernières semaines de données
 # sont EXCLUES de l'OOS de sélection/robustesse par défaut. Motif : l'OOS fixe
 # oct-2025→today a été consommé par des dizaines de tests d'hypothèses — les
 # survivants sur-fittent le régime de cette fenêtre. Le hold-out n'est consulté
 # qu'UNE fois, explicitement (optimize.py --holdout), juste avant promotion.
 # À avancer chaque trimestre (rituel : nouvelles dates + re-calibration prod).
+# Rituel 2026-06-12 : INCHANGÉ — posé le 2026-06-10, déjà calé sur
+# fin des données (2026-06-09) − ~8 semaines, et jamais consommé depuis.
 WF_HOLDOUT_START = "2026-04-15"
 # Multi-folds ancrés (optimize.py --multifold) : K folds expanding-IS dont les
 # OOS de WF_FOLD_MONTHS mois se suivent en remontant depuis WF_HOLDOUT_START.
@@ -387,10 +411,15 @@ BOS_FVG_ORDER_TIMEOUT_BARS = 24  # annule le limit non fillé (2h)
 BOS_FVG_MAX_TRADES_PER_DAY = 3
 BOS_FVG_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200) [recherche]
 
-# ── Promotion LIVE (bos-fvg-v1, 2026-06-03) — config retenue NQ1+MES1 @ $150 ──
-# Code live INERTE tant que le daemon n'est pas redémarré délibérément.
-# Verdict 🟢 (audit look-ahead clean, stress régime robuste, MC DD P95 -$1031).
-BOS_FVG_ENABLED = True  # actif au prochain RESTART du daemon (pas avant)
+# ── bos-fvg — PAUSÉ 2026-06-13 (était live depuis 2026-06-09) ──
+# Le PF de promotion (OOS 2.26-2.93) s'est révélé ARTEFACTUEL : l'A/B sur copie
+# littérale du code (brouillon/strategies/bos_fvg_ab.py, toggle honest_fill) montre
+# que ce PF vient de l'ordre fill LEGACY (invalidation FVG testée AVANT le fill →
+# exclut les fills perdants). Honnête : OOS PF ~1.2 (NQ1 0.86-1.06 sans edge, MES1
+# 1.4-1.6 mais IS breakeven=régime). Live net −$206/8 trades (cohérent honnête).
+# Re-validation honnête requise avant toute réactivation.
+# Cf. REGISTRE bos-fvg-v2 (révision 2026-06-13) + BACKLOG P1 bos-fvg-fill-bias.
+BOS_FVG_ENABLED = False  # PAUSE — réactiver seulement après re-validation honnête
 BOS_FVG_LIVE_TICKERS = ["NQ1", "MES1"]  # YM1 exclu (faible OOS + driver DD)
 BOS_FVG_RISK_USD = 150  # sizing dédié (≠ RISK_PER_TRADE_USD global $200)
 BOS_FVG_MAX_HOLD_BARS_M5 = 9  # time-stop bos-fvg-v2 : ferme la position après 9 barres M5 (~45min) depuis le fill, en plus de l'EOD (deep-lane 🟢 : OOS PF 2.26→2.93, MC DD P95 −22%)
@@ -556,38 +585,33 @@ PHC_MAX_TRADES_PER_DAY = 1
 PHC_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
 
 # ==============================================================================
-# STRATÉGIE IB_RETEST (`ib-retest-v1`) — Initial Balance retest (variante OPR)
+# STRATÉGIE IB_RETEST (`ib-retest-v3`) — Initial Balance break franche + retest
 # ==============================================================================
-# Backlog P3 (ib_retest_opr_variant, source Market Profile L3-4). Setup M5,
-# CONTINUATION dans le sens du flux (pas un fade). Long :
-#   1. IB (Initial Balance) = range de la 1ère heure RTH [09:30,10:30[ NY.
-#      IB_high = plus haut, IB_low = plus bas. Fixé à 10:30.
-#   2. CASSURE : une bougie CLÔTURE au-dessus de IB_high (+ buf×ATR) après 10:30.
-#   3. RETEST : buy limit sur la borne IB_high (retour de la borne en support).
-#   4. SL = IB_high − sl_buf × IB_range. TP = entrée + rr × sl_dist.
-# Short symétrique (cassure sous IB_low, retest, sell limit). Entrée LIMIT =
-# fill HONNÊTE (pullback sur la borne). DISTINCT d'OPR : fenêtre 09:30-10:30 (vs
-# OPR 09:15-09:45) + entrée au RETEST (vs cassure). 1 trade/jour (1ère cassure).
-# RED-FLAG ÉTAPE 0 : variante OPR (corrélation à mesurer si survivant) MAIS
-# mécanisme distinct + dans le sens du flux (≠ fades rejetés liq-hook/exp-hunt).
-IB_RETEST_STRATEGY_VERSION = "ib-retest-v2"  # v2 = filtre de cassure franche (v1 bo=0 = mort)
-IB_RETEST_TICKERS = ["NQ1", "MES1", "YM1"]
+# Backlog P3 (ib_retest_opr_variant, Market Profile). CONTINUATION (pas un fade).
+#   1. IB = range de la 1ère heure RTH [09:30,10:30[ NY (IB_high/IB_low, fixé 10:30).
+#   2. CASSURE FRANCHE : une bougie CLÔTURE au-delà de la borne + BREAKOUT_BUF_ATR×ATR
+#      (après 10:30) → la franchise EST l'edge (cassures molles = chop = mort).
+#   3. RETEST : limit sur la borne cassée (devient support/résistance) — fill HONNÊTE.
+#   4. SL = entrée ∓ SL_ATR×ATR. TP = entrée ± RR×sl_dist. 1 trade/j, close cloche.
+# Distinct d'OPR (range 09:30-09:45, entrée cassure) : IB = 1ère HEURE + entrée au RETEST.
+# v3 (2026-06-13) SUPERSEDE le stub v2 : re-exploration M15 (vs M5 v2) + SL en ×ATR
+# (vs ×IB_range) + univers MES1/NQ1 (YM1 retiré). v2 M5 : PORTF OOS PF ~1.3 (🟡 faible).
+# v3 M15 : OOS sélection 2.69 / hold-out 1.95 / multifold 10/10 folds + / DSR 95.1 %,
+# AUDITÉ 🟢 (re-sim M5 prouve que le M15 est CONSERVATEUR). Cf. output/ib-retest-v1/ + REGISTRE.
+IB_RETEST_STRATEGY_VERSION = "ib-retest-v3"
+IB_RETEST_TICKERS = ["MES1", "NQ1"]  # YM1 retiré (v3)
 IB_RETEST_TIMEZONE = "America/New_York"
 IB_RETEST_IB_START = (9, 30)
 IB_RETEST_IB_END = (10, 30)  # IB = 1ère heure RTH (Market Profile standard)
-IB_RETEST_ENTRY_CUTOFF = (14, 0)  # pas de nouvelle cassure armée après 14:00 NY
-IB_RETEST_SESSION_END = (16, 0)  # close-all RTH
+IB_RETEST_SESSION_END = (16, 0)  # close-all RTH ; cassures armées jusqu'à 16:00
 IB_RETEST_ATR_PERIOD = 14
-# v2 : la cassure doit être FRANCHE (close ≥ buf×ATR au-delà de la borne) avant
-# d'armer le retest — sinon retests dans le chop = mort (v1 bo=0 : IS+OOS PF 0.95).
-# Relation MONOTONE 0→0.25→0.5→1.0 : PORTF OOS PF 0.92→1.14→1.29→1.33.
-IB_RETEST_BREAKOUT_BUF_ATR = 0.5
-IB_RETEST_MIN_IB_ATR = 0.0  # filtre : IB_range ≥ x×ATR (0 = off)
-IB_RETEST_SL_BUF = 0.25  # SL = borne ∓ sl_buf × IB_range
-IB_RETEST_RR = 2.0
-IB_RETEST_ORDER_TIMEOUT_BARS = 24  # annule le limit de retest non fillé (~2h M5)
-IB_RETEST_MAX_TRADES_PER_DAY = 1  # 1ère cassure du jour seulement
+IB_RETEST_BREAKOUT_BUF_ATR = 0.5  # cassure franche (validé multifold 10/10, plateau à 0.5)
+IB_RETEST_SL_ATR = 0.5  # v3 : SL = entrée ∓ SL_ATR×ATR (≠ v2 SL_BUF×IB_range)
+IB_RETEST_RR = 1.5
+IB_RETEST_ORDER_TIMEOUT_BARS = 16  # annule le limit de retest non fillé (~4h M15)
+IB_RETEST_MAX_TRADES_PER_DAY = 1  # 1ère cassure franche du jour
 IB_RETEST_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+IB_RETEST_ENABLED = True  # ACTIVÉ EN LIVE 2026-06-14 (MES1+NQ1) — promotion @forge + test simu OK + pré-promotion (corr~0, P(target)=100%)
 
 # ==============================================================================
 # STRATÉGIE GOLDEN_POCKET (`gp-v1`) — Fib 0.618 sur la 1ère impulsion du jour
@@ -619,6 +643,55 @@ GP_ENTRY = 0.618  # niveau golden pocket (retracement)
 GP_SL_BUF = 0.10  # SL = origine swing ∓ buf × range
 GP_RR = 2.0
 GP_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
+
+# ==============================================================================
+# STRATÉGIE ZONES (`zones-v1`) — Zones d'intérêt par points extrêmes multi-échelle
+# ==============================================================================
+# Idée utilisateur 2026-06-12. Zones S/R data-driven sur les ZONES_LOOKBACK_BARS
+# dernières bougies : pivots fractals de PLUSIEURS ordres k (multi-échelle),
+# confirmés k barres après (causal), clusterisés en zones (gap ≤ eps×ATR),
+# SCORÉS (touches, multi-échelle, volume aux touches) — réponse à la leçon
+# smc-v1 : on filtre les zones au lieu de les empiler. Entrée LIMIT (fade) sur
+# zone qualifiée, validée par CONFLUENCE causale calculée à l'armement
+# (divergence RSI, perte de puissance d'impulsion, déclin de volume) — réponse
+# à la leçon fade-de-sweep : jamais de fade nu (le nu = baseline falsifiable,
+# toggles None par défaut). Invalidation pending si la zone casse (leçon
+# fib-v3) + pivots constituants tués (la zone cassée ne se reforme pas).
+# M15 natif full history d'abord (gate), déclinaison M5/M1 si survie.
+# Auto-contenu, prod intouchée.
+ZONES_STRATEGY_VERSION = "zones-v1"
+ZONES_TICKERS = ["NQ1", "MES1", "YM1", "MGC1"]
+ZONES_TIMEZONE = "America/New_York"
+ZONES_SESSION_OPEN = (9, 30)
+ZONES_SESSION_END = (16, 0)
+ZONES_ATR_PERIOD = 14
+# — Structure des zones (étage 1 Optuna 2026-06-12, plateau ✓ 0.757 ;
+#    l'étage 2 exécution/confluence = winner's curse rejeté → exécution aux
+#    défauts a priori, seule vol_decline 0.9 retenue, sonde IS 4/4 tickers) —
+ZONES_PIVOT_KS = "3,5,8"  # ordres fractals multi-échelle (csv → parse)
+ZONES_LOOKBACK_BARS = 398  # fenêtre de détection (⚠ bord d'espace [150,400])
+ZONES_EPS_CLUSTER_ATR = 0.6486217738919546  # clustering : gap inter-pivots ≤ eps × ATR
+ZONES_WIDTH_MAX_ATR = 0.780199630307582  # zone plus large = diffuse → rejetée
+ZONES_MIN_TOUCHES = 4  # nb min de pivots dans le cluster
+ZONES_REQUIRE_MULTISCALE = True  # exiger ≥ 2 ordres k distincts dans la zone
+ZONES_VOL_MIN_RATIO = None  # vol moyen aux touches ≥ x × vol moyen roulant (None = off)
+# — Armement / exécution —
+ZONES_ARM_DIST_ATR = 1.0  # distance max (close → bord proximal) pour armer
+ZONES_ENTRY_DEPTH = 0.25  # entrée à x de la hauteur de zone depuis le bord proximal
+ZONES_SL_BUF_ATR = 0.30  # SL = bord distal ∓ buf × ATR
+ZONES_RR = 1.5  # TP = entrée ± rr × sl_dist
+ZONES_TTL_BARS = 12  # annule le limit non fillé (~3h M15)
+ZONES_COOLDOWN_BARS = 12  # pas de re-armement d'une zone déjà tradée (barres)
+# — Confluence (None = OFF ; tout None = baseline fade nu) —
+ZONES_RSI_PERIOD = 14  # FIXE (anti-dimension)
+ZONES_DIV_WINDOW = 12  # fenêtre de comparaison des extrêmes (FIXE)
+ZONES_RSI_DIV_MARGIN = None  # divergence RSI requise, marge en points RSI
+ZONES_EXHAUST_RATIO = None  # corps_ma3 ≤ ratio × corps de la jambe d'approche
+ZONES_VOL_DECLINE = 0.9  # vol_ma3 ≤ ratio × vol_ma20 (épuisement) — confluence retenue
+# — Garde-fous —
+ZONES_MAX_TRADES_PER_DAY = 3
+ZONES_MAX_CONTRACTS = 30  # cap sizing (évite n_ct absurde si SL micro)
+ZONES_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
 
 # ==============================================================================
 # STRATÉGIE ASIAN_SWEEP (`asian-sweep-v1`) — sweep range asiatique → reversal Londres
@@ -968,14 +1041,33 @@ FIB_SESSION_PER_TICKER = {
 # Configuration calibrée walk-forward IS/OOS sur historique sept 2024 →
 # mai 2026 (cf. output/rapport_fib-v4_optimize.md).
 # ──────────────────────────────────────────────────────────────────────────────
-FIB_V4_STRATEGY_VERSION = "fib-v4"
+FIB_V4_STRATEGY_VERSION = "fib-v4.1"  # v4.1 (2026-06-14) : filtre causal remplace wick look-ahead
 FIB_V4_ENABLED = True  # PROMU EN PRODUCTION 2026-05-19 — MES1+NQ1+MGC1
 
+# ── v4.1 : filtre au fill — bascule causal vs wick look-ahead (réversible) ──
+# Le filtre wick-at-fill historique ("wick") lit la mèche COMPLÈTE de la bougie
+# de fill → LOOK-AHEAD (audit 2026-06-13). Le filtre causal ("causal") lit
+# atr_short[i-1]/atr_arm >= ratio (barre close AVANT le fill, façon fib-fine-v2)
+# → no look-ahead par construction. Re-validation 🟢 : OOS sél 2.22 / hold-out 3.19,
+# DSR 95.8%, portfolio_replay P(target)=100% (cf. output/fib-v4-causal/). MGC1 retiré.
+# ROLLBACK : repasser FIB_V4_FILL_FILTER = "wick" + restart daemon.
+FIB_V4_FILL_FILTER = "causal"  # "causal" (validé v4.1) | "wick" (legacy prod look-ahead) | "none"
+FIB_V4_CAUSAL_MIN_RATIO = (
+    0.8  # seuil atr_short[i-1]/atr_arm (balayé [0.8..1.1], argmax 0.8 MES1+NQ1)
+)
+FIB_V4_ATR_SHORT_PERIOD = 5  # période ATR court terme du filtre causal (façon fib-fine)
+
 # Univers de production retenu après Phase 4 (verdict 🟢) :
-#   MES1, NQ1 (M15 fib=0.382) ; MGC1 (M15 fib=0.5).
+#   MES1, NQ1 (M15 fib=0.382). MGC1 RETIRÉ 2026-06-13 : son edge backtest était
+#   surtout du look-ahead wick (audit revérif — honnête OOS ~1.0-1.13 vs 1.95 affiché,
+#   live −$336/6). Re-validation causale : MES1 OOS 2.42 / NQ1 3.30 tiennent, pas MGC1.
+#   Cf. REGISTRE fib-v4 (révision) + BACKLOG fib-v4-wick-revalidation + mémoire.
 # YM1 et MCL1 EXCLUS : YM1 a n_oos < 20 → 🟡 VEILLE ; MCL1 = REJET structurel
 # (Fib inadapté au crude, cf. note historique stratégie ARF).
-FIB_V4_TICKERS = ["MES1", "NQ1", "MGC1"]
+FIB_V4_TICKERS = [
+    "MES1",
+    "NQ1",
+]  # MGC1 retiré 2026-06-13 (look-ahead → edge MGC1 marginal/négatif live)
 
 # Niveau Fibonacci retenu par ticker — issu de Phase 4 (PF OOS le plus haut).
 FIB_V4_LEVEL_PER_TICKER = {

@@ -49,20 +49,19 @@ STRATEGY_REFS: dict[str, StrategyRef] = {
         source="output/robustness_opr-v5.1.json (YM1) · fidélité scripts/live_eq_v5_1.py",
         date_ref="2026-05-18",
     ),
-    # FIB v4 : PF Phase 4 par ticker 6.01/6.47/2.53 = PF NAÏFS (feature lue sur
-    # la bougie de fill, cf. REGISTRE l.32) → ref PRUDENTE PF 2.0.
-    # expectancy_r 0.25 # À AFFINER depuis output/rapport fib-v4 (deep lane).
+    # FIB v4.1 (2026-06-14) : filtre causal remplace le wick look-ahead. PF causal
+    # HONNÊTE (≠ PF naïfs du wick) : OOS sél 2.22 / hold-out 3.19 → ref prudente 2.2.
     "FIB": StrategyRef(
         name="FIB",
-        version="fib-v4",
-        pf_oos=2.0,
+        version="fib-v4.1",
+        pf_oos=2.2,
         wr_oos=None,
-        expectancy_r=0.25,
+        expectancy_r=0.30,
         n_oos=60,
         rr_typical=2.0,
         risk_usd=200,
-        source="REGISTRE_HYPOTHESES.md fib-v4 (PF naïfs dégradés)",
-        date_ref="2026-05-19",
+        source="output/fib-v4-causal/ (causal, hold-out 3.19 / OOS 2.22)",
+        date_ref="2026-06-14",
     ),
     # FIB_FINE v2 : PF OOS 1.63, BS 99.6 %, Bonferroni OK (REGISTRE l.33).
     # PF 1.63 & rr≈2 → wr ≈ 0.45, expectancy_r ≈ 0.13. n_oos # À AFFINER.
@@ -78,21 +77,27 @@ STRATEGY_REFS: dict[str, StrategyRef] = {
         source="REGISTRE_HYPOTHESES.md fib-fine-v2",
         date_ref="2026-06-02",
     ),
-    # BOS_FVG v2 : OOS PF 2.26→2.93 avec time-stop 9 barres M5, MC DD P95 −22 %
-    # (config.py ~l.396, REGISTRE l.34). rr live 1.5 (BOS_FVG_RR_PER_TICKER).
-    # expectancy_r 0.30 # À AFFINER (les sorties time-stop cassent la formule wr/rr).
-    "BOS_FVG": StrategyRef(
-        name="BOS_FVG",
-        version="bos-fvg-v2",
-        pf_oos=2.93,
-        wr_oos=None,
-        expectancy_r=0.30,
-        n_oos=50,
+    # IB_RETEST v3 (M15, IB break franche 0.5×ATR + retest LIMITE) : OOS sél 2.69,
+    # hold-out terminal 1.95, multifold 10/10, DSR 95.1 %. Réf PRUDENTE = hold-out
+    # (le plus pur) : PF 1.95, wr 0.60, expectancy_r = +$3164/43/$200 ≈ 0.37. Audité 🟢.
+    "IB_RETEST": StrategyRef(
+        name="IB_RETEST",
+        version="ib-retest-v3",
+        pf_oos=1.95,
+        wr_oos=0.60,
+        expectancy_r=0.37,
+        n_oos=43,
         rr_typical=1.5,
-        risk_usd=150,
-        source="REGISTRE_HYPOTHESES.md bos-fvg-v2",
-        date_ref="2026-06-09",
+        risk_usd=200,
+        source="REGISTRE_HYPOTHESES.md ib-retest-v3 (hold-out terminal, prudent)",
+        date_ref="2026-06-14",
     ),
+    # BOS_FVG — RÉF RETIRÉE 2026-06-13 : le PF de promotion (2.26-2.93) est
+    # ARTEFACTUEL (biais d'ordre fill/invalidation ; honnête OOS PF ~1.2, NQ1 sans
+    # edge — cf. REGISTRE bos-fvg-v2 révision + BACKLOG P1 bos-fvg-fill-bias).
+    # Stratégie PAUSÉE (BOS_FVG_ENABLED=False). NE PAS ré-ajouter de ref tant que
+    # la re-validation honnête n'a pas produit de chiffres fiables → le dash affiche
+    # bos-fvg "OFF" sans carte verdict-sizing (pas de comparaison à une attente fausse).
 }
 
 # Variable de version config.py associée à chaque ref (contrôle de péremption).
@@ -101,6 +106,7 @@ _VERSION_VARS = {
     "FIB": "FIB_V4_STRATEGY_VERSION",
     "FIB_FINE": "FIB_FINE_STRATEGY_VERSION",
     "BOS_FVG": "BOS_FVG_STRATEGY_VERSION",
+    "IB_RETEST": "IB_RETEST_STRATEGY_VERSION",
 }
 
 

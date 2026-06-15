@@ -115,8 +115,9 @@ Les écritures dans `core/**` et `broker/**` déclenchent un prompt (`.claude/se
 **Portefeuille en production (live depuis 2026-05-05) :**
 - **OPR** — routage par ticker : NQ1, YM1 → `opr-v5.1` (schéma A entrée différée, filtre F2 data-driven,
   intra-bar via M1Buffer) ; MES1 → `opr-v4` (pass-through).
-- **Fib `fib-v4`** — Retracement Fibonacci data-driven (3 cellules 🟢) : MES1 + NQ1 + MGC1.
-  Invalidation pivot break + wick excess intra-bar via M1Buffer.
+- **Fib `fib-v4.1`** — Retracement Fibonacci data-driven : MES1 + NQ1 (MGC1 retiré 2026-06-13, edge
+  surtout look-ahead). Invalidation pivot break + **filtre causal d'expansion de volatilité** (atr_short i-1,
+  `FIB_V4_FILL_FILTER="causal"`, remplace le wick look-ahead le 2026-06-14 ; toggle réversible vers "wick").
 - **Fib `fib-fine-v2`** — Fibonacci NATIF M5, filtre causal d'expansion de volatilité. Univers NQ1 + MES1,
   sizing $130. **Flag `FIB_FINE_ENABLED=True`** — actif en live depuis le restart du 2026-06.
   Barres M5 en REST dédié (`_fetch_bars_m5`), pas de M1Buffer.
@@ -164,6 +165,9 @@ python optimize.py --strategy fib_v4 --csv-dir ./data --ticker NQ1
 python optimize.py --strategy all    --csv-dir ./data
 python optimize.py --strategy <nom> --csv-dir ./data --multifold   # stabilité inter-folds + OOS recousu
 python optimize.py --strategy <nom> --csv-dir ./data --holdout     # ⚠️ consulte le hold-out (1 fois, pré-promotion)
+python optimize.py --strategy <nom> --csv-dir ./data --search optuna --n-trials 80  # TPE (grandes grilles
+#   ou PARAM_SPACE continu) ; "auto" (défaut) reste en grid tant que grille ≤ OPTIMIZER_GRID_MAX_COMBOS.
+#   Dépendance optionnelle : pip install 'optuna>=4.0' (groupe "research" — jamais requis par le live)
 
 # Risque portefeuille combiné (corrélations inter-stratégies, MC DD, P(target avant breach))
 python tools/portfolio_replay.py        # input du fit portefeuille @athena

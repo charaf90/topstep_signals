@@ -118,6 +118,10 @@ Avant d'écrire la moindre ligne :
   On n'écrit dans `config.py` qu'à la **promotion** (`@forge`).
 - **Breadth** : coder les variantes naturelles (triggers, tickers, seuils) comme dimensions du
   `PARAM_GRID` (≤ 4) — elles seront testées **en un seul run** walk-forward, pas en cycles séparés.
+- **`PARAM_SPACE` (optionnel)** : pour des ranges continus, déclarer en plus
+  `PARAM_SPACE = {"sl_mult": ("float", 0.3, 2.5), "f2": ("cat", [None, 0.10, 0.15])}` →
+  l'optimizer bascule sur Optuna TPE (`--search optuna`, ou auto si grille > seuil config).
+  Score toujours IS-only ; `n_strategies_tested` (Bonferroni/DSR) = jeux réellement évalués.
 - Auto-discovery `core/registry.py` : un fichier dans `brouillon/strategies/` suffit (pas besoin
   d'éditer `backtest.py`/`optimize.py`).
 

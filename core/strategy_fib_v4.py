@@ -54,7 +54,10 @@ from config import (
     FIB_SESSION_PER_TICKER,
     FIB_SL_ATR_MULT_PER_TICKER,
     FIB_TP_ATR_MULT_PER_TICKER,
+    FIB_V4_ATR_SHORT_PERIOD,
+    FIB_V4_CAUSAL_MIN_RATIO,
     FIB_V4_ENABLED,
+    FIB_V4_FILL_FILTER,
     FIB_V4_LEVEL_PER_TICKER,
     FIB_V4_PIVOT_BREAK_BUFFER_ATR_PER_TICKER,
     FIB_V4_SKIP_MACRO_PER_TICKER,
@@ -84,6 +87,22 @@ _SESSION_WINDOWS = {
     "all": (0, 24),
 }
 _MACRO_DATES_SET = set(MACRO_EVENT_DATES)
+
+
+def _passes_atr_expansion(df, fill_i, atr_at_arm, min_ratio):
+    """Filtre CAUSAL d'expansion de volatilité (copie fib-fine) : lit atr_short à
+    fill_i-1 (barre close AVANT le fill) → no look-ahead. True = garder le fill."""
+    if not min_ratio:
+        return True
+    if atr_at_arm is None or pd.isna(atr_at_arm) or atr_at_arm <= 0:
+        return True
+    j = fill_i - 1
+    if j < 0 or "atr_short" not in df.columns:
+        return True
+    atr_s = df["atr_short"].iloc[j]
+    if pd.isna(atr_s):
+        return True
+    return (atr_s / atr_at_arm) >= min_ratio
 
 
 def run_fib_v4_backtest(
@@ -125,6 +144,7 @@ def run_fib_v4_backtest(
 
     df = df.copy()
     df["atr"] = compute_atr(df, FIB_ATR_PERIOD)
+    df["atr_short"] = compute_atr(df, FIB_V4_ATR_SHORT_PERIOD)  # v4.1 : filtre causal i-1
     df["ema_fast"] = compute_ema(df["close"], FIB_EMA_FAST_PERIOD)
     df["ema_slow"] = compute_ema(df["close"], FIB_EMA_SLOW_PERIOD)
     df["adx"] = compute_adx(df, FIB_ADX_PERIOD)
@@ -216,19 +236,27 @@ def run_fib_v4_backtest(
             # Check fill ordre limite
             level = pending["entry"]
             if bar["low"] <= level <= bar["high"]:
-                # ── INVALIDATION #2 : wick excess ──
-                # Si la mèche perce le niveau Fib trop profondément, c'est
-                # un washout / liquidation — edge négatif data-driven.
+                # ── INVALIDATION #2 : filtre au fill (v4.1, bascule réversible) ──
+                # "wick" = legacy prod LOOK-AHEAD (mèche complète de la bougie de fill).
+                # "causal" = atr_short[i-1]/atr_arm >= ratio (barre close AVANT le fill,
+                #            façon fib-fine) → no look-ahead. "none" = aucun filtre.
+                # wick reste calculé en COLONNE d'audit (wick_through_atr) dans tous les cas.
                 if atr_arm and not pd.isna(atr_arm):
                     if pending["direction"] == "long":
                         wick = (level - float(bar["low"])) / atr_arm
                     else:
                         wick = (float(bar["high"]) - level) / atr_arm
-                    if wick > wick_max_atr:
-                        pending = None
-                        continue
                 else:
                     wick = float("nan")
+                if FIB_V4_FILL_FILTER == "wick":
+                    if not pd.isna(wick) and wick > wick_max_atr:
+                        pending = None
+                        continue
+                elif FIB_V4_FILL_FILTER == "causal":
+                    if not _passes_atr_expansion(df, i, atr_arm, FIB_V4_CAUSAL_MIN_RATIO):
+                        pending = None
+                        continue
+                # "none" : aucun filtre au fill.
 
                 # Calcul features finales au fill
                 if pending["direction"] == "long":
@@ -461,6 +489,7 @@ def get_fib_v4_live_signal(
 
     df = df_15m.copy()
     df["atr"] = compute_atr(df, FIB_ATR_PERIOD)
+    df["atr_short"] = compute_atr(df, FIB_V4_ATR_SHORT_PERIOD)  # v4.1 : filtre causal i-1
     df["ema_fast"] = compute_ema(df["close"], FIB_EMA_FAST_PERIOD)
     df["ema_slow"] = compute_ema(df["close"], FIB_EMA_SLOW_PERIOD)
     df["adx"] = compute_adx(df, FIB_ADX_PERIOD)
@@ -516,13 +545,18 @@ def get_fib_v4_live_signal(
             # Check fill ordre limite sur la M15 close
             level = pending["entry"]
             if bar["low"] <= level <= bar["high"]:
-                # Wick check au fill
-                if atr_arm and not pd.isna(atr_arm):
-                    if pending["direction"] == "long":
-                        wick = (level - float(bar["low"])) / atr_arm
-                    else:
-                        wick = (float(bar["high"]) - level) / atr_arm
-                    if wick > wick_max_atr:
+                # v4.1 : filtre au fill réversible (cf. run_fib_v4_backtest INVALIDATION #2)
+                if FIB_V4_FILL_FILTER == "wick":
+                    if atr_arm and not pd.isna(atr_arm):
+                        if pending["direction"] == "long":
+                            wick = (level - float(bar["low"])) / atr_arm
+                        else:
+                            wick = (float(bar["high"]) - level) / atr_arm
+                        if wick > wick_max_atr:
+                            pending = None
+                            continue
+                elif FIB_V4_FILL_FILTER == "causal":
+                    if not _passes_atr_expansion(df, i, atr_arm, FIB_V4_CAUSAL_MIN_RATIO):
                         pending = None
                         continue
                 # Fill validé → position active
@@ -650,24 +684,29 @@ def get_fib_v4_live_signal(
                 "current_m15_low": current_low,
                 "current_m15_high": current_high,
             }
-        # 2) Wick courant si le niveau a déjà été touché intra-bar
-        level = pending["entry"]
-        if current_low <= level <= current_high:
-            if pending["direction"] == "long":
-                wick = (level - current_low) / atr_arm
-            else:
-                wick = (current_high - level) / atr_arm
-            if wick > wick_max_atr:
-                return {
-                    "state": "CANCEL_FILL",
-                    "signal": pending,
-                    "impulse_key": impulse_key,
-                    "reason": (
-                        f"wick_through_atr={wick:.3f} > {wick_max_atr} intra-bar (M1 reconstructed)"
-                    ),
-                    "current_m15_low": current_low,
-                    "current_m15_high": current_high,
-                }
+        # 2) Wick courant — UNIQUEMENT en mode "wick" (legacy look-ahead).
+        # En mode causal (v4.1) : le filtre au fill lit atr_short[i-1] (barres M15
+        # CLOSES, déjà évalué dans la boucle ci-dessus) → PAS d'invalidation
+        # intra-bar via M1 ici. Le CANCEL_FILL est donc neutralisé sous causal :
+        # on laisse l'ordre limite broker se remplir normalement (no look-ahead).
+        if FIB_V4_FILL_FILTER == "wick":
+            level = pending["entry"]
+            if current_low <= level <= current_high:
+                if pending["direction"] == "long":
+                    wick = (level - current_low) / atr_arm
+                else:
+                    wick = (current_high - level) / atr_arm
+                if wick > wick_max_atr:
+                    return {
+                        "state": "CANCEL_FILL",
+                        "signal": pending,
+                        "impulse_key": impulse_key,
+                        "reason": (
+                            f"wick_through_atr={wick:.3f} > {wick_max_atr} intra-bar (M1 reconstructed)"
+                        ),
+                        "current_m15_low": current_low,
+                        "current_m15_high": current_high,
+                    }
 
     return {
         "state": "PENDING",
