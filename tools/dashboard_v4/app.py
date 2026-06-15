@@ -9,9 +9,8 @@ Accès :
     Local      : http://localhost:8503
     Tailscale  : http://Katana17:8503  (iPhone — PWA « Ajouter à l'écran d'accueil »)
 
-Cohabite avec le v3 (port 8502) pendant la transition. app.py ne calcule
-RIEN : il assemble les builders de tabs/ (datasource/stats/health font le
-travail, testables en CLI).
+app.py ne calcule RIEN : il assemble les builders de tabs/
+(datasource/stats/health font le travail, testables en CLI).
 """
 
 from __future__ import annotations

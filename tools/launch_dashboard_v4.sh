@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # Lance le dashboard v4 (Dash) en tmux always-on sur port 8503.
 #
-# Cohabite avec le v3 (port 8502) pendant la phase de validation —
-# une session de marché en double-écran avant de basculer.
-#
 # Usage :
 #   ./tools/launch_dashboard_v4.sh         # démarre dans tmux session "dash_v4"
 #   ./tools/launch_dashboard_v4.sh stop    # tue la session
