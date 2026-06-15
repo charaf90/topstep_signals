@@ -170,6 +170,7 @@ def _rm_to_dict(rm: PortfolioRiskManager) -> dict:
         "realized_day_pnl": rm.realized_day_pnl,
         "current_day": rm.current_day.isoformat() if rm.current_day else None,
         "consec_loss_days": rm.consec_loss_days,
+        "pause_days_remaining": rm.pause_days_remaining,
         "daily_fills_count": rm.daily_fills_count,
         "pending_orders": {k: _order_dict(v) for k, v in rm.pending_orders.items()},
         "active_positions": {k: _order_dict(v) for k, v in rm.active_positions.items()},
@@ -188,6 +189,7 @@ def _rm_from_dict(data: dict) -> PortfolioRiskManager:
         peak_pnl=float(data.get("peak_pnl", 0.0)),
         realized_day_pnl=float(data.get("realized_day_pnl", 0.0)),
         consec_loss_days=int(data.get("consec_loss_days", 0)),
+        pause_days_remaining=int(data.get("pause_days_remaining", 0)),
         daily_fills_count=int(data.get("daily_fills_count", 0)),
     )
     if data.get("current_day"):

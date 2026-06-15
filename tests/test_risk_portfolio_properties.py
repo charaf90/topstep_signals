@@ -35,6 +35,8 @@ def _build_rm(
     consec_loss_pause_days: int = 0,
     safety_mult: float = 1.0,  # 1.0 = pas de marge — testable purement
     user_max_armed_risk_usd: float = 0.0,  # 0 = cap armé désactivé (isolé des autres invariants)
+    imminent_weight: float = 1.0,  # 1.0 = sémantique pré-refonte (pending compte plein) ;
+    #   épingle le contrôle des tests de cap armé indépendamment du défaut config (0.6).
 ) -> PortfolioRiskManager:
     """Construit un manager avec params reproductibles, indépendamment de config.py."""
     return PortfolioRiskManager(
@@ -46,6 +48,7 @@ def _build_rm(
         consec_loss_pause_days=consec_loss_pause_days,
         safety_mult=safety_mult,
         user_max_armed_risk_usd=user_max_armed_risk_usd,
+        imminent_weight=imminent_weight,
     )
 
 
@@ -123,7 +126,12 @@ class TestSlackInvariant:
 class TestArmedRiskInvariant:
     """Borne le pire-cas « sweep de fills simultanés » : toutes les limites
     armées fillent puis SL en cascade. Deux mécanismes : cap dur configurable
-    (user_max_armed_risk_usd) + invariant DLL armé toujours actif."""
+    (user_max_armed_risk_usd) + invariant DLL armé toujours actif.
+
+    Sémantique épinglée à imminent_weight=1.0 (via _build_rm) : ces tests
+    valident la MÉCANIQUE du cap armé (somme pending+filled, libération au
+    cancel, conservation au fill) indépendamment du défaut config (0.6).
+    La sémantique pondérée 0.6 a sa propre classe (TestImminentWeight)."""
 
     def _arm(self, rm: PortfolioRiskManager, risks: list[float]):
         for i, r in enumerate(risks):
@@ -182,6 +190,99 @@ class TestArmedRiskInvariant:
             assert worst_case_rdp >= -rm.daily_loss_limit - 1e-6, (
                 f"can_open True mais worst-case armé rdp={worst_case_rdp} "
                 f"< -{rm.daily_loss_limit} (rdp={rdp}, pending={pending}, new={new_risk})"
+            )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Invariant 2-ter — pondération imminent_weight du pending (refonte 2026-06-15)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestImminentWeight:
+    """Le check 5-bis compte filled + imminent_weight×pending au lieu de
+    filled + pending. Un pending n'est pas une exposition réelle : le pondérer
+    par <1 évite de bloquer à tort de nouveaux signaux (plainte user 06-11/12/15),
+    sans dégrader le pire-cas filled-based (checks 5/6, voir TestSlackInvariant).
+    Réversibilité : imminent_weight=1.0 + cap=600 ≡ comportement pré-refonte."""
+
+    def _arm(self, rm: PortfolioRiskManager, risks: list[float]):
+        for i, r in enumerate(risks):
+            rm.register_open(f"pending_{i}", risk_usd=r)
+
+    def test_pending_pondere_sur_cap_dur(self):
+        """Sous iw=0.6, du pending qui dépasserait le cap en plein (filled+1.0×pending)
+        passe quand il est pondéré. 550 pending → 0.6×550=330 ; 330+200=530 ≤ 900."""
+        rm = _build_rm(user_max_armed_risk_usd=900.0, imminent_weight=0.6)
+        self._arm(rm, [200.0, 200.0, 150.0])  # pending réel = 550
+        ok, _ = rm.can_open(risk_usd=200.0)  # armé pondéré = 0.6*550 + 200 = 530 ≤ 900
+        assert ok
+        # En plein (iw=1.0) au même cap, 550+200=750 ≤ 900 passe AUSSI — on isole donc
+        # la pondération avec un pending qui SEUL dépasserait le cap non pondéré :
+        rm2 = _build_rm(user_max_armed_risk_usd=900.0, imminent_weight=0.6)
+        self._arm(rm2, [300.0, 300.0, 300.0])  # pending réel = 900
+        ok2, _ = rm2.can_open(risk_usd=200.0)  # pondéré : 0.6*900 + 200 = 740 ≤ 900 → OK
+        assert ok2
+        rm3 = _build_rm(user_max_armed_risk_usd=900.0, imminent_weight=1.0)
+        self._arm(rm3, [300.0, 300.0, 300.0])  # même pending
+        ok3, reason3 = rm3.can_open(risk_usd=200.0)  # plein : 900 + 200 = 1100 > 900 → bloqué
+        assert not ok3 and reason3.startswith("armed_risk_cap")
+
+    def test_pending_pondere_sur_worstcase_dll(self):
+        """Le sous-check worst-case DLL armé utilise aussi le pending pondéré.
+        Cap off, safety=1.0 : pending 900 plein bloque (slack 1000-900=100<200),
+        mais pondéré 0.6 passe (slack 1000-540=460 ≥ 200)."""
+        rm = _build_rm(user_max_armed_risk_usd=0.0, safety_mult=1.0, imminent_weight=0.6)
+        self._arm(rm, [300.0, 300.0, 300.0])  # pending réel = 900, pondéré = 540
+        ok, _ = rm.can_open(risk_usd=200.0)
+        assert ok
+
+    def test_status_montre_le_pending_reel_non_pondere(self):
+        """status() reste non pondéré : armed_risk_usd = filled + pending RÉEL."""
+        rm = _build_rm(imminent_weight=0.6)
+        self._arm(rm, [200.0, 200.0, 150.0])
+        # pending réel = 550, pas 0.6×550
+        assert rm.status()["pending_risk_usd"] == 550.0
+        assert rm.status()["armed_risk_usd"] == 550.0
+
+    def test_reversibilite_iw1_cap600_equiv_baseline(self):
+        """Non-régression : iw=1.0 + cap=600 reproduit EXACTEMENT l'ancien RM.
+        Le pending compte plein, le cap mord à 600 (cf. ancien test du cap)."""
+        rm = _build_rm(user_max_armed_risk_usd=600.0, imminent_weight=1.0)
+        self._arm(rm, [200.0, 200.0, 150.0])  # armé = 550 (plein)
+        # 550 + 200 = 750 > 600 → bloqué, comme avant la refonte
+        ok, reason = rm.can_open(risk_usd=200.0)
+        assert not ok and reason.startswith("armed_risk_cap")
+        # 550 + 50 = 600 ≤ 600 → autorisé (borne exacte)
+        ok2, _ = rm.can_open(risk_usd=50.0)
+        assert ok2
+
+    @given(
+        rdp=st.floats(min_value=-900.0, max_value=0.0),
+        n_active=st.integers(min_value=0, max_value=5),
+        risk_active=st.floats(min_value=50.0, max_value=200.0),
+        pending=st.lists(RISK, min_size=0, max_size=8),
+        new_risk=RISK,
+        iw=st.floats(min_value=0.0, max_value=1.0),
+    )
+    @settings(max_examples=200, deadline=None)
+    def test_worstcase_filled_intact_quel_que_soit_iw(
+        self, rdp, n_active, risk_active, pending, new_risk, iw
+    ):
+        """INVARIANT NON RÉGRESSÉ : quelle que soit imminent_weight, si can_open
+        autorise, le pire-cas FILLED (positions actives + nouveau → SL ; les pending
+        ne fillent PAS forcément) reste sous le DLL. La pondération ne touche que la
+        borne pending — jamais la sécurité filled-based des checks 5/6."""
+        rm = _build_rm(safety_mult=1.0, user_max_armed_risk_usd=0.0, imminent_weight=iw)
+        rm.realized_day_pnl = rdp
+        for i in range(n_active):
+            rm.active_positions[f"a_{i}"] = type("Order", (), {"risk_usd": risk_active})()
+        self._arm(rm, pending)
+        ok, _ = rm.can_open(risk_usd=new_risk)
+        if ok:
+            worst_case_filled = rdp - n_active * risk_active - new_risk
+            assert worst_case_filled >= -rm.daily_loss_limit - 1e-6, (
+                f"can_open True mais worst-case FILLED rdp={worst_case_filled} "
+                f"< -{rm.daily_loss_limit} (iw={iw}, n_active={n_active}, pending={pending})"
             )
 
 

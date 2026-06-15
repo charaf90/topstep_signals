@@ -191,14 +191,26 @@ MIN_BARS_US_SESSION = 8
 USER_DAILY_LOSS_MAX = 950  # $ perte journalière réalisée max — aligné Topstep DLL
 USER_MAX_TRADES_PER_DAY = 0  # désactivé — Topstep DLL $950 gère le cap réel
 USER_MAX_OPEN_POSITIONS = 0  # pas de limite (positions simultanées)
-# Cap dur sur le risque ARMÉ total = pending + positions actives (ajout 2026-06-10).
+# Cap dur sur le risque ARMÉ = filled + imminent_weight×pending (refonte 2026-06-15).
 # Borne le pire-cas "sweep de fills simultanés" (jour violent : les limites armées
 # par 4 stratégies × 2-3 tickers fillent ensemble puis SL en cascade) — scénario
 # invisible des checks slack, qui ne comptent que les positions actives depuis la
-# décision 2026-05-21. Avec $130-200/trade, $600 autorise 3-4 ordres armés
-# simultanés. 0 = désactivé. S'ajoute au garde-fou pire-cas DLL armé (toujours
-# actif, cf. core/risk_portfolio.can_open check 5-bis).
-USER_MAX_ARMED_RISK_USD = 600
+# décision 2026-05-21. Les pending ne sont PAS une exposition réelle (taux de fill
+# 30-50%) : ils sont désormais pondérés par PORTFOLIO_IMMINENT_WEIGHT dans le
+# check 5-bis (cf. core/risk_portfolio.can_open). Le cap est relevé 600 → 900 pour
+# accompagner cette dépréciation. Validé IS/OOS (brouillon/scripts/rm_validate.py :
+# pire jour INCHANGÉ -796, P(breach) ≤ baseline, +116 fills IS / +373 OOS).
+# 0 = désactivé. S'ajoute au garde-fou pire-cas DLL armé (toujours actif).
+USER_MAX_ARMED_RISK_USD = 900
+
+# Poids des ordres PENDING (armés non fillés) dans les checks de risque armé (5-bis).
+# 1.0 = ancien comportement (tout le pending compte, ≡ baseline pré-2026-06-15 avec
+# cap=600) ; 0.6 = déprécié (un pending n'est pas une exposition réelle, les limites
+# lointaines pèsent moins). Réversibilité du patch = (1.0 / 600) + restart, sans flag
+# booléen séparé. Validé IS/OOS (rm_validate.py) : tail inchangé -796, +fills,
+# P(breach) ≤ baseline. N'affecte QUE le check 5-bis ; les invariants worst-case
+# filled-based (checks 5/6) et le pending RÉEL exposé par status() restent inchangés.
+PORTFOLIO_IMMINENT_WEIGHT = 0.6
 
 # ==============================================================================
 # GARDE-FOU TOPSTEP (challenge 50K)
@@ -244,6 +256,7 @@ WF_FOLD_MONTHS = 2
 # ==============================================================================
 DAILY_STOP_AFTER_SL = False  # stopper après 1 SL (désactivé)
 CONSEC_LOSS_PAUSE_DAYS = 5  # pause 1 jour après N jours perdants consécutifs
+CONSEC_LOSS_COOLDOWN_DAYS = 1  # durée de la pause (jours de trading) puis reprise (streak reset)
 DAILY_LOCKIN_THRESHOLD = 0  # lock-in après gain cumulé (0 = désactivé)
 
 # ==============================================================================

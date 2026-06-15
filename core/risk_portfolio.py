@@ -47,7 +47,9 @@ from config import (
     CHALLENGE_BYPASS_USER_DAILY_LIMIT,
     CHALLENGE_CONSISTENCY_BEST_DAY_MAX_USD,
     CHALLENGE_RESET_DAY,
+    CONSEC_LOSS_COOLDOWN_DAYS,
     CONSEC_LOSS_PAUSE_DAYS,
+    PORTFOLIO_IMMINENT_WEIGHT,
     RISK_PER_TRADE_USD,
     TOPSTEP_DAILY_LOSS_MAX,
     TOPSTEP_PROFIT_TARGET,
@@ -84,13 +86,16 @@ class PortfolioRiskManager:
       3. Cap perte journalière réalisée (USER_DAILY_LOSS_MAX)
       4. Streak perdant (CONSEC_LOSS_PAUSE_DAYS)
       5. Slack Topstep daily + trailing DD (positions actives uniquement)
-      5-bis. Risque ARMÉ total (pending + actifs) : cap dur USER_MAX_ARMED_RISK_USD
-             + invariant pire-cas « tout l'armé → SL reste sous le DLL »
+      5-bis. Risque ARMÉ = filled + imminent_weight×pending : cap dur
+             USER_MAX_ARMED_RISK_USD + invariant pire-cas « tout l'armé → SL
+             reste sous le DLL ». imminent_weight<1 déprécie les pending (un
+             ordre limite n'est pas une exposition réelle).
 
     slack_daily = TOPSTEP_DAILY_LOSS_MAX + realized_day_pnl − active_risk
     slack_trail = cum_pnl − (peak_pnl − TOPSTEP_TRAILING_DD) − active_risk
     autorise si min(slack_daily, slack_trail) ≥ risk_usd × TOPSTEP_SAFETY_MULT
-    ET (pending+active+risk_usd) ≤ cap armé ET DLL + rdp − (pending+active) ≥ seuil
+    ET (active + iw×pending + risk_usd) ≤ cap armé
+    ET DLL + rdp − (active + iw×pending) ≥ seuil
     """
 
     # Capital tracking — démarrent à zéro au début du challenge
@@ -101,6 +106,9 @@ class PortfolioRiskManager:
 
     # Streak de jours perdants consécutifs
     consec_loss_days: int = 0
+
+    # Cooldown restant (jours) après un streak perdant — 0 = pas en pause.
+    pause_days_remaining: int = 0
 
     # Compteur de fills confirmés sur la journée courante
     daily_fills_count: int = 0
@@ -115,7 +123,12 @@ class PortfolioRiskManager:
     trailing_dd_limit: float = float(TOPSTEP_TRAILING_DD)
     profit_target: float = float(TOPSTEP_PROFIT_TARGET)
     safety_mult: float = float(TOPSTEP_SAFETY_MULT)
+    # Poids des pending (armés non fillés) dans le check de risque armé 5-bis.
+    # 1.0 = ancien comportement (≡ baseline avec cap 600) ; 0.6 = déprécié.
+    # N'affecte QUE le check 5-bis ; les invariants filled-based (5/6) sont intacts.
+    imminent_weight: float = float(PORTFOLIO_IMMINENT_WEIGHT)
     consec_loss_pause_days: int = int(CONSEC_LOSS_PAUSE_DAYS)
+    consec_loss_cooldown_days: int = int(CONSEC_LOSS_COOLDOWN_DAYS)
 
     # Contraintes UTILISATEUR (plus strictes que Topstep)
     user_daily_loss_max: float = float(USER_DAILY_LOSS_MAX)
@@ -172,6 +185,20 @@ class PortfolioRiskManager:
         elif self.realized_day_pnl > 0:
             self.consec_loss_days = 0
         # day_pnl == 0 (pas de fill) : streak inchangé
+
+        # Cooldown : après N jours perdants, pause de consec_loss_cooldown_days
+        # jour(s) PUIS reprise (streak remis à 0). Corrige le deadlock : sans ce
+        # décompte, un jour de pause (0 trade → rdp=0 → streak inchangé) ne se
+        # déverrouillait jamais (seul un jour gagnant resettait — impossible si bloqué).
+        if self.pause_days_remaining > 0:
+            self.pause_days_remaining -= 1
+            if self.pause_days_remaining == 0:
+                self.consec_loss_days = 0
+        elif (
+            self.consec_loss_pause_days > 0 and self.consec_loss_days >= self.consec_loss_pause_days
+        ):
+            self.pause_days_remaining = max(1, self.consec_loss_cooldown_days)
+
         self.realized_day_pnl = 0.0
         self.daily_fills_count = 0
         self.current_day = d
@@ -235,8 +262,8 @@ class PortfolioRiskManager:
           3. Cap perte journalière réalisée (USER_DAILY_LOSS_MAX)
           4. Streak perdant (CONSEC_LOSS_PAUSE_DAYS)
           5. Slack Topstep daily + trailing DD (positions actives)
-          5-bis. Risque ARMÉ total pending+actifs : cap dur configurable
-                 (USER_MAX_ARMED_RISK_USD) + invariant pire-cas DLL armé
+          5-bis. Risque ARMÉ = actifs + imminent_weight×pending : cap dur
+                 configurable (USER_MAX_ARMED_RISK_USD) + invariant pire-cas DLL armé
           6. Slack USER daily (optionnel, bypass challenge)
           7. Cohérence 50% Topstep — Combine uniquement (cf. tp_gain_usd)
         """
@@ -289,17 +316,20 @@ class PortfolioRiskManager:
                 f"reserved={reserved:.0f})"
             )
 
-        # 5-bis. Risque ARMÉ total (pending + actifs) — ajout 2026-06-10.
-        #    Les pending ne consomment pas le slack (décision 2026-05-21 : taux
-        #    de fill 30-50%, bloquait les 3èmes signaux). MAIS un jour violent
-        #    les fills sont corrélés : un sweep peut filler toutes les limites
-        #    armées puis les SL en cascade. Deux bornes complémentaires :
+        # 5-bis. Risque ARMÉ = filled + imminent_weight×pending — ajout 2026-06-10,
+        #    refonte 2026-06-15. Les pending ne consomment pas le slack (décision
+        #    2026-05-21 : taux de fill 30-50%, bloquait les 3èmes signaux). MAIS un
+        #    jour violent les fills sont corrélés : un sweep peut filler toutes les
+        #    limites armées puis les SL en cascade. Deux bornes complémentaires :
         #    a) cap dur configurable (USER_MAX_ARMED_RISK_USD, 0 = off)
-        #    b) invariant pire-cas TOUJOURS actif : même si tout l'armé prend
-        #       son SL, la perte du jour reste sous le DLL Topstep (avec la
-        #       marge safety_mult). Ne mord qu'à l'approche du DLL — préserve
-        #       la motivation de 2026-05-21 (3-4 signaux simultanés passent).
-        armed = reserved + self._pending_risk()
+        #    b) invariant pire-cas DLL armé : même si tout l'armé (pondéré) prend son
+        #       SL, la perte du jour reste sous le DLL Topstep (marge safety_mult).
+        #    Le pending est pondéré par imminent_weight (<1) car un ordre limite n'est
+        #    pas une exposition réelle : compter TOUT le pending bloquait à tort de
+        #    nouveaux signaux (plainte user 06-11/12/15). imminent_weight=1.0 + cap=600
+        #    reproduit EXACTEMENT le comportement pré-refonte (réversibilité). Les
+        #    invariants worst-case purement filled-based (checks 5 et 6) sont INCHANGÉS.
+        armed = reserved + self.imminent_weight * self._pending_risk()
         if self.user_max_armed_risk_usd > 0 and armed + risk_usd > self.user_max_armed_risk_usd:
             return False, (
                 f"armed_risk_cap_{armed + risk_usd:.0f}_above_{self.user_max_armed_risk_usd:.0f}"
@@ -442,6 +472,7 @@ class PortfolioRiskManager:
             "realized_day_pnl": self.realized_day_pnl,
             "current_day": str(self.current_day) if self.current_day else None,
             "consec_loss_days": self.consec_loss_days,
+            "pause_days_remaining": self.pause_days_remaining,
             "daily_fills_count": self.daily_fills_count,
             "daily_fills_remaining": max(0, self.user_max_trades_per_day - self.daily_fills_count),
             "user_daily_loss_remaining": max(0.0, self.user_daily_loss_max + self.realized_day_pnl),
