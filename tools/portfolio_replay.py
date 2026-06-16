@@ -45,11 +45,6 @@ import numpy as np
 import pandas as pd
 
 from config import (
-    BOS_FVG_LIVE_TICKERS,
-    BOS_FVG_RISK_USD,
-    FIB_FINE_LIVE_TICKERS,
-    FIB_V4_TICKERS,
-    OPR_V5_1_LIVE_TICKERS,
     TOPSTEP_DAILY_LOSS_MAX,
     TOPSTEP_TRAILING_DD,
 )
@@ -57,38 +52,18 @@ from core import robustness as rb
 from core.data import build_timeframes, load_csv
 from core.optimizer import OOS_START
 from core.registry import load_strategy
+from tools._live_portfolio import live_portfolio_specs
 
 np.random.seed(42)
 
 CSV_DIR = Path("data")
 OUT_DIR = Path("output/portfolio_replay")
 
-# Portefeuille LIVE — source de vérité : flags/univers/sizings de config.py.
-# `load_df` : True = charger le CSV m15 (stratégies M15) ; False = passer
-# df=None (la stratégie charge sa propre source — fib_fine resamplé M1,
-# bos_fvg via load_tf). `params` : overrides nécessaires à la fidélité live.
-LIVE_PORTFOLIO = {
-    "opr_v5_1": {
-        "tickers": list(OPR_V5_1_LIVE_TICKERS),
-        "load_df": True,
-        "params": None,
-    },
-    "fib_v4": {
-        "tickers": list(FIB_V4_TICKERS),
-        "load_df": True,
-        "params": None,
-    },
-    "fib_fine": {
-        "tickers": list(FIB_FINE_LIVE_TICKERS),
-        "load_df": False,
-        "params": None,  # défaut = FIB_FINE_RISK_PER_TRADE_USD ($130), fidèle live
-    },
-    "bos_fvg": {
-        "tickers": list(BOS_FVG_LIVE_TICKERS),
-        "load_df": False,
-        "params": {"risk_usd": float(BOS_FVG_RISK_USD)},  # live $150 ≠ défaut recherche $200
-    },
-}
+# Portefeuille LIVE — source de vérité UNIQUE : tools/_live_portfolio (flags config.py),
+# partagée avec tools/backtest_vs_live. ENABLED uniquement (bos-fvg inerte exclu ;
+# ib-retest-v3 désormais inclus). Le chargement du df se déduit du timeframe de la
+# stratégie (m15 → CSV passé ; m5 → df=None, la stratégie charge sa source).
+LIVE_PORTFOLIO = live_portfolio_specs()
 
 
 def collect_daily_pnl(start: str) -> tuple[pd.DataFrame, dict]:
@@ -106,7 +81,7 @@ def collect_daily_pnl(start: str) -> tuple[pd.DataFrame, dict]:
         tf_suffix = getattr(module, "CSV_TIMEFRAME", "m15")
         parts = []
         for ticker in spec["tickers"]:
-            if spec["load_df"]:
+            if tf_suffix == "m15":  # m5 (fib_fine/bos_fvg) → df=None, la stratégie charge sa source
                 csv_path = CSV_DIR / f"{ticker}_data_{tf_suffix}.csv"
                 if not csv_path.exists():
                     print(f"  [!] {csv_path} introuvable — skip {name}/{ticker}")

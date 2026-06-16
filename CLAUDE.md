@@ -172,6 +172,13 @@ python optimize.py --strategy <nom> --csv-dir ./data --search optuna --n-trials 
 # Risque portefeuille combiné (corrélations inter-stratégies, MC DD, P(target avant breach))
 python tools/portfolio_replay.py        # input du fit portefeuille @athena
 
+# Backtest vs Live — vérifier la fidélité d'un JOUR/PÉRIODE (les 5 strats live aux params prod,
+# barres fetchées du broker, réconciliées aux trades live : MATCH/DIVERGENCE/BACKTEST_ONLY/LIVE_ONLY)
+python tools/backtest_vs_live.py --date 2026-06-16        # 1 jour ; défaut = jour courant
+python tools/backtest_vs_live.py --start 2026-06-10 --end 2026-06-16   # période
+#   Sortie : output/backtest_vs_live/<date>/{comparison.csv, report.md}. Lecture seule (get_* only).
+#   Univers live = source unique tools/_live_portfolio.py (partagée avec portfolio_replay).
+
 # Production (live) — le PROCESS fait foi, pas la session tmux (verrou PID)
 python tools/account_status.py           # ÉTAT DU COMPTE = vérité broker (balance, P&L jour net, Δ vs local)
 bash scripts/restart_daemon.sh status    # health-check canonique (pid, log, risk)
