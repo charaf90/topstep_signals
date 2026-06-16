@@ -1927,6 +1927,32 @@ class SessionRunner:
         # Pour clôturer : sens inverse de l'entrée
         close_side = 1 if info["direction"] == "long" else 0  # Sell / Buy
 
+        # ── Garde anti-inversion (incident 2026-06-16) ────────────────────────
+        # Ne JAMAIS envoyer un market "close" si le broker ne confirme pas une
+        # position ouverte sur ce contrat. Sinon un "close" sur état périmé
+        # (fill/clôture manqués, WS muet) OUVRE une position inverse non protégée.
+        # On vérifie la vérité broker (REST) à l'instant de l'action irréversible.
+        if not self.dry_run:
+            try:
+                _positions = self.client.get_positions(self.account_id)
+            except Exception as exc:
+                _log.warning("[%s] Clôture market reportée : get_positions KO (%s)", tag, exc)
+                return  # transitoire → on retente au prochain sync (_exit_sent NON posé)
+            _pos = next((p for p in _positions if p.get("contractId") == cid), None)
+            _have = int(_pos.get("size", 0)) if _pos else 0
+            if _have < 1:
+                _log.warning(
+                    "[%s] Clôture market ANNULÉE — broker flat sur %s : état périmé, "
+                    "on n'inverse pas. Heal local.",
+                    tag,
+                    cid,
+                )
+                _evlog.warn("close_skipped_stale", f"{tag}: broker flat {cid}")
+                info["status"] = _ST_CLOSED
+                info["_exit_sent"] = True
+                return
+            n_ct = min(n_ct, _have)  # clamp anti-inversion partielle
+
         _log.info("[%s] Clôture forcée market (%s×%d)", tag, cid, n_ct)
         info["_exit_sent"] = True
         if self.dry_run:
