@@ -1989,7 +1989,10 @@ FIB_FINE_LEVEL_PER_TICKER = {"NQ1": 0.382, "MES1": 0.382, "YM1": 0.382, "MGC1": 
 
 # SL/TP en multiples d'ATR (du TF fin) — défaut hérité de fib-v4, raffiné PHASE 4.
 FIB_FINE_SL_ATR_MULT_PER_TICKER = {"NQ1": 1.50, "MES1": 0.75, "YM1": 1.00, "MGC1": 1.00}
-FIB_FINE_TP_ATR_MULT_PER_TICKER = {"NQ1": 1.50, "MES1": 1.50, "YM1": 2.00, "MGC1": 1.50}
+# NQ1 recalibré 1.50→1.20 (2026-06-19) : TP plus serré, validé hold-out terminal
+# (PF 2.67 / +$766 / n=21, N_tests=1) + multifold 5/5 folds positifs (vs 4/5 prod).
+# Gain = consistance (−DD) au prix de ~15 % de P&L. min_imp inopérant sur NQ1 (inchangé).
+FIB_FINE_TP_ATR_MULT_PER_TICKER = {"NQ1": 1.20, "MES1": 1.50, "YM1": 2.00, "MGC1": 1.50}
 
 # Taille minimale de l'impulse en ATR (filtre faux swings). Plus élevé en TF fin
 # pour exiger une impulse significative et limiter le bruit.
@@ -2058,7 +2061,9 @@ FIB_FINE_ROLL_GAP_PCT = 0.015
 # fib-fine-v2 avec un risk-per-trade RÉDUIT, calibré pour que le MC P95 DD reste
 # sous la limite. None = utilise le nominal global RISK_PER_TRADE_USD ($200).
 # Valeur calibrée en PHASE 5 (Monte-Carlo) ci-dessous.
-FIB_FINE_RISK_PER_TRADE_USD = 130  # calibré PHASE 5 : MC P95 DD < -$2000 Topstep
+FIB_FINE_RISK_PER_TRADE_USD = 240  # 2026-06-19 : MES1 coupé (driver DD) → NQ1 seul a la marge ;
+# re-sizé $130→$240 (NQ1 −$634 @130 → ~−$1170 @240 full-hist). VALIDÉ portfolio_replay : compte
+# (opr-v5.1 + fib-fine NQ1) MC DD P95 −$664 / pire −$1075 < $2000 ; corr opr↔fib NÉGATIVE (sous-additif).
 
 # ── Walk-forward (dates fixes projet) ──────────────────────────────────────────
 # NQ1/MES1 : M5 resamplé depuis M1 (fév 2025 → mars 2026) → IS + OOS propres.
@@ -2091,7 +2096,8 @@ FIB_FINE_ENABLED = True
 # Vague 1 = NQ1 + MES1 UNIQUEMENT (cœur 🟢, sizing $130). MGC1 (bonus 🟡 OOS-only),
 # YM1 (mirage look-ahead) et tout M1 EXCLUS. Ajout futur de MGC1 = éditer cette
 # liste (aucune refonte de code nécessaire — les params per-ticker existent déjà).
-FIB_FINE_LIVE_TICKERS = ["NQ1", "MES1"]
+FIB_FINE_LIVE_TICKERS = ["NQ1"]  # MES1 COUPÉ 2026-06-19 (décision user) — ticker faible (PF 1.16)
+# ET driver de DD (−$3,405, > limite Topstep) ; aucun param ne le sauve. Risque concentré sur NQ1.
 
 # Sizing DÉDIÉ fib-fine ($130). N'altère PAS RISK_PER_TRADE_USD global ($200).
 # Réutilise la valeur de recherche déjà calibrée PHASE 5 (MC p95 DD < $2000 Topstep).
