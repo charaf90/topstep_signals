@@ -624,7 +624,7 @@ IB_RETEST_RR = 1.5
 IB_RETEST_ORDER_TIMEOUT_BARS = 16  # annule le limit de retest non fillé (~4h M15)
 IB_RETEST_MAX_TRADES_PER_DAY = 1  # 1ère cassure franche du jour
 IB_RETEST_RISK_PER_TRADE_USD = None  # None → RISK_PER_TRADE_USD global ($200)
-IB_RETEST_ENABLED = True  # ACTIVÉ EN LIVE 2026-06-14 (MES1+NQ1) — promotion @forge + test simu OK + pré-promotion (corr~0, P(target)=100%)
+IB_RETEST_ENABLED = False  # COUPÉ 2026-06-19 (décision user) — re-validation M1 MARGINALE : OOS pool 1.65 mais IS breakeven, bootstrap 88.8% < Bonferroni 99.72%, DSR 19.5% (régime-dépendant). Réactivation = décision user après edge confirmé M1.
 
 # ==============================================================================
 # STRATÉGIE GOLDEN_POCKET (`gp-v1`) — Fib 0.618 sur la 1ère impulsion du jour
@@ -1055,7 +1055,7 @@ FIB_SESSION_PER_TICKER = {
 # mai 2026 (cf. output/rapport_fib-v4_optimize.md).
 # ──────────────────────────────────────────────────────────────────────────────
 FIB_V4_STRATEGY_VERSION = "fib-v4.1"  # v4.1 (2026-06-14) : filtre causal remplace wick look-ahead
-FIB_V4_ENABLED = True  # PROMU EN PRODUCTION 2026-05-19 — MES1+NQ1+MGC1
+FIB_V4_ENABLED = False  # COUPÉ 2026-06-19 (décision user) — edge RÉFUTÉ sur M1 honnête (OOS pool 0.85 / −$827 ; artefact same-bar M15). À REDÉVELOPPER from scratch (cf. BACKLOG fib-v4-rebuild).
 
 # ── v4.1 : filtre au fill — bascule causal vs wick look-ahead (réversible) ──
 # Le filtre wick-at-fill historique ("wick") lit la mèche COMPLÈTE de la bougie
