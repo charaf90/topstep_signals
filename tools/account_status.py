@@ -114,7 +114,8 @@ def main():
                 "(profitAndLoss sans fees)."
             )
         # Trailing : le floor dépend du PEAK — approximation depuis le peak local.
-        floor = max(peak_local, cum_broker) - TOPSTEP_TRAILING_DD
+        # Plafond Topstep : le floor se FIGE à la balance de départ (P&L 0) → min(…, 0).
+        floor = min(max(peak_local, cum_broker) - TOPSTEP_TRAILING_DD, 0.0)
         print(
             f"\n  Trailing (approx, peak local ${peak_local:+,.0f}) : "
             f"floor ${floor:+,.0f} → slack ${cum_broker - floor:,.0f} / ${TOPSTEP_TRAILING_DD}"

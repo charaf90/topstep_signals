@@ -34,7 +34,9 @@ def trade_allowed(
     avant la limite daily ET avant la trailing DD, avec une marge de sécurité.
     """
     remaining_daily = TOPSTEP_DAILY_LOSS_MAX + day_pnl
-    trailing_floor = peak_pnl - TOPSTEP_TRAILING_DD
+    # Plafond Topstep : le trailing DD se FIGE à la balance de départ (P&L 0) une fois
+    # le peak au-delà de +TRAILING_DD → le floor ne dépasse jamais $0 (≈ $50k).
+    trailing_floor = min(peak_pnl - TOPSTEP_TRAILING_DD, 0.0)
     remaining_trail = cum_pnl - trailing_floor
     slack = min(remaining_daily, remaining_trail)
     threshold = risk_per_trade * TOPSTEP_SAFETY_MULT

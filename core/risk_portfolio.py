@@ -92,7 +92,7 @@ class PortfolioRiskManager:
              ordre limite n'est pas une exposition réelle).
 
     slack_daily = TOPSTEP_DAILY_LOSS_MAX + realized_day_pnl − active_risk
-    slack_trail = cum_pnl − (peak_pnl − TOPSTEP_TRAILING_DD) − active_risk
+    slack_trail = cum_pnl − min(peak_pnl − TOPSTEP_TRAILING_DD, 0) − active_risk  # floor plafonné $50k (lock Topstep)
     autorise si min(slack_daily, slack_trail) ≥ risk_usd × TOPSTEP_SAFETY_MULT
     ET (active + iw×pending + risk_usd) ≤ cap armé
     ET DLL + rdp − (active + iw×pending) ≥ seuil
@@ -303,7 +303,9 @@ class PortfolioRiskManager:
         #    Pire cas : tous les ordres en attente ET le nouvel ordre → SL
         reserved = self._total_reserved_risk()
         slack_daily = self.daily_loss_limit + self.realized_day_pnl - reserved
-        trail_floor = self.peak_pnl - self.trailing_dd_limit
+        trail_floor = min(
+            self.peak_pnl - self.trailing_dd_limit, 0.0
+        )  # plafond Topstep: floor figé à la balance de départ (P&L 0)
         slack_trail = self.cum_pnl - trail_floor - reserved
 
         slack = min(slack_daily, slack_trail)
@@ -427,7 +429,9 @@ class PortfolioRiskManager:
         breaches = []
         if self.realized_day_pnl <= -self.daily_loss_limit:
             breaches.append(f"daily_loss_breached_{self.realized_day_pnl:.0f}")
-        trail_floor = self.peak_pnl - self.trailing_dd_limit
+        trail_floor = min(
+            self.peak_pnl - self.trailing_dd_limit, 0.0
+        )  # plafond Topstep: floor figé à la balance de départ (P&L 0)
         if self.cum_pnl <= trail_floor:
             breaches.append(f"trailing_dd_breached_dd={self.cum_pnl - trail_floor:.0f}")
         if breaches:
@@ -458,7 +462,9 @@ class PortfolioRiskManager:
     def status(self) -> dict:
         """Snapshot lisible pour monitoring / logging."""
         reserved = self._total_reserved_risk()
-        trail_floor = self.peak_pnl - self.trailing_dd_limit
+        trail_floor = min(
+            self.peak_pnl - self.trailing_dd_limit, 0.0
+        )  # plafond Topstep: floor figé à la balance de départ (P&L 0)
         # Marge restante avant blocage règle 50% (en Combine uniquement)
         in_combine = self.cum_pnl < self.profit_target
         consistency_cap_remaining = (
