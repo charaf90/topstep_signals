@@ -63,6 +63,7 @@
 | bos-fvg (inerte) | ⚠️ **MARGINAL M1** | OOS M1 **NQ1 1.16 / MES1 1.13** (vs prod M15 ~2.5 = artefact fill-bias confirmé) → **reste INERTE**, pas un candidat réactivation (PF < seuil VEILLE 1.2 sur NQ1). |
 | zones-v1 | ⏳ à re-tester M1 | 🟡 M15 ; OOS frais M1 (M5/M1 params gelés étaient 🔴). |
 | pdh-pdl-mes1-v1 | ⏳ à re-tester M1 | 🟡 M15. |
+| **opr-rebuild (from scratch)** | 🔴 **PAS D'EDGE** | Reconstruction OPR de zéro (M1, Optuna continu, YM1+NQ1+MES1, 2026-06-19). Breakout nu = perdant (PF 0.74-0.93) ; design-tuning = breakeven (OOS 1.00) ; filtre range OR/ATR LIBRE = dégénère (n→1) ; filtre CONTRAINT = IS↑ pool 1.35 mais **OOS 0.55 (−$5 661)**. Le breakout OPR n'a pas d'edge standalone ; tout filtre en optim libre sur-fitte IS→OOS. **Améliorer OPR = @quant (feature causale + perm-test), pas Optuna libre.** Seul opr-v5.1 (YM1, F2 pré-enregistré) tient. |
 
 ## Leçons transversales (mécaniques — consulter avant tout nouveau test)
 

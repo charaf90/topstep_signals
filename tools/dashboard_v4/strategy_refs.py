@@ -49,49 +49,25 @@ STRATEGY_REFS: dict[str, StrategyRef] = {
         source="output/robustness_opr-v5.1.json (YM1) · fidélité scripts/live_eq_v5_1.py",
         date_ref="2026-05-18",
     ),
-    # FIB v4.1 (2026-06-14) : filtre causal remplace le wick look-ahead. PF causal
-    # HONNÊTE (≠ PF naïfs du wick) : OOS sél 2.22 / hold-out 3.19 → ref prudente 2.2.
-    "FIB": StrategyRef(
-        name="FIB",
-        version="fib-v4.1",
-        pf_oos=2.2,
-        wr_oos=None,
-        expectancy_r=0.30,
-        n_oos=60,
-        rr_typical=2.0,
-        risk_usd=200,
-        source="output/fib-v4-causal/ (causal, hold-out 3.19 / OOS 2.22)",
-        date_ref="2026-06-14",
-    ),
-    # FIB_FINE v2 : PF OOS 1.63, BS 99.6 %, Bonferroni OK (REGISTRE l.33).
-    # PF 1.63 & rr≈2 → wr ≈ 0.45, expectancy_r ≈ 0.13. n_oos # À AFFINER.
+    # FIB v4.1 — RÉF RETIRÉE 2026-06-19 : edge RÉFUTÉ sur M1 honnête (OOS pool 0.85),
+    # FIB_V4_ENABLED=False (coupé). Le dash affiche fib-v4 OFF sans carte verdict-sizing.
+    # FIB_FINE v2 — NQ1 SEUL (MES1 coupé 2026-06-19), tp_mult 1.2, risk $240.
+    # Réf PRUDENTE = hold-out terminal 2026-04-15→06-18 : PF 2.67, WR 0.76,
+    # +$766/21/$240 ≈ 0.15 (OOS sél PF 3.98 ; multifold 5/5 folds +). rr_typical 1.2 (TP serré).
     "FIB_FINE": StrategyRef(
         name="FIB_FINE",
         version="fib-fine-v2",
-        pf_oos=1.63,
-        wr_oos=0.45,
-        expectancy_r=0.13,
-        n_oos=80,
-        rr_typical=2.0,
-        risk_usd=130,
-        source="REGISTRE_HYPOTHESES.md fib-fine-v2",
-        date_ref="2026-06-02",
+        pf_oos=2.0,
+        wr_oos=0.72,
+        expectancy_r=0.15,
+        n_oos=44,
+        rr_typical=1.2,
+        risk_usd=240,
+        source="REGISTRE fib-fine-v2 NQ1 re-optim (hold-out terminal, prudent)",
+        date_ref="2026-06-19",
     ),
-    # IB_RETEST v3 (M15, IB break franche 0.5×ATR + retest LIMITE) : OOS sél 2.69,
-    # hold-out terminal 1.95, multifold 10/10, DSR 95.1 %. Réf PRUDENTE = hold-out
-    # (le plus pur) : PF 1.95, wr 0.60, expectancy_r = +$3164/43/$200 ≈ 0.37. Audité 🟢.
-    "IB_RETEST": StrategyRef(
-        name="IB_RETEST",
-        version="ib-retest-v3",
-        pf_oos=1.95,
-        wr_oos=0.60,
-        expectancy_r=0.37,
-        n_oos=43,
-        rr_typical=1.5,
-        risk_usd=200,
-        source="REGISTRE_HYPOTHESES.md ib-retest-v3 (hold-out terminal, prudent)",
-        date_ref="2026-06-14",
-    ),
+    # IB_RETEST v3 — RÉF RETIRÉE 2026-06-19 : M1 MARGINAL (IS breakeven, DSR 19.5 %),
+    # IB_RETEST_ENABLED=False (coupé). Le dash affiche ib-retest OFF sans carte verdict-sizing.
     # BOS_FVG — RÉF RETIRÉE 2026-06-13 : le PF de promotion (2.26-2.93) est
     # ARTEFACTUEL (biais d'ordre fill/invalidation ; honnête OOS PF ~1.2, NQ1 sans
     # edge — cf. REGISTRE bos-fvg-v2 révision + BACKLOG P1 bos-fvg-fill-bias).
