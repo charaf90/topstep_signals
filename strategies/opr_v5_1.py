@@ -77,6 +77,13 @@ TICKERS = list(OPR_V5_1_TICKERS)  # ["MES1", "NQ1", "YM1"]
 CSV_SUFFIX = "_opr_v5_1"
 CSV_TIMEFRAME = "m15"
 
+# ── Contrat moteur M1 (core/bt_engine) ───────────────────────────────────────
+SIGNAL_TF = "15min"  # OPR natif M15 (reconstruit depuis le M1)
+INTRADAY_DAYCLOSE = True  # OPR ferme en fin de séance (jamais overnight)
+SESSION_END_MIN = 16 * 60 + 30  # 16:30 NY (clôture US OPR, cf. plot_day us_end)
+RUN_MIN_WINDOW = (9 * 60, 16 * 60 + 31)  # session RTH NY (OPR 9:30 + entrées + clôture)
+_TF_DELTA_OPR = pd.Timedelta(minutes=15)
+
 # ── Grille d'optimisation (walk-forward via core/optimizer.py) ───────────────
 # Grille RESSERRÉE par décision méthodologique :
 #   • f2_min_atr (NOUVEAU) est la dimension centrale à valider par walk-forward.
@@ -425,6 +432,49 @@ def run_backtest(
             _opr.OPR_TP_ATR_MULT[ticker] = tp_orig
 
     return pd.DataFrame(trades_out)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Contrat moteur M1 — emit_signals (core/bt_engine)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def emit_signals(sig_df: pd.DataFrame, ticker: str, params: dict | None = None) -> list[dict]:
+    """Émet les ordres OPR v5.1 pour le moteur M1 (core/bt_engine).
+
+    Réutilise la logique VALIDÉE `run_backtest` (M15 : trigger OPR + filtres causaux F1/F2/F3
+    + circuit breakers, ordre LIMIT @ opr_high/opr_low) → on extrait les ordres RÉELLEMENT
+    remplis (post-filtres + breakers) et core/bt_engine résout le fill + SL/TP à la minute.
+    Note : OPR retourne du P&L brut ; le moteur M1 recalcule le NET (friction) → plus honnête.
+    """
+    trades = run_backtest(sig_df, ticker, params=params, topstep_guard=False)
+    if trades is None or len(trades) == 0:
+        return []
+    arms: list[dict] = []
+    for t in trades.to_dict("records"):
+        if t.get("result") == "NOT_FILLED" or not t.get("fill_time"):
+            continue
+        fill_ts = pd.Timestamp(t["fill_time"])
+        if fill_ts.tzinfo is not None:  # OPR peut renvoyer un ts NY tz-aware
+            fill_ts = fill_ts.tz_convert("UTC").tz_localize(None)
+        entry, sl, tp = float(t["entry"]), float(t["sl"]), float(t["tp"])
+        arms.append(
+            {
+                "dir": t.get("dir") or t.get("direction"),
+                "entry": entry,
+                "sl": sl,
+                "tp": tp,
+                "sl_dist": float(t.get("sl_dist") or abs(entry - sl)),
+                "tp_dist": float(t.get("tp_dist") or abs(entry - tp)),
+                "rr": float(t.get("rr") or 0.0),
+                "n_ct": int(t["n_ct"]),
+                "regime": t.get("regime") or "OPR_V5_1",
+                "arm_ts": fill_ts,
+                "place_ts": fill_ts - _TF_DELTA_OPR,  # ordre vif dès la barre M15 AVANT le fill
+                "timeout_ts": fill_ts + _TF_DELTA_OPR,  # doit filler dans la barre de fill
+            }
+        )
+    return arms
 
 
 # ═════════════════════════════════════════════════════════════════════════════

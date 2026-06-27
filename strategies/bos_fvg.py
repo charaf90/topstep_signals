@@ -56,6 +56,14 @@ CSV_SUFFIX = "_bos_fvg"
 CSV_TIMEFRAME = "m5"
 _NY = ZoneInfo(BOS_FVG_TIMEZONE)
 
+# ── Contrat moteur M1 (core/bt_engine) ────────────────────────────────────────
+SIGNAL_TF = "5min"  # BOS+FVG natif M5 (reconstruit depuis le M1)
+SESSION_END_MIN = (
+    BOS_FVG_SESSION_END[0] * 60 + BOS_FVG_SESSION_END[1]
+)  # 16:00 NY (close-all cloche)
+RUN_MIN_WINDOW = (BOS_FVG_SESSION_OPEN[0] * 60 + BOS_FVG_SESSION_OPEN[1], SESSION_END_MIN + 1)
+_TF_DELTA_BOS = pd.Timedelta(minutes=5)
+
 PARAM_GRID = {
     "rr": [1.5, 2.0, 3.0],
     "sl_buf": [0.0, 0.10, 0.25],
@@ -330,6 +338,42 @@ def run_backtest(df=None, ticker="NQ1", tf=None, params=None, topstep_guard=True
         }
 
     return pd.DataFrame(trades) if trades else pd.DataFrame(columns=_TRADE_COLS)
+
+
+def emit_signals(sig_df: pd.DataFrame, ticker: str, params: dict | None = None) -> list[dict]:
+    """Émet les ordres bos-fvg pour le moteur M1 (core/bt_engine).
+
+    Réutilise la logique VALIDÉE `run_backtest` (M5 : BOS + FVG + invalidation close-sous-FVG +
+    timeout, fill HONNÊTE intra-bar) → on extrait les ordres RÉELLEMENT remplis, puis core/bt_engine
+    résout le fill + SL/TP à la minute (corrige le same-bar — l'artefact de fill-bias historique).
+    Note : `run_backtest` recharge son M5 depuis le M1 DATA_BACKTEST (même source que le moteur).
+    """
+    trades = run_backtest(df=sig_df, ticker=ticker, params=params, topstep_guard=False)
+    if trades is None or len(trades) == 0:
+        return []
+    arms: list[dict] = []
+    for t in trades.to_dict("records"):
+        if t.get("result") == "NOT_FILLED" or not t.get("fill_time"):
+            continue
+        fill_ts = pd.Timestamp(t["fill_time"])
+        entry, sl, tp = float(t["entry"]), float(t["sl"]), float(t["tp"])
+        arms.append(
+            {
+                "dir": t["dir"],
+                "entry": entry,
+                "sl": sl,
+                "tp": tp,
+                "sl_dist": float(t.get("sl_dist") or abs(entry - sl)),
+                "tp_dist": float(t.get("tp_dist") or abs(entry - tp)),
+                "rr": float(t.get("rr") or 0.0),
+                "n_ct": int(t["n_ct"]),
+                "regime": t.get("regime", "neutral"),
+                "arm_ts": fill_ts,
+                "place_ts": fill_ts - _TF_DELTA_BOS,
+                "timeout_ts": fill_ts + _TF_DELTA_BOS,
+            }
+        )
+    return arms
 
 
 def _find_fvg(high, low, origin, j, direction, eq):

@@ -26,7 +26,7 @@ try:
     from core.data import fetch_live
 except ImportError:
     fetch_live = None
-from core import backtester
+from core import backtester, bt_engine
 from core import metrics as m
 from core.registry import discover_strategies, load_strategy
 
@@ -93,6 +93,7 @@ def main():
 
     for strat_name in strategy_names:
         module = load_strategy(strat_name)
+        is_m1 = bt_engine.supports(module)
         results = []
 
         for ticker in tickers:
@@ -100,6 +101,7 @@ def main():
                 continue
 
             # Chargement des données
+            df_15m, tf = None, None
             if args.live:
                 if fetch_live is None:
                     print(f"  [!] fetch_live indisponible — skip {ticker}")
@@ -108,6 +110,12 @@ def main():
                 if df_15m is None or len(df_15m) == 0:
                     print(f"  [!] {ticker}: données live indisponibles")
                     continue
+                tf = build_timeframes(df_15m)
+            elif is_m1:
+                # Stratégie portée M1 : le moteur charge le M1 (DATA_BACKTEST) lui-même.
+                if not Path(f"DATA_BACKTEST/{ticker}_data_m1.csv").exists():
+                    print(f"  [!] pas de M1 pour {ticker} — skip (indices uniquement)")
+                    continue
             else:
                 tf_suffix = getattr(module, "CSV_TIMEFRAME", "m15")
                 csv_path = Path(args.csv_dir) / f"{ticker}_data_{tf_suffix}.csv"
@@ -115,8 +123,7 @@ def main():
                     print(f"  [!] Fichier introuvable: {csv_path}")
                     continue
                 df_15m = load_csv(str(csv_path))
-
-            tf = build_timeframes(df_15m)
+                tf = build_timeframes(df_15m)
 
             res = backtester.run_for_ticker(
                 module,

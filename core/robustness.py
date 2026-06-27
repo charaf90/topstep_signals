@@ -546,6 +546,119 @@ def worst_case_clustering(trades: pd.DataFrame, n_worst: int = 20) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8b. UTILITÉ TOPSTEP — P(target avant breach), simulation forward path-dependent
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Constantes challenge Topstep 50K (stables) — inlinées pour garder ce module
+# sans dépendance config (cf. docstring). Le verdict PF reste le gate ; ces métriques
+# servent au CLASSEMENT (le PF est aveugle à la fréquence et à la magnitude).
+_TOPSTEP_DAILY_LOSS_MAX = 1000.0
+_TOPSTEP_TRAILING_DD = 2000.0
+_TOPSTEP_PROFIT_TARGET = 3000.0
+
+
+def topstep_forward_mc(
+    daily_pnl: np.ndarray,
+    dd_remaining: float = _TOPSTEP_TRAILING_DD,
+    target_remaining: float = _TOPSTEP_PROFIT_TARGET,
+    daily_loss_max: float = _TOPSTEP_DAILY_LOSS_MAX,
+    trailing_dd: float = _TOPSTEP_TRAILING_DD,
+    n_sims: int = 5000,
+    max_days: int = 250,
+    seed: int = 42,
+) -> dict:
+    """P(atteindre le target AVANT de breacher) — simulation forward path-dependent.
+
+    Source de vérité UNIQUE : tools/portfolio_replay.challenge_outcome_mc délègue ici.
+    Contrairement au `bootstrap_pass_rate` du verdict (permutation des jours OBSERVÉS
+    une fois, SANS remise → plafonné au P&L total OOS, biaisé par la longueur OOS), on
+    tire les jours AVEC REMISE sur max_days et on s'arrête au 1er des 3 événements
+    (target / breach trailing / breach daily). Hypothèse documentée : jours i.i.d.
+    (pas d'autocorrélation — cf. streaks). État initial : cum=0, floor = −dd_remaining.
+    """
+    daily_pnl = np.asarray(daily_pnl, dtype=float)
+    if daily_pnl.size == 0:
+        return {
+            "n_sims": 0,
+            "p_target": 0.0,
+            "p_breach_trailing": 0.0,
+            "p_breach_daily": 0.0,
+            "p_timeout": 0.0,
+            "days_to_target_median": None,
+            "days_to_target_p90": None,
+        }
+    rng = np.random.default_rng(seed)
+    outcomes = {"target": 0, "breach_trail": 0, "breach_daily": 0, "timeout": 0}
+    days_to_target: list[int] = []
+    for _ in range(n_sims):
+        cum = 0.0
+        peak = trailing_dd - dd_remaining  # floor initial = peak - trailing = -dd_remaining
+        result = "timeout"
+        draw = rng.choice(daily_pnl, size=max_days, replace=True)
+        for i, day in enumerate(draw):
+            if day <= -daily_loss_max:
+                result = "breach_daily"
+                break
+            cum += day
+            peak = max(peak, cum)
+            if cum <= peak - trailing_dd:
+                result = "breach_trail"
+                break
+            if cum >= target_remaining:
+                result = "target"
+                days_to_target.append(i + 1)
+                break
+        outcomes[result] += 1
+    return {
+        "n_sims": int(n_sims),
+        "max_days": int(max_days),
+        "target_remaining": float(target_remaining),
+        "dd_remaining": float(dd_remaining),
+        "p_target": round(outcomes["target"] / n_sims, 4),
+        "p_breach_trailing": round(outcomes["breach_trail"] / n_sims, 4),
+        "p_breach_daily": round(outcomes["breach_daily"] / n_sims, 4),
+        "p_timeout": round(outcomes["timeout"] / n_sims, 4),
+        "days_to_target_median": float(np.median(days_to_target)) if days_to_target else None,
+        "days_to_target_p90": float(np.percentile(days_to_target, 90)) if days_to_target else None,
+    }
+
+
+def topstep_utility(
+    trades: pd.DataFrame,
+    dd_remaining: float = _TOPSTEP_TRAILING_DD,
+    target_remaining: float = _TOPSTEP_PROFIT_TARGET,
+    seed: int = 42,
+) -> dict:
+    """Métrique de CLASSEMENT Topstep (≠ gate PF) : P(target avant breach) forward +
+    fréquence + expectancy/jour. Le PF est aveugle à la fréquence et à la magnitude ;
+    cette métrique mesure l'objectif réel du challenge (atteindre +$3000 avant breach).
+    Informatif — N'ALTÈRE PAS le verdict 🟢/🟡/🔴.
+    """
+    if trades is None or len(trades) == 0 or "pnl" not in trades.columns:
+        return {"error": "no_trades"}
+    f = trades[trades["result"] != "NOT_FILLED"] if "result" in trades.columns else trades
+    if len(f) == 0 or "date" not in f.columns:
+        return {"error": "no_filled_trades"}
+    daily = f.groupby("date")["pnl"].sum().sort_index()
+    n_active = int(len(daily))
+    n = int(len(f))
+    pnl = float(f["pnl"].sum())
+    dates = pd.to_datetime(f["date"])
+    span = max(int((dates.max() - dates.min()).days), 1)
+    fwd = topstep_forward_mc(
+        daily.to_numpy(), dd_remaining=dd_remaining, target_remaining=target_remaining, seed=seed
+    )
+    return {
+        **fwd,
+        "n_active_days": n_active,
+        "trades_per_active_day": round(n / n_active, 2),
+        "trades_per_year": round(n / span * 365.0, 1),
+        "expectancy_per_trade": round(pnl / n, 2),
+        "expectancy_per_active_day": round(pnl / n_active, 2),
+    }
+
+
 def run_full_robustness(
     trades: pd.DataFrame,
     n_strategies_tested: int = 1,
@@ -579,6 +692,7 @@ def run_full_robustness(
         "dsr": deflated_sharpe_ratio(pnls, n_tests=n_strategies_tested),
         "regime_stress": regime_stress_test(trades).to_dict("records"),
         "worst_clustering": worst_case_clustering(trades, n_worst=20),
+        "topstep_utility": topstep_utility(trades, dd_remaining=topstep_dd_remaining, seed=seed),
     }
 
 
@@ -661,6 +775,37 @@ def format_summary_markdown(results: dict) -> str:
         lines.append(
             f"| P(DD > limite Topstep ${mc['topstep_dd_remaining']:.0f}) | "
             f"{mc['dd_topstep_breach_pct']:.1f} % |"
+        )
+        lines.append("")
+
+    # Utilité Topstep — P(target avant breach) forward (CLASSEMENT, ≠ gate PF)
+    tu = results.get("topstep_utility", {})
+    if tu and "error" not in tu:
+        dtt = tu.get("days_to_target_median")
+        lines.append(
+            "**Utilité Topstep** (forward MC — métrique de CLASSEMENT ; le PF reste le gate)"
+        )
+        lines.append("")
+        lines.append("| Métrique | Valeur |")
+        lines.append("|---|---|")
+        lines.append(f"| P(target avant breach) | **{tu['p_target'] * 100:.1f} %** |")
+        lines.append(
+            f"| P(breach trailing / daily) | {tu['p_breach_trailing'] * 100:.1f} % "
+            f"/ {tu['p_breach_daily'] * 100:.1f} % |"
+        )
+        lines.append(f"| P(timeout {tu['max_days']}j) | {tu['p_timeout'] * 100:.1f} % |")
+        lines.append(
+            f"| Jours→target (médiane) | {dtt:.0f} |"
+            if dtt is not None
+            else "| Jours→target (médiane) | — (target non atteint) |"
+        )
+        lines.append(
+            f"| Fréquence | {tu['trades_per_active_day']}/jour actif · "
+            f"{tu['trades_per_year']}/an |"
+        )
+        lines.append(
+            f"| Expectancy | ${tu['expectancy_per_trade']:+,.0f}/trade · "
+            f"${tu['expectancy_per_active_day']:+,.0f}/jour actif |"
         )
         lines.append("")
 

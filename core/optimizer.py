@@ -31,6 +31,7 @@ from config import (
     WF_IS_START,
     WF_OOS_START,
 )
+from core import bt_engine
 from core import metrics as m
 from core import robustness as rb
 
@@ -69,7 +70,7 @@ def _evaluate_combo(
     params = dict(zip(keys, combo))
     rows = []
     for ticker, (df_15m, tf) in dfs.items():
-        df_all = strategy.run_backtest(df_15m, ticker, tf=tf, params=params, topstep_guard=False)
+        df_all = bt_engine.run_trades(strategy, ticker, df_15m=df_15m, tf=tf, params=params)
         if len(df_all) == 0 or "date" not in df_all.columns:
             continue
         dates = df_all["date"].astype(str)
@@ -288,9 +289,7 @@ def optimize(
         # Recalcul OOS propre avec params retenus + bootstrap
         oos_trades_list = []
         for t, (df_15m, tf) in dfs.items():
-            df_all = strategy.run_backtest(
-                df_15m, t, tf=tf, params=best["params"], topstep_guard=False
-            )
+            df_all = bt_engine.run_trades(strategy, t, df_15m=df_15m, tf=tf, params=best["params"])
             if len(df_all) > 0 and "date" in df_all.columns:
                 dates = df_all["date"].astype(str)
                 mask = dates >= oos_start
@@ -386,9 +385,7 @@ def _run_and_dump_robustness(
         if ticker not in data:
             continue
         df_15m, tf = data[ticker]
-        df_all = strategy.run_backtest(
-            df_15m, ticker, tf=tf, params=res["params"], topstep_guard=False
-        )
+        df_all = bt_engine.run_trades(strategy, ticker, df_15m=df_15m, tf=tf, params=res["params"])
         if len(df_all) == 0 or "date" not in df_all.columns:
             continue
         dates = df_all["date"].astype(str)
@@ -586,9 +583,7 @@ def _evaluate_holdout(strategy, data: dict, best_per_ticker: dict, holdout_start
         if ticker not in data:
             continue
         df_15m, tf = data[ticker]
-        df_all = strategy.run_backtest(
-            df_15m, ticker, tf=tf, params=res["params"], topstep_guard=False
-        )
+        df_all = bt_engine.run_trades(strategy, ticker, df_15m=df_15m, tf=tf, params=res["params"])
         if len(df_all) == 0 or "date" not in df_all.columns:
             continue
         df_ho = df_all[df_all["date"].astype(str) >= holdout_start]

@@ -1,10 +1,24 @@
 # CLAUDE.md — Guide de session pour topstep_signals
 
+## 🎯 Posture — collègue expert, pas exécutant
+
+Tu es un **collègue quant senior** (trading + ingénierie), copropriétaire du résultat — pas un
+exécutant passif. **But unique : faire réussir le challenge Topstep** (puis le compte financé) =
+maximiser **P(target avant breach)**, pas le PF brut.
+
+- **Devoir de challenger** : si une méthode, un verdict, un param prod ou une demande sent l'overfit,
+  le leak, le biais de sélection-OOS ou un sizing > DLL — **dis-le et propose mieux**, quitte à
+  remettre en cause l'existant (y compris une décision live). Argumente, ne flatte pas.
+- **Rigueur non négociable** : gates 🟢, Bonferroni, live-equivalence restent BLOCANTS. La sobriété
+  allège la **cérémonie**, jamais la **preuve**. Dans le doute → rétrograder, pas forcer le vert.
+- **Sources de vérité** : état live = `config.py` (+ broker) ; *pourquoi* = `REGISTRE_HYPOTHESES.md` ;
+  pipeline = `.claude/skills/new-strategy/SKILL.md`. Ne re-dérive pas ce qui y est déjà écrit.
+
 ## ⚡ Démarrage de session — à exécuter d'office
 
 ```bash
 tmux ls 2>/dev/null && cat state/live_state.json | python -m json.tool 2>/dev/null  # daemon live + RM
-grep -E "(OPR|FIB|BOS)_.*VERSION|_ENABLED" config.py                                 # versions + flags prod
+grep -E "_ENABLED|_STRATEGY_VERSION|_LIVE_TICKERS" config.py                          # VÉRITÉ portefeuille live (flags/versions/tickers)
 tail -n 10 logs/trading_events.log 2>/dev/null                                       # derniers événements
 ls data/                                                                             # données dispo
 ```
@@ -16,17 +30,13 @@ dernier événement notable. **Puis demande à l'utilisateur ce qu'il veut faire
 
 ## 🧹 État de base & dossier `brouillon/` (règle structurante)
 
-Le projet est maintenu à un **état de base** propre = live + outillage R&D + docs minimales.
-**Tout travail d'essai DOIT être créé dans `brouillon/`** (gitignoré, jetable). On ne crée
-**jamais** de fichier d'essai ailleurs (ni dans `strategies/`, ni `scripts/`, ni à la racine).
-
-- **Stratégie d'essai** → `brouillon/strategies/<nom>.py` (découverte par `backtest.py --strategy <nom>`
-  et `optimize.py` ; les wrappers live de `strategies/` gardent la priorité en cas de collision de nom).
-- **Script / analyse d'essai** → `brouillon/scripts/`. **Notes / hypothèses** → `brouillon/notes/`.
-- **Vider le brouillon** (sur demande de l'utilisateur) : `bash scripts/clear_brouillon.sh`
-  (`--dry-run` pour prévisualiser). Purge `brouillon/` + `output/` + mémoire persistante → retour
-  à l'état de base. Pure opération filesystem, **aucune commande git**. **Ne touche jamais**
-  `strategies/`, `core/`, `broker/`, `config.py`, `state/`, `logs/`, `data/`, `.env`.
+État de base propre = live + outillage R&D + docs minimales. **Tout essai va dans `brouillon/`**
+(gitignoré, jetable) — **jamais** ailleurs (ni `strategies/`, ni `scripts/`, ni racine) :
+`brouillon/strategies/<nom>.py` (auto-découvert par `backtest.py`/`optimize.py` ; les wrappers live de
+`strategies/` priment en cas de collision de nom), `brouillon/scripts/`, `brouillon/notes/`.
+**Vider** (sur demande user) : `bash scripts/clear_brouillon.sh` (`--dry-run` pour prévisualiser) — purge
+`brouillon/`+`output/`+mémoire, pure opération filesystem (aucun git), ne touche jamais `strategies/`/`core/`/
+`broker/`/`config.py`/`state/`/`logs/`/`data/`/`.env`.
 - `brouillon/` est gitignoré (seul le scaffold est tracké) → les essais ne polluent jamais
   l'historique git. La capitalisation (REGISTRE/mémoire) n'est durable que si **commitée**.
 
@@ -41,14 +51,12 @@ pour la DEEP LANE et les rôles dédiés (live, promotion). Voir [CLAUDE_TEAM.md
 > **Objectif système** : maximiser le nombre de stratégies rentables, robustes et non-corrélées
 > trouvées **par token dépensé**. Throughput ↑ · hit-rate ↑ · rigueur de validation INCHANGÉE.
 
-### Les 3 piliers
+### Les 3 piliers (détail : CLAUDE_TEAM.md)
 
-1. **SOBRIÉTÉ** — pipeline gated, dev inline, **zéro recalcul redondant** : `optimize.py` calcule
-   DÉJÀ bootstrap/MC/PSR/Bonferroni/stress/clustering → `output/robustness_<id>.{json,md}`. On RUN et on LIT.
-2. **PERFORMANCE (hit-rate)** — sélection d'idée avant codage (`BACKLOG.md` + red-flags), variantes
-   d'edges prouvés, breadth via grille walk-forward, `@quant` pour repêcher les 🟡, fit portefeuille.
-3. **RIGUEUR (non négociable)** — on allège la redondance + cérémonie, **jamais la validation** :
-   live-equivalence BLOCANT, `@auditor`, seuils 🟢, Bonferroni.
+**SOBRIÉTÉ** (pipeline gated, dev inline, zéro recalcul : `optimize.py` produit DÉJÀ
+bootstrap/MC/PSR/Bonferroni/stress → `robustness_<id>.{json,md}`, on RUN et on LIT) · **PERFORMANCE/hit-rate**
+(sélection avant codage, variantes d'edges prouvés, `@quant` repêche les 🟡, fit portefeuille) ·
+**RIGUEUR** (non négociable : live-equivalence BLOCANTE, `@auditor`, seuils 🟢, Bonferroni).
 
 ### Règles de routage
 
@@ -63,23 +71,16 @@ pour la DEEP LANE et les rôles dédiés (live, promotion). Voir [CLAUDE_TEAM.md
 | « Promeut <strategy_id> en production » | `@forge` (après 🟢 audité + confirmation par fichier) |
 | Question simple (un param, un calcul, un log court) | Réponse directe sans subagent |
 
-### Le pipeline gated (source de vérité : `.claude/skills/new-strategy/SKILL.md`)
+### Le pipeline gated (détail + diagramme : `.claude/skills/new-strategy/SKILL.md`)
 
-```
-ÉTAPE 0 · SÉLECTION    BACKLOG.md (P1>P2>P3) + REGISTRE_HYPOTHESES (pas de re-test) + RED-FLAGS
-FAST LANE (défaut)     1. cadrer l'edge (qui paie ? falsifiable ?)  2. scaffold + config.py (variantes → PARAM_GRID)
-                       3. backtest.py + optimize.py (robustesse AUTO)  4. lire verdict + robustness_<id>.md
-                       5. GATE : 🔴 → STOP + 1 ligne REGISTRE + mémoire ; 🟡/🟢 → deep lane
-DEEP LANE (survivants) 6. live-equivalence (BLOCANT si feature bougie de fill)
-                       7. [@quant si 🟡 + n_oos≥100] tenter 🟡→🟢  8. summary.json + rapport.md → 9. @auditor → 10. @forge si 🟢
-CAPITALISATION         verdict → REGISTRE_HYPOTHESES.md + statut BACKLOG.md + mémoire
-```
-
-Les subagents ne peuvent pas spawn d'autres subagents — c'est toi qui chaînes les invocations.
+**ÉTAPE 0** sélection (BACKLOG P1>P2>P3 + REGISTRE = pas de re-test + RED-FLAGS) → **FAST LANE inline**
+(cadrer l'edge → scaffold+config → `backtest.py`+`optimize.py` [robustesse AUTO] → lire verdict) →
+**GATE** (🔴 = STOP + 1 ligne REGISTRE + mémoire ; 🟡/🟢 = DEEP LANE) → **DEEP LANE** (live-equivalence
+BLOCANTE → [@quant si 🟡] → summary.json+rapport.md → @auditor → @forge si 🟢) → **CAPITALISATION**
+(REGISTRE + BACKLOG + mémoire, TOUS cas). Les subagents ne spawn pas de subagents — c'est toi qui chaînes.
 
 **`@quant`** : recommandé si baseline 🟡 (PF OOS 1.2-1.5) **ET** n_oos ≥ 100. Skip si 🔴 dur (PF<1.0)
-ou n_oos<100. Il **propose** un patch ; on l'applique en vN+1 *seulement si* verdict ≥ MEDIUM.
-**Si Bonferroni fail (LOW) → rollback.**
+ou n_oos<100. Il **propose** un patch ; appliqué en vN+1 *seulement si* verdict ≥ MEDIUM. Bonferroni fail (LOW) → rollback.
 
 ### Format des outputs
 
@@ -112,28 +113,33 @@ Les écritures dans `core/**` et `broker/**` déclenchent un prompt (`.claude/se
 
 **Contraintes Topstep :** Daily loss max $1 000 · Trailing DD max $2 000 · Profit target $3 000.
 
-**Portefeuille en production (live depuis 2026-05-05) :**
-- **OPR** — routage par ticker : NQ1, YM1 → `opr-v5.1` (schéma A entrée différée, filtre F2 data-driven,
-  intra-bar via M1Buffer) ; MES1 → `opr-v4` (pass-through).
-- **Fib `fib-v4.1`** — Retracement Fibonacci data-driven : MES1 + NQ1 (MGC1 retiré 2026-06-13, edge
-  surtout look-ahead). Invalidation pivot break + **filtre causal d'expansion de volatilité** (atr_short i-1,
-  `FIB_V4_FILL_FILTER="causal"`, remplace le wick look-ahead le 2026-06-14 ; toggle réversible vers "wick").
-- **Fib `fib-fine-v2`** — Fibonacci NATIF M5, filtre causal d'expansion de volatilité. Univers NQ1 + MES1,
-  sizing $130. **Flag `FIB_FINE_ENABLED=True`** — actif en live depuis le restart du 2026-06.
-  Barres M5 en REST dédié (`_fetch_bars_m5`), pas de M1Buffer.
-- **`bos-fvg-v1`** — ICT Break of Structure + FVG, NATIF M5. Entrée LIMIT au Consequent Encroachment
-  (50% FVG) en discount, SL sous swing origine, TP = rr×SL. Univers NQ1 + MES1, sizing $150
-  (`BOS_FVG_RISK_USD`). **Flag `BOS_FVG_ENABLED=True` — inerte jusqu'au restart délibéré.** Clé strategy
-  `BOS_FVG` distincte. Helpers de détection GELÉS dans `core/bos_fvg.py`. YM1 exclu.
+**Portefeuille en production** — *snapshot 2026-06-27. ⚠️ La VÉRITÉ vit dans `config.py` (grep
+`_ENABLED`/`_VERSION`/`_LIVE_TICKERS` au démarrage), pas dans cette prose. Le **pourquoi** (verdicts,
+paris de régime, conditions de rollback) vit dans `REGISTRE_HYPOTHESES.md §B`. Mettre cette table à
+jour à chaque changement prod.*
+
+| Ticker | Stratégie(s) live | Flag / version | Sizing |
+|---|---|---|---|
+| **YM1** | OPR `opr-v5.1` (schéma A entrée différée, filtre F2 data-driven, intra-bar M1Buffer) | `OPR_ENABLED=True` · `OPR_V5_1_LIVE_TICKERS=["YM1"]` | $200 (global) |
+| **NQ1** | `opr-nq1-causal-matinal` (🔴 override, F2 OFF causal, fills [9h,12h) NY, breaker −$500) **+** `fib-fine-v2` M5 (`0.5/1.0`, 🟡 pari de régime) | `OPR_NQ1_ENABLED=True` · `FIB_FINE_ENABLED=True`, `FIB_FINE_LIVE_TICKERS=["NQ1"]` | $150 · $240 |
+| **MES1** | — aucune (OPR/MES1 en **veille** depuis 2026-05-21 : `OPR_V4_LIVE_TICKERS=[]`) | — | — |
+
+**Désactivées en live** (recherche/redev) : `fib-v4.1` (`FIB_V4_ENABLED=False`, coupée 06-19, edge réfuté
+M1→redev from scratch) · `bos-fvg-v2` (`BOS_FVG_ENABLED=False`, pausée 06-13, artefact fill) ·
+`ib-retest-v3` (`IB_RETEST_ENABLED=False`, coupée 06-19, marginal M1).
+
+> ⚠️ `opr-nq1` (🔴) et `fib-fine 0.5/1.0` (🟡) sont des **paris assumés** mis en live par décision user
+> (override du verdict) — **MONITOR : PF live < 1.2/trimestre glissant ⇒ rollback** (flag False/param + restart).
+> `core/opr_nq1_causal.py` (clé strategy `OPR_NQ1` isolée) + `core/fib_fine_v2.py` ; helpers `core/bos_fvg.py` GELÉS.
 
 ---
 
 ## Architecture — 3 couches
 
 ```
-RECHERCHE       strategies/  backtest.py  optimize.py        — tester/itérer sans risque
-INFRA PARTAGÉE  core/{metrics,backtester,optimizer,data,...} — métriques + runner universels
-PRODUCTION      core/{opr,opr_v5_1,strategy_fib_v4,fib_fine_v2,bos_fvg}.py
+RECHERCHE       strategies/  backtest.py  optimize.py        — tester/itérer sans risque (M1)
+INFRA PARTAGÉE  core/{bt_engine,metrics,backtester,optimizer,data,...} — moteur M1 + métriques + runner
+PRODUCTION      core/{opr,opr_v5_1,opr_nq1_causal,strategy_fib_v4,fib_fine_v2,bos_fvg}.py
                 broker/live_runner.py + live.py              — NE PAS TOUCHER
 ```
 
@@ -141,17 +147,24 @@ PRODUCTION      core/{opr,opr_v5_1,strategy_fib_v4,fib_fine_v2,bos_fvg}.py
 stratégie validée 🟢 (via `@forge`). Jamais en cours de recherche.
 
 **Clôture live (à ne jamais casser)** : `live.py`, `config.py`, tout `broker/`, et `core/`
-{`opr`, `opr_v5_1`, `strategy_fib_v4`, `fib_fine_v2`, `bos_fvg`, `fib_helpers`, `signal_selector`,
-`risk_portfolio`, `risk_topstep`, `adaptive_sizing`, `event_logger`}. ⚠️ `strategies/fib_fine.py` est
-**live-critique** (importé par `core/fib_fine_v2.py`) malgré son emplacement dans `strategies/`.
+{`opr`, `opr_v5_1`, `opr_nq1_causal`, `strategy_fib_v4`, `fib_fine_v2`, `bos_fvg`, `fib_helpers`,
+`signal_selector`, `risk_portfolio`, `risk_topstep`, `adaptive_sizing`, `event_logger`}. ⚠️
+`strategies/fib_fine.py` est **live-critique** (importé par `core/fib_fine_v2.py`) malgré son emplacement
+dans `strategies/`.
 
 ---
 
 ## Commandes
 
-> Stratégies = registry **auto-discovery** (`python backtest.py --list`). Pas de dict à éditer :
-> tout fichier `strategies/<nom>.py` **ou `brouillon/strategies/<nom>.py`** exposant `STRATEGY_ID`
-> + `run_backtest(...)` est découvert. Les essais vont dans `brouillon/strategies/`.
+> **Moteur de backtest = `core/bt_engine.py` (backtesting.py sur M1)** depuis 2026-06-18 = vérité de fill
+> (SL/TP résolus à la minute → corrige le same-bar du moteur maison M15 ; détail [[m1-backtest-migration]] +
+> REGISTRE §Outillage). Une strat portée expose `emit_signals(sig_df, ticker, params)` (signaux M15/M5
+> reconstruits du M1, features à la clôture = no leak ; fill délégué au M1) ; `backtest.py`/`optimize.py`/
+> `backtest_vs_live.py`/`portfolio_replay.py` routent **auto en M1** + viz HTML `output/backtests/<id>__<ticker>__<tag>__m1.html`.
+> **Données M1** = `DATA_BACKTEST/*_data_m1.csv` (indices seulement) ; **disque** 2025-02-16→2026-06-05,
+> mais **IS effectif 2025-02-16→2025-12-31 / OOS 2026-01-01→2026-04-15** (pas de deep-fetch, API ~20 k barres).
+> **Registry auto-discovery** (`backtest.py --list`) : tout `strategies/<nom>.py` ou `brouillon/strategies/<nom>.py`
+> exposant `STRATEGY_ID` + (`emit_signals`|`run_backtest`). Optuna + scikit-learn = `[research]`.
 
 ```bash
 # Backtest
@@ -172,8 +185,8 @@ python optimize.py --strategy <nom> --csv-dir ./data --search optuna --n-trials 
 # Risque portefeuille combiné (corrélations inter-stratégies, MC DD, P(target avant breach))
 python tools/portfolio_replay.py        # input du fit portefeuille @athena
 
-# Backtest vs Live — vérifier la fidélité d'un JOUR/PÉRIODE (les 5 strats live aux params prod,
-# barres fetchées du broker, réconciliées aux trades live : MATCH/DIVERGENCE/BACKTEST_ONLY/LIVE_ONLY)
+# Backtest vs Live — vérifier la fidélité d'un JOUR/PÉRIODE (stratégies live aux params prod, univers
+# config-driven via tools/_live_portfolio.py ; barres broker, réconcil : MATCH/DIVERGENCE/BACKTEST_ONLY/LIVE_ONLY)
 python tools/backtest_vs_live.py --date 2026-06-16        # 1 jour ; défaut = jour courant
 python tools/backtest_vs_live.py --start 2026-06-10 --end 2026-06-16   # période
 #   Sortie : output/backtest_vs_live/<date>/{comparison.csv, report.md}. Lecture seule (get_* only).
@@ -190,41 +203,30 @@ tail -f logs/trading_events.log          # fills, closes, erreurs, risk
 
 ---
 
-## Pipeline d'une nouvelle stratégie (référence — préférer `/new-strategy`)
+## Scaffold d'une nouvelle stratégie (détail : SKILL.md / `/new-strategy`)
 
-1. Créer `brouillon/strategies/<nom>.py` (dossier jetable) exposant `STRATEGY_ID`, `run_backtest(df, ticker, tf, params, topstep_guard)`,
-   `PARAM_GRID`, `CSV_SUFFIX`, `CSV_TIMEFRAME` (auto-découvert, pas d'enregistrement manuel).
-   Schéma colonnes obligatoire : `date, dir, entry, sl, tp, sl_dist, tp_dist, rr, n_ct,
-   result (TP|SL|TE|NOT_FILLED), pnl, fill_time, exit_time, exit, regime`. `pnl` = **P&L net**.
-2. Ajouter une section dans `config.py` (`<STRAT>_STRATEGY_VERSION`, params SL/TP…).
-3. `python backtest.py --strategy <nom> --csv-dir ./data` puis `python optimize.py --strategy <nom> --csv-dir ./data`.
+Essai → `brouillon/strategies/<nom>.py` exposant `STRATEGY_ID` + (`emit_signals` **ou** `run_backtest`) +
+`PARAM_GRID`/`PARAM_SPACE` + `CSV_SUFFIX`/`CSV_TIMEFRAME` (auto-découvert). Section dans `config.py`
+(`<STRAT>_STRATEGY_VERSION` + params). Puis `backtest.py` → `optimize.py`.
+**Schéma colonnes obligatoire** (`pnl` = NET) : `date, dir, entry, sl, tp, sl_dist, tp_dist, rr, n_ct,
+result (TP|SL|TE|NOT_FILLED), pnl, fill_time, exit_time, exit, regime`.
 
-## Critères de décision (verdict automatique)
+## Critères de décision (gate verdict — analyses approfondies : SKILL.md PHASES 4-5)
 
-| Critère | 🟢 PRODUCTION | 🟡 VEILLE | 🔴 REJET |
-|---|---|---|---|
-| OOS Profit Factor | ≥ 1.5 | ≥ 1.2 | < 1.2 |
-| Bootstrap **portfolio** | ≥ 80% | ≥ 50% | < 50% |
-| Trades OOS | ≥ 20 | ≥ 8 | < 8 |
-| P&L OOS | > 0 | > 0 | ≤ 0 |
+**OOS PF** ≥1.5 🟢 / ≥1.2 🟡 / <1.2 🔴 · **bootstrap PORTEFEUILLE** ≥80 / ≥50 / <50 % · **n_oos** ≥20 / ≥8 / <8 ·
+**P&L OOS** >0 (sinon 🔴). Le bootstrap *par ticker* peut être bas sans disqualifier — c'est le **portefeuille**
+qui décide. Le **PF est un GATE d'edge, pas un classement Topstep** (cf. REGISTRE leçon #10 : juge ultime =
+P(target avant breach), bloc « Utilité Topstep » de `robustness_<id>.md`).
 
-> Le bootstrap **par ticker** peut être bas sans disqualifier — c'est le bootstrap **portefeuille** qui décide.
-> Analyses approfondies (multiple-testing, stress régime, MC permutation) : skill `/new-strategy` PHASES 4-5.
+## Promotion & partenaire live
 
-## Promotion en production (via `@forge`, après 🟢 audité + confirmation par fichier)
+**Promotion** (via `@forge`, après 🟢 audité + confirmation **par fichier**) : créer `core/<id>.py` +
+`get_<strat>_live_signal()` → MAJ `broker/live_runner.py` (imports + boucle) → `core/signal_selector.py` si
+besoin → `core/event_logger.py` → test simu (`PROJECTX_LIVE_MODE=False`) → flag OFF + activation au restart délibéré.
 
-1. Créer `core/<id>.py` + `get_<strat>_live_signal()`  2. MAJ `broker/live_runner.py` (imports + boucle)
-3. MAJ `core/signal_selector.py` si besoin  4. Configurer `core/event_logger.py`
-5. Tester en simu (`PROJECTX_LIVE_MODE=False`)  6. Flag OFF + activation au restart délibéré.
-
----
-
-## Rôle de partenaire live — ce que Claude NE fait PAS sans confirmation
-
-- Modifier `broker/live_runner.py` ou tout fichier `core/` en production
-- Changer `PROJECTX_LIVE_MODE`, redémarrer le daemon tmux, modifier des params SL/TP prod en session
-- **Surveiller** : `cum_pnl`/`peak_pnl`/`daily_pnl` proches des limites · blocages RM Telegram ·
-  `NOT_FILLED` répétés (données/connectivité) · séquences de SL consécutifs.
+**Ce que Claude NE fait PAS sans confirmation** : modifier `broker/`/`core/` prod · changer `PROJECTX_LIVE_MODE`,
+redémarrer le daemon, toucher un param SL/TP prod en session. **À surveiller** : `cum_pnl`/`peak_pnl`/`daily_pnl`
+près des limites · blocages RM Telegram · `NOT_FILLED` répétés (données/connectivité) · séquences de SL consécutifs.
 
 ---
 
@@ -232,7 +234,7 @@ tail -f logs/trading_events.log          # fills, closes, erreurs, risk
 
 | Section | Variables clés |
 |---|---|
-| Global / Utilisateur | `RISK_PER_TRADE_USD`, `MAX_TRADES_PER_DAY`, `USER_DAILY_LOSS_MAX`, `USER_MAX_TRADES_PER_DAY`, `USER_MAX_ARMED_RISK_USD` (cap pending+actifs $600) |
+| Global / Utilisateur | `RISK_PER_TRADE_USD` ($200), `USER_DAILY_LOSS_MAX` ($950), `USER_MAX_TRADES_PER_DAY`, `USER_MAX_ARMED_RISK_USD` (cap pending+actifs **$900**) |
 | Walk-forward | `WF_IS_START/END`, `WF_OOS_START`, `WF_HOLDOUT_START`, `WF_N_FOLDS`, `WF_FOLD_MONTHS` |
 | Topstep | `TOPSTEP_DAILY_LOSS_MAX=1000`, `TOPSTEP_TRAILING_DD=2000` |
 | Frictions | `SLIPPAGE_TICKS_PER_TICKER`, `COMMISSION_RT_PER_CONTRACT` |
@@ -241,10 +243,11 @@ tail -f logs/trading_events.log          # fills, closes, erreurs, risk
 | Broker / Telegram | `PROJECTX_LIVE_MODE`, `LIVE_STATE_FILE`, `TELEGRAM_*` |
 
 **Walk-forward IS/OOS (source de vérité : `config.py` section WALK-FORWARD GLOBAL)** :
-IS `WF_IS_START="2024-09-01"` → `WF_IS_END="2025-09-30"` · OOS `WF_OOS_START="2025-10-01"` →
+IS `WF_IS_START="2024-09-01"` → `WF_IS_END="2025-12-31"` · OOS `WF_OOS_START="2026-01-01"` →
 `WF_HOLDOUT_START="2026-04-15"` (**hold-out terminal EXCLU** de la sélection/robustesse —
 consulté UNE fois via `--holdout` en pré-promotion ; `--multifold` pour la stabilité inter-folds).
-Critère d'acceptation : `OOS PF ≥ 1.2 ET n ≥ 8 ET P&L OOS > 0`.
+⚠️ **En backtest M1**, l'IS est borné par la couverture M1 → effectif IS `2025-02-16`→`2025-12-31`
+(le M1 ne remonte pas plus loin ; pas de deep-fetch). Critère : `OOS PF ≥ 1.2 ET n ≥ 8 ET P&L OOS > 0`.
 **Rituel trimestriel** : avancer les dates WF (+1 trimestre) et re-calibrer les stratégies prod.
 
 ---
@@ -256,21 +259,15 @@ Critère d'acceptation : `OOS PF ≥ 1.2 ET n ≥ 8 ET P&L OOS > 0`.
 - **Timestamps** UTC naïf en interne, conversion NY en frontière de stratégie. **Pas de leak temporel.**
 - **Bump de version** `<STRAT>_STRATEGY_VERSION` à chaque changement structurel. **Seed** `np.random.seed(42)`.
 
-## Pièges à éviter
+## Pièges & invariants — vérifier avant chaque commit / promotion
 
-- Ne **jamais** modifier `core/{opr,opr_v5_1,strategy_fib_v4,fib_fine_v2,bos_fvg,fib_helpers}.py` ni
-  `broker/` pour de la recherche → utiliser les wrappers `strategies/*.py`.
-- Ne **jamais** accepter des params walk-forward avec OOS PF < 1.2.
-- CSV : `{csv_dir}/{TICKER}_data_m15.csv` (majuscule). `data/`/`output/` gitignorés (ne pas versionner).
-- **Fill ambigu (SL et TP même barre)** : assume SL prioritaire, jamais TP.
-- **Slippage + commissions** intégrés dans `pnl` (sinon sur-estimation 15-25% du PF).
-- Après changement de `config.py`, vérifier que `core/opr.py` reflète les valeurs (patch dynamique des dicts).
-
-## Invariants — vérifier avant chaque commit / promotion
-
-- [ ] Schéma colonnes respecté (`pnl` net) · `<STRAT>_STRATEGY_VERSION` bumpé si structurel
-- [ ] Aucun fichier `core/{opr,opr_v5_1,strategy_fib_v4,fib_fine_v2,bos_fvg,fib_helpers}.py` ni `broker/` modifié sans confirmation
-- [ ] Tous les paramètres dans `config.py` · Walk-forward = dates `WF_*` de config.py, hold-out exclu de la sélection
-- [ ] Slippage + commissions dans `pnl` · seed fixé · DST-aware (`zoneinfo`, pas `pytz`)
-- [ ] Toute nouvelle fonctionnalité live démarre flag OFF + read-only ; activation au restart délibéré
-- [ ] **Jamais de VPN sur le trafic Topstep** (Tailscale = dashboard uniquement, jamais `--exit-node`)
+- [ ] **Jamais** modifier `core/{opr,opr_v5_1,opr_nq1_causal,strategy_fib_v4,fib_fine_v2,bos_fvg,fib_helpers}.py`
+  ni `broker/` sans confirmation (recherche → wrappers `strategies/*.py`).
+- [ ] Schéma colonnes respecté (`pnl` = NET, slippage+commissions inclus — sinon PF sur-estimé 15-25 %) ·
+  `<STRAT>_STRATEGY_VERSION` bumpé si structurel · seed fixé · DST-aware (`zoneinfo`, pas `pytz`).
+- [ ] Tous les params dans `config.py` · WF = dates `WF_*`, hold-out exclu de la sélection · OOS PF ≥ 1.2 (jamais en-dessous).
+- [ ] **Fill ambigu (SL et TP même barre)** : SL prioritaire, jamais TP.
+- [ ] Après changement `config.py`, vérifier que `core/opr.py` reflète les valeurs (patch dynamique des dicts).
+- [ ] Nouvelle fonctionnalité live = flag OFF + read-only, activation au restart délibéré.
+- [ ] CSV : `{csv_dir}/{TICKER}_data_m15.csv` (majuscule) ; `data/`/`output/` gitignorés.
+- [ ] **Jamais de VPN sur le trafic Topstep** (Tailscale = dashboard uniquement, jamais `--exit-node`).

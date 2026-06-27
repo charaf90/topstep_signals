@@ -948,6 +948,48 @@ OPR_V5_1_LIVE_TICKERS = ["YM1"]  # MES1 sur v4 (legacy) ; NQ1 en pause (cf. ci-d
 # Pour réactiver MES1 : remettre ["MES1"]. Code v4 conservé intact.
 OPR_V4_LIVE_TICKERS = []
 
+# ──────────────────────────────────────────────────────────────────────────────
+# OPR NQ1 CAUSAL-MATINAL — LIVE TRADING (PREREGISTRE_2026Q3 Candidat A, verdict 🔴)
+# ──────────────────────────────────────────────────────────────────────────────
+# Câblage TRADING RÉEL d'une config OPR NQ1 entièrement causale (F2 OFF), décision
+# utilisateur ferme (override du verdict 🔴 — sélectionnée en partie sur l'OOS ; le
+# forward Q3-2026 reste le juge hors-échantillon honnête, cf. PREREGISTRE_2026Q3.md).
+# Daily-safe PAR CONSTRUCTION via risk/trade RÉDUIT ($150, scale le blow-through par
+# contrat) + CIRCUIT-BREAKER quotidien (stop la journée dès cumul OPR-NQ1 ≤ −$500).
+# Validé M1 (brouillon/scripts/opr_nq1_circuit_breaker.py) : pire jour −$775, trailing
+# −$1,384, breach daily 0 %, P(target) 96 %.
+#
+# ISOLATION : chemin SÉPARÉ (strategy="OPR_NQ1", tag "OPRNQ1_…") — NQ1 N'EST PAS ajouté
+# à OPR_V5_1_LIVE_TICKERS ni OPR_V4_LIVE_TICKERS (sinon il passerait par le F2/sl-tp de
+# la prod). Ne change RIEN à opr-v5.1 (YM1) ni à fib-fine (NQ1). Passe par le RM existant
+# (cap armé $600, daily loss, etc. — JAMAIS contourné).
+#
+# ⚠️ ACTIVATION DÉLIBÉRÉE EN 2 TEMPS (flag OFF par défaut = invariant projet + 🔴) :
+#   1. passer OPR_NQ1_ENABLED = True
+#   2. scripts/restart_daemon.sh restart  (HORS session NY, après 16:30 EDT)
+# Tant que le flag est False, le code est inerte (aucun ordre OPR-NQ1). Un flag False
+# garantit qu'un restart NON planifié (crash, maintenance) ne déclenche pas un 🔴 en
+# pleine session.
+#
+# Design FIGÉ (Candidat A — ne pas re-tuner sur ≤ 2026-06) :
+#   • Base opr-v5.1 avec F2 DÉSACTIVÉ (f2_min_atr=None, f2_max_atr=None) → causal, no leak.
+#   • sl_mult = 0.225 (×ATR daily), r_target = 1.5 → tp_mult = 0.3375.
+#   • Filtre horaire STRUCTUREL : FILL (entrée) uniquement [9:00, 12:00) NY ; tout pending
+#     OPR-NQ1 non rempli est annulé à 12:00 NY (mirror du backtest qui filtre sur fill_ny<12).
+#   • Circuit-breaker quotidien : plus aucun NOUVEL ordre OPR-NQ1 du jour une fois le cumul
+#     réalisé OPR-NQ1 ≤ −OPR_NQ1_DAILY_LOSS_BREAKER_USD.
+#   • Sizing : risk dédié $150 / trade (JAMAIS le nominal global RISK_PER_TRADE_USD).
+OPR_NQ1_ENABLED = True  # ACTIVÉ 2026-06-27 (décision user, override 🔴) — daily-safe par construction (risk$150 + breaker$500). Rollback = False + restart.
+OPR_NQ1_TICKER = "NQ1"
+OPR_NQ1_SL_MULT = 0.225  # ×ATR daily
+OPR_NQ1_TP_MULT = 0.3375  # r_target 1.5 × sl_mult
+OPR_NQ1_ENTRY_HOUR_START_NY = 9  # heure NY (DST-aware côté code via zoneinfo)
+OPR_NQ1_ENTRY_HOUR_END_NY = (
+    12  # exclu : fills retenus seulement [9, 12) NY ; cancel pending à 12:00
+)
+OPR_NQ1_RISK_USD = 150  # risk dédié / trade (levier anti-blow-through ; jamais le nominal global)
+OPR_NQ1_DAILY_LOSS_BREAKER_USD = 500  # stop OPR-NQ1 du jour dès cumul réalisé ≤ −cette valeur
+
 # ==============================================================================
 # STRATÉGIE FIBONACCI 50% RETRACEMENT (`fib-v1`)
 # ==============================================================================
@@ -1985,10 +2027,16 @@ FIB_FINE_STRUCT_PER_TF = {
 
 # ── Paramètres data-driven PER-TICKER (mirror fib-v4) ──────────────────────────
 # Niveau Fib retenu par ticker (data-driven en PHASE 4 ; défaut 0.382 = réf prod).
-FIB_FINE_LEVEL_PER_TICKER = {"NQ1": 0.382, "MES1": 0.382, "YM1": 0.382, "MGC1": 0.500}
+# NQ1 0.382→0.500 (2026-06-26) : bascule live décidée par l'utilisateur. L'edge 0.382/1.5
+# est régime-spécifique (mort en 2023, fort 2026) ; 0.5/1.0 = stationnaire sur 2022-2026
+# (PF ~1.3/an), out-earn en combiné (P&L +$9.1k vs +$7.1k, MC DD P95 −$1062, breach 0%).
+# ⚠️ Verdict @auditor = 🟡 (override user — pari de diversification de régime). À surveiller
+# en live (PF NQ1 < 1.2 sur trimestre glissant → rouvrir). Cf. REGISTRE §B, leçon #10.
+FIB_FINE_LEVEL_PER_TICKER = {"NQ1": 0.500, "MES1": 0.382, "YM1": 0.382, "MGC1": 0.500}
 
 # SL/TP en multiples d'ATR (du TF fin) — défaut hérité de fib-v4, raffiné PHASE 4.
-FIB_FINE_SL_ATR_MULT_PER_TICKER = {"NQ1": 1.50, "MES1": 0.75, "YM1": 1.00, "MGC1": 1.00}
+# NQ1 1.50→1.00 (2026-06-26, cf. bascule fib_level ci-dessus).
+FIB_FINE_SL_ATR_MULT_PER_TICKER = {"NQ1": 1.00, "MES1": 0.75, "YM1": 1.00, "MGC1": 1.00}
 # NQ1 recalibré 1.50→1.20 (2026-06-19) : TP plus serré, validé hold-out terminal
 # (PF 2.67 / +$766 / n=21, N_tests=1) + multifold 5/5 folds positifs (vs 4/5 prod).
 # Gain = consistance (−DD) au prix de ~15 % de P&L. min_imp inopérant sur NQ1 (inchangé).
@@ -2099,9 +2147,9 @@ FIB_FINE_ENABLED = True
 FIB_FINE_LIVE_TICKERS = ["NQ1"]  # MES1 COUPÉ 2026-06-19 (décision user) — ticker faible (PF 1.16)
 # ET driver de DD (−$3,405, > limite Topstep) ; aucun param ne le sauve. Risque concentré sur NQ1.
 
-# Sizing DÉDIÉ fib-fine ($130). N'altère PAS RISK_PER_TRADE_USD global ($200).
-# Réutilise la valeur de recherche déjà calibrée PHASE 5 (MC p95 DD < $2000 Topstep).
-FIB_FINE_RISK_USD = FIB_FINE_RISK_PER_TRADE_USD  # = 130
+# Sizing DÉDIÉ fib-fine ($240 depuis 2026-06-19, MES1 coupé → NQ1 seul a la marge).
+# N'altère PAS RISK_PER_TRADE_USD global ($200). Calibré MC p95 DD < $2000 Topstep.
+FIB_FINE_RISK_USD = FIB_FINE_RISK_PER_TRADE_USD  # = 240
 
 # Timeframe de décision live (barres CLÔTURÉES). Doit rester "m5" (cohérence backtest).
 FIB_FINE_LIVE_TF = FIB_FINE_DEFAULT_TF  # = "m5"

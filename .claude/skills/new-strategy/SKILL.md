@@ -47,20 +47,27 @@ pas 100k. La machinerie lourde (live-equivalence, quant, audit) ne sert que les 
 
 ## GARDE-FOUS PERMANENTS (tous niveaux, jamais d'exception)
 
-- **No look-ahead** : décision à la barre `i` n'utilise que `df.iloc[:i]` / `prev` / `.shift(1)`.
-  Jamais `bar["close"]` de la barre `i` pour décider à `i`.
-- **Frictions dans `pnl` net** : `SLIPPAGE_TICKS_PER_TICKER` (entrée + sortie) + `COMMISSION_RT_PER_CONTRACT`.
-- **Fill conservatif** : si SL et TP dans le range d'une même barre M15 → **SL prioritaire**.
+- **Moteur = M1 (`core/bt_engine.py`, backtesting.py)** : les fills + SL/TP sont résolus **à la minute**
+  (vérité de fill). Plus de moteur maison M15. Le same-bar (SL dans la bougie de fill) est résolu par
+  construction — c'est précisément ce que le M15 ratait.
+- **No look-ahead** : `emit_signals` calcule les signaux sur la TF de signal (M15/M5, reconstruite du M1) ;
+  toute feature de décision doit être connue **à la clôture de la barre de signal** (l'ordre devient vif à
+  `arm_ts + tf` = no leak). Jamais le low/high/close FINAL de la barre de fill pour décider.
+- **Frictions dans `pnl` net** : recalculées maison par `bt_engine` (`SLIPPAGE_TICKS_PER_TICKER` entrée+sortie
+  + `COMMISSION_RT_PER_CONTRACT`) ; backtesting.py tourne `commission=0`.
+- **Fill conservatif** : si SL et TP dans la même **minute** M1 → **SL prioritaire** (géré par backtesting.py).
 - **Essai = dans `brouillon/strategies/<id>.py`** (dossier jetable). Les **params d'essai restent
   auto-contenus** dans ce fichier (constantes module + `PARAM_GRID`) — on ne pollue PAS `config.py`.
   Migration vers `config.py` uniquement à la **promotion** (`@forge`).
 - **`np.random.seed(42)`** si tirage aléatoire.
-- **Schéma colonnes standard** (sinon casse `core/optimizer.py`) — voir FAST LANE §2.
-- **Walk-forward fixe** : dates `WF_*` de `config.py` (IS fin 2025-09-30 · OOS 2025-10-01 →
-  `WF_HOLDOUT_START`, **hold-out terminal exclu** — consulté 1 fois via `optimize.py --holdout`
-  en pré-promotion ; `--multifold` recommandé en deep lane pour la stabilité inter-folds).
+- **Schéma colonnes standard** : produit automatiquement par `bt_engine` à partir des arms — voir FAST LANE §2.
+- **Walk-forward fixe** : dates `WF_*` de `config.py` (IS fin 2025-12-31 · OOS 2026-01-01 →
+  `WF_HOLDOUT_START`, **hold-out terminal exclu**). ⚠️ **En M1, IS borné à la couverture M1**
+  (effectif 2025-02-16→2025-12-31 ; pas de deep-fetch, API broker plafonnée 20 k barres).
+  `--holdout` consulté 1 fois en pré-promotion ; `--multifold` recommandé en deep lane.
 - **Bump `<STRATEGY_ID>_STRATEGY_VERSION`** à chaque changement structurel.
-- **Jamais toucher `core/**` ou `broker/**`** (sauf `@forge` sur confirmation explicite).
+- **Jamais toucher `core/**` ou `broker/**`** (sauf `@forge` sur confirmation explicite ; `core/bt_engine.py`
+  est infra recherche, modifiable hors live).
 
 ## Critères de verdict (référence `core/metrics.py`)
 
@@ -104,16 +111,23 @@ Avant d'écrire la moindre ligne :
 - **Pièges du concept** : look-ahead, timezone, régime-dépendance.
 - Concept vraiment inconnu → `WebSearch` ponctuel inline (pas de subagent).
 
-### 2. Scaffold
-- `brouillon/strategies/<strategy_id>.py` — `run_backtest()` (+ `plot_day()` minimal, optionnel).
-  Référence : [templates/strategy_template.md](templates/strategy_template.md). **Dossier jetable** :
-  tout l'essai (code + params + `PARAM_GRID`) reste auto-contenu ici.
-- **Schéma de colonnes obligatoire** :
+### 2. Scaffold (contrat moteur M1 — `core/bt_engine.py`)
+- `brouillon/strategies/<strategy_id>.py` exposant :
+  - `STRATEGY_ID`, `TICKERS` (indices uniquement : MES1/NQ1/YM1 — pas de M1 gold/oil)
+  - `SIGNAL_TF` (`"15min"` | `"5min"`), `SESSION_END_MIN`, optionnel `RUN_MIN_WINDOW`, `MAX_HOLD_MIN`,
+    `INTRADAY_DAYCLOSE`
+  - **`emit_signals(sig_df, ticker, params) -> list[dict]`** : `sig_df` = OHLCV sur `SIGNAL_TF`
+    (reconstruit du M1 par le moteur). Émet des **arms** `{dir, entry, sl, tp, n_ct, arm_ts,
+    [timeout_ts, cancel_price/cancel_side, regime, extras]}`. **AUCUNE résolution de fill ici** — le
+    fill + SL/TP est résolu au M1 par `bt_engine`. (Pour une strat à mécanique de fill complexe :
+    réutiliser un backtest signal-TF validé et émettre ses trades remplis comme arms — cf. `strategies/fib_fine.py`.)
+  - `PARAM_GRID` (ou `PARAM_SPACE` continu pour Optuna)
+  Référence : [templates/strategy_template.md](templates/strategy_template.md). **Dossier jetable**.
+- **Schéma de colonnes** (produit AUTO par `bt_engine`, compat `core/metrics`/`robustness`/`@quant`) :
   ```
   date, dir, entry, sl, tp, sl_dist, tp_dist, rr, n_ct,
-  result (TP|SL|TE|NOT_FILLED), pnl, fill_time, exit_time, exit, regime
+  result (TP|SL|TE|NOT_FILLED), pnl(net), fill_time, exit_time, exit, regime, pnl_gross, timeframe
   ```
-  `pnl` = **net**. Optionnelles tolérées : `pnl_gross`, `adx`, `atr_pct`, `is_macro_day`.
 - **Params auto-contenus** dans le fichier d'essai (constantes + `<STRATEGY_ID>_STRATEGY_VERSION`).
   On n'écrit dans `config.py` qu'à la **promotion** (`@forge`).
 - **Breadth** : coder les variantes naturelles (triggers, tickers, seuils) comme dimensions du
@@ -125,16 +139,17 @@ Avant d'écrire la moindre ligne :
 - Auto-discovery `core/registry.py` : un fichier dans `brouillon/strategies/` suffit (pas besoin
   d'éditer `backtest.py`/`optimize.py`).
 
-### 3. Backtest + Optimize
+### 3. Backtest + Optimize (M1 automatique)
 ```bash
-python backtest.py  --strategy <strategy_id> --csv-dir ./data
-python optimize.py  --strategy <strategy_id> --csv-dir ./data
+python backtest.py  --strategy <strategy_id> --csv-dir ./data   # M1 + viz HTML nommée
+python optimize.py  --strategy <strategy_id> --csv-dir ./data   # WF M1 + robustesse
+python optimize.py  --strategy <strategy_id> --csv-dir ./data --search optuna --n-trials 80
 ```
-> **`optimize.py` calcule DÉJÀ toute la robustesse** (`core/optimizer.py:206-303` →
-> `core/robustness.py::run_full_robustness`) : block-bootstrap portfolio, Monte-Carlo DD,
-> PSR, Sharpe deflaté, **Bonferroni**, stress par régime, worst-case clustering →
-> `output/robustness_<id>.{json,md}`. **NE JAMAIS refaire ces calculs à la main.**
-> (Robustesse skipée si OOS trop court (n<8) — c'est déjà un 🔴 par le critère n_oos.)
+> Une strat exposant `emit_signals` est **routée en M1 automatiquement** (`bt_engine.supports`) et
+> produit `output/backtests/<id>__<ticker>__full__m1.html` (à consulter dans un navigateur).
+> **`optimize.py` calcule DÉJÀ toute la robustesse** (`core/optimizer.py` → `core/robustness.py`) :
+> block-bootstrap portfolio, Monte-Carlo DD, PSR, Sharpe deflaté, **Bonferroni**, stress régime,
+> clustering → `output/robustness_<id>.{json,md}`. **NE JAMAIS refaire ces calculs à la main.**
 > Noms de stratégie = registry auto-discovery : `python backtest.py --list`.
 
 ### 4. Lire le verdict
@@ -150,21 +165,18 @@ python optimize.py  --strategy <strategy_id> --csv-dir ./data
 
 ## DEEP LANE (survivants 🟡/🟢 seulement)
 
-### 6. Live-equivalence (BLOCANT si feature lue sur la bougie de fill)
-Question pour **chaque** feature du DataFrame de trades :
-> « Au moment précis où le broker fille mon ordre limite intra-bar M15, est-ce que je connais
-> déjà la valeur de cette feature ? »
-
-Si **non** (dépend du low/high/close FINAL de la bougie de fill ou d'une barre future) → feature à risque :
-- **Path A (préféré)** — wirage `M1Buffer` : écrire `get_<id>_live_signal(df_15m, ticker, m1_buffer, contract_id)`
-  qui reconstruit le low/high COURANT via `broker/m1_buffer.py` et annule si le seuil est franchi
-  pendant le pending. Pattern : `core/opr.py` + `broker/live_runner.py`.
-- **Path B (fallback)** — `brouillon/scripts/live_eq_<id>.py` : décale la décision à la barre M15
-  SUIVANTE. **Le verdict est RECALCULÉ sur les métriques live-eq.**
-- **Ni A ni B** → le PF est un upper bound non-atteignable. `@auditor` rétrograde 🟢→🟡 minimum.
-
-> Cas d'école **fib-v4** : verdict 🟢 initial basé sur un PF naïf (`wick_through_atr` lu sur la
-> bougie de fill). Sans live-equivalence, le PF live aurait été significativement dégradé.
+### 6. Live-equivalence (le M1 résout le fill ; vérifier le NO-LEAK + la fidélité)
+Le moteur M1 résout déjà honnêtement le fill same-bar (plus de PF gonflé par la résolution M15).
+Restent deux contrôles **BLOCANTS** :
+- **No-leak signal-TF** : chaque feature d'`emit_signals` doit être connue à la **clôture de la barre de
+  signal** (`arm_ts`). Une feature lue sur la barre de fill (low/high/close final) ou une barre future =
+  look-ahead → `@auditor` rétrograde. Cas d'école **fib-v4** : `wick_through_atr` lu sur la bougie de fill —
+  et plus profond, l'edge M15 entier s'est révélé un **artefact same-bar** (réfuté sur M1 honnête 2026-06-18).
+- **Calibration backtest↔live** (preuve de fidélité, recommandée avant promotion) :
+  `python tools/backtest_vs_live.py --date <jour tradé>` réconcilie le backtest M1 aux fills live réels
+  (MATCH/DIVERGENCE, Δ = friction). **0 divergence** attendue.
+- **Wirage live** (à la promotion seulement, par `@forge`) : `get_<id>_live_signal(...)` reconstruit l'état
+  courant via `broker/m1_buffer.py` (pattern `core/opr.py`, `core/ib_retest.py`).
 
 ### 7. [@quant discover] — RECOMMANDÉ si 🟡 + n_oos ≥ 100 (moteur de hit-rate)
 But : tenter **🟡 → 🟢** via un filtre data-driven. Invoqué par l'orchestrateur (le skill ne spawn pas).

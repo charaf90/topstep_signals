@@ -55,6 +55,10 @@ from config import (
     INSTRUMENTS,
     LIVE_STATE_FILE,
     OPR_ENABLED,
+    OPR_NQ1_DAILY_LOSS_BREAKER_USD,
+    OPR_NQ1_ENABLED,
+    OPR_NQ1_ENTRY_HOUR_END_NY,
+    OPR_NQ1_TICKER,
     OPR_SESSION_END,
     OPR_TIMEZONE,
     OPR_V4_LIVE_TICKERS,
@@ -89,6 +93,7 @@ from core.bos_fvg import get_bos_fvg_live_signal
 from core.event_logger import EventLogger
 from core.fib_fine_v2 import get_fib_fine_live_signal
 from core.ib_retest import get_ib_retest_live_signal
+from core.opr_nq1_causal import get_opr_nq1_live_signal
 from core.opr_v5_1 import get_opr_v5_1_live_signals
 from core.risk_portfolio import PortfolioRiskManager, _Order
 from core.signal_selector import filter_correlated_signals
@@ -671,6 +676,66 @@ class SessionRunner:
         date_str = day_ny.strftime("%Y%m%d")
         tag = f"OPR_{ticker}_{date_str}_{last_sig['direction']}_{last_idx}"
         return {**last_sig, "tag": tag}
+
+    # ─────────────────────────────────────────────────────────────────────
+    # OPR-NQ1 causal-matinal (Candidat A 🔴) — chemin SÉPARÉ d'opr-v5.1 (YM1)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _get_opr_nq1_signal(self, df: pd.DataFrame, day_ny: pd.Timestamp, now_utc) -> dict | None:
+        """Signal OPR-NQ1 causal-matinal (F2 off + SL/TP custom + fenêtre [9,12) NY +
+        sizing $150). Délègue à core.opr_nq1_causal.get_opr_nq1_live_signal. Le
+        circuit-breaker daily et le cancel-pending-12h sont gérés par run_tick."""
+        if not OPR_NQ1_ENABLED or self._contract_id(OPR_NQ1_TICKER) is None:
+            return None
+        try:
+            return get_opr_nq1_live_signal(df, day_ny, now_utc)
+        except Exception as exc:
+            _log.error("get_opr_nq1_live_signal échoué : %s", exc)
+            return None
+
+    def _opr_nq1_day_realized_pnl(self, day_ny: pd.Timestamp) -> float:
+        """Cumul P&L réalisé OPR-NQ1 du jour NY (somme des close_pnl des tags OPR_NQ1
+        clôturés aujourd'hui). Base du circuit-breaker quotidien."""
+        date_str = day_ny.strftime("%Y%m%d")
+        prefix = f"OPRNQ1_{OPR_NQ1_TICKER}_{date_str}_"
+        total = 0.0
+        for tag, info in (self.state.get("placed_tags") or {}).items():
+            if info.get("strategy") != "OPR_NQ1" or not tag.startswith(prefix):
+                continue
+            if info.get("status") != _ST_CLOSED:
+                continue
+            pnl = info.get("close_pnl")
+            if pnl is not None:
+                total += float(pnl)
+        return total
+
+    def _opr_nq1_breaker_tripped(self, day_ny: pd.Timestamp) -> bool:
+        """Vrai si le cumul réalisé OPR-NQ1 du jour ≤ −OPR_NQ1_DAILY_LOSS_BREAKER_USD →
+        plus aucun NOUVEL ordre OPR-NQ1 ce jour (daily-safety par construction)."""
+        if not OPR_NQ1_DAILY_LOSS_BREAKER_USD or OPR_NQ1_DAILY_LOSS_BREAKER_USD <= 0:
+            return False
+        return self._opr_nq1_day_realized_pnl(day_ny) <= -float(OPR_NQ1_DAILY_LOSS_BREAKER_USD)
+
+    def _cancel_opr_nq1_pending_after_noon(self, now_utc: datetime):
+        """À ≥ OPR_NQ1_ENTRY_HOUR_END_NY (12:00 NY), annule tout pending OPR-NQ1 non
+        rempli (mirror du filtre horaire backtest : fills retenus seulement [9,12) NY)."""
+        if not OPR_NQ1_ENABLED:
+            return
+        now_ny = now_utc.replace(tzinfo=UTC).astimezone(_NY_TZ)
+        if now_ny.hour < OPR_NQ1_ENTRY_HOUR_END_NY:
+            return
+        for tag, info in list((self.state.get("placed_tags") or {}).items()):
+            if info.get("strategy") != "OPR_NQ1" or info.get("status") != _ST_PENDING:
+                continue
+            order_id = info.get("order_id", -1)
+            if not self.dry_run and order_id and order_id > 0:
+                try:
+                    self.client.cancel_order(self.account_id, order_id)
+                except Exception as exc:
+                    _log.warning("[%s] cancel_order OPR-NQ1 (12h NY) échec : %s", tag, exc)
+            self._handle_cancel_transition(
+                tag, info, reason="OPR-NQ1 pending non rempli à 12:00 NY"
+            )
 
     def _get_fib_v4_signal(self, df: pd.DataFrame, ticker: str) -> dict | None:
         """
@@ -2149,6 +2214,7 @@ class SessionRunner:
         if _opr_session_over(now_utc):
             _log.info("Session OPR terminée (16h30 NY) — clôture en cours")
             self._close_all_pending_and_active(strategy_filter="OPR", now_utc=now_utc)
+            self._close_all_pending_and_active(strategy_filter="OPR_NQ1", now_utc=now_utc)
             if self.state.get("session_report_sent") != today_str:
                 snap = self.rm.status()
                 broker_snap = self._get_broker_day_summary(now_utc)
@@ -2244,6 +2310,9 @@ class SessionRunner:
             )
             self.state["session_start_notified"] = today_str
 
+        # ── 6b. OPR-NQ1 : annulation des pending non remplis à 12:00 NY ────
+        self._cancel_opr_nq1_pending_after_noon(now_utc)
+
         # ── 7. Fetch barres + génération signaux ──────────────────────────
         new_signals: list[dict] = []
 
@@ -2272,6 +2341,24 @@ class SessionRunner:
                         self._opr_skipped_notified.add(ticker)
                 else:
                     sig = self._get_opr_signal(df, ticker, day_ny)
+                    if sig and not self._already_placed(sig["tag"]):
+                        new_signals.append(sig)
+
+            # OPR-NQ1 causal-matinal (Candidat A 🔴) — chemin SÉPARÉ (strategy="OPR_NQ1",
+            # NQ1 hors OPR_V5_1_LIVE_TICKERS). À ≥12:00 NY, les pending non remplis ont
+            # déjà été annulés en amont (run_tick). Circuit-breaker daily : plus aucun
+            # nouvel ordre une fois le cumul réalisé OPR-NQ1 du jour ≤ −seuil.
+            if OPR_NQ1_ENABLED and ticker == OPR_NQ1_TICKER:
+                if self._opr_nq1_breaker_tripped(day_ny):
+                    if getattr(self, "_opr_nq1_breaker_day", None) != today_str:
+                        _evlog._write(
+                            "WARN",
+                            f"[{ticker}] OPR-NQ1 circuit-breaker armé — stop du jour",
+                            raison=f"cumul réalisé ≤ −${OPR_NQ1_DAILY_LOSS_BREAKER_USD:.0f}",
+                        )
+                        self._opr_nq1_breaker_day = today_str
+                else:
+                    sig = self._get_opr_nq1_signal(df, day_ny, now_utc)
                     if sig and not self._already_placed(sig["tag"]):
                         new_signals.append(sig)
 

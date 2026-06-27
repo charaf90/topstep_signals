@@ -103,6 +103,13 @@ TICKERS = list(FIB_FINE_TICKERS)
 CSV_SUFFIX = "_fib_fine"
 CSV_TIMEFRAME = FIB_FINE_DEFAULT_TF  # "m5" uniquement en v2
 
+# ── Contrat moteur M1 (core/bt_engine) ────────────────────────────────────────
+SIGNAL_TF = "5min"  # signaux natifs M5 (reconstruits depuis le M1)
+SESSION_END_MIN = 20 * 60  # 20:00 NY (≈ 00:00 UTC EDT = bascule jour futures)
+MAX_HOLD_MIN = FIB_FINE_STRUCT_PER_TF["m5"]["max_hold_bars"] * 5  # 60 barres M5 = 300 min
+RUN_MIN_WINDOW = (4 * 60, 20 * 60 + 5)  # couvre no_nuit (4h NY) → clôture
+_TF_DELTA_FF = pd.Timedelta(minutes=5)
+
 # Grille v2 : wick_max retiré (filtre neutralisé), atr_expansion_min ABSENT
 # (seuil fixe pré-spécifié → ne pas optimiser, p-hacking).
 PARAM_GRID = {
@@ -648,6 +655,51 @@ def _finalize_trade(
         "bars_to_fill": position.get("bars_to_fill"),
         "timeframe": timeframe,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Contrat moteur M1 — emit_signals (core/bt_engine)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def emit_signals(sig_df: pd.DataFrame, ticker: str, params: dict | None = None) -> list[dict]:
+    """Émet les ordres fib-fine pour le moteur M1 (core/bt_engine).
+
+    Réutilise la logique de signal/fill VALIDÉE (`run_backtest` M5 : impulse + filtre causal
+    d'expansion + invalidation pivot-break + timeout, tous résolus sur barres CLOSES, no leak)
+    → on en extrait les ordres RÉELLEMENT remplis, puis on délègue à core/bt_engine la
+    résolution PRÉCISE du fill + SL/TP à la minute (corrige le same-bar du moteur maison).
+    `sig_df` = M5 reconstruit depuis le M1 par le moteur.
+    """
+    trades = run_backtest(df=sig_df, ticker=ticker, params=params, topstep_guard=False)
+    if trades is None or len(trades) == 0:
+        return []
+    arms: list[dict] = []
+    for t in trades.to_dict("records"):
+        if t.get("result") == "NOT_FILLED" or not t.get("fill_time"):
+            continue
+        fill_ts = pd.Timestamp(t["fill_time"])
+        arms.append(
+            {
+                "dir": t["dir"],
+                "entry": float(t["entry"]),
+                "sl": float(t["sl"]),
+                "tp": float(t["tp"]),
+                "sl_dist": float(t["sl_dist"]),
+                "tp_dist": float(t["tp_dist"]),
+                "rr": float(t["rr"]),
+                "n_ct": int(t["n_ct"]),
+                "regime": t.get("regime", "neutral"),
+                "arm_ts": fill_ts,
+                "place_ts": fill_ts - _TF_DELTA_FF,  # ordre vif dès la barre M5 AVANT le fill
+                "timeout_ts": fill_ts + _TF_DELTA_FF,  # doit filler dans la barre de fill
+                "extras": {
+                    "pivot_break_atr": t.get("pivot_break_atr"),
+                    "bars_to_fill": t.get("bars_to_fill"),
+                },
+            }
+        )
+    return arms
 
 
 # ═════════════════════════════════════════════════════════════════════════════

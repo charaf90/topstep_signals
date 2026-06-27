@@ -47,6 +47,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
 from config import LIVE_STATE_FILE, PROJECTX_SYMBOLS
+from core import bt_engine
 from core.data import build_timeframes, load_csv
 from core.registry import load_strategy
 from tools._live_portfolio import live_portfolio_specs
@@ -62,6 +63,7 @@ _TAG_PREFIX_TO_KEY = {
     "IBRETEST": "IB_RETEST",
     "BOSFVG": "BOS_FVG",
     "BOS": "BOS_FVG",
+    "OPRNQ1": "OPR_NQ1",  # doit précéder "OPR" (préfixe plus spécifique)
     "OPR": "OPR",
 }
 
@@ -139,11 +141,17 @@ def fetch_history(client, contract_id: str, start_dt: datetime, end_dt: datetime
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def run_backtests(specs, tickers_filter, day_start, day_end, data_source, client, state):
+def run_backtests(specs, tickers_filter, day_start, day_end, data_source, client, state, label):
     """Backtest chaque (stratégie, ticker) live sur [période - warmup, période].
-    Retourne un DataFrame unifié filtré à la période (colonnes + strategy/strategy_key/ticker)."""
+
+    Stratégie portée M1 (expose `emit_signals`) → moteur backtesting.py sur les barres **M1**
+    du broker (vérité de fill) + **HTML viz** dans `output/calibration/<label>/`. Sinon repli
+    M15/M5 via run_backtest (legacy, le temps que la strat soit portée).
+    Retourne un DataFrame unifié filtré à la période."""
     fetch_start = day_start - timedelta(days=WARMUP_DAYS)
     fetch_end = day_end + timedelta(days=1)
+    d0, d1 = day_start.strftime("%Y-%m-%d"), day_end.strftime("%Y-%m-%d")
+    cal_dir = Path("output/calibration") / label
     rows = []
     for name, spec in specs.items():
         try:
@@ -151,48 +159,76 @@ def run_backtests(specs, tickers_filter, day_start, day_end, data_source, client
         except Exception as exc:
             print(f"  [!] load_strategy({name}) échoué : {exc}")
             continue
+        is_m1 = bt_engine.supports(module)
         tf_suffix = getattr(module, "CSV_TIMEFRAME", "m15")
         unit_number = 5 if tf_suffix == "m5" else 15
         skey = spec["strategy_key"]
+        sid = getattr(module, "STRATEGY_ID", name)
         for ticker in spec["tickers"]:
             if tickers_filter and ticker not in tickers_filter:
                 continue
-            # ── données ──
-            if data_source == "csv":
-                csv_path = Path("data") / f"{ticker}_data_{tf_suffix}.csv"
-                if not csv_path.exists():
-                    print(f"  [!] {csv_path} introuvable — skip {name}/{ticker}")
-                    continue
-                df = load_csv(str(csv_path))
-            else:
+            html_path = None
+            # ── 1. Backtest M1 (moteur backtesting.py) si la strat est portée ──
+            if is_m1 and data_source != "csv":
                 cid = resolve_contract(client, ticker, state)
                 if not cid:
                     print(f"  [!] contrat introuvable pour {ticker} — skip {name}")
                     continue
-                df = fetch_history(client, cid, fetch_start, fetch_end, unit_number)
-            if df.empty:
-                print(f"  [!] {name}/{ticker} : aucune barre — skip")
-                continue
-            tf = build_timeframes(df) if tf_suffix == "m15" else None
-            # ── backtest ──
-            try:
-                trades = module.run_backtest(
-                    df, ticker, tf=tf, params=spec["params"], topstep_guard=False
-                )
-            except Exception as exc:
-                print(f"  [!] run_backtest {name}/{ticker} échoué : {exc}")
-                continue
+                m1 = fetch_history(client, cid, fetch_start, fetch_end, 1)
+                if m1.empty:
+                    print(f"  [!] {name}/{ticker} : aucune barre M1 — skip")
+                    continue
+                cal_dir.mkdir(parents=True, exist_ok=True)
+                html_out = cal_dir / f"{sid}__{ticker}.html"
+                try:
+                    res = bt_engine.run(
+                        module,
+                        ticker,
+                        params=spec["params"],
+                        m1=m1,
+                        start=d0,
+                        end=d1,
+                        html=str(html_out),
+                        plot_resample=False,
+                    )
+                except Exception as exc:
+                    print(f"  [!] bt_engine.run {name}/{ticker} échoué : {exc}")
+                    continue
+                trades, html_path = res["trades"], res.get("html_path")
+            # ── 2. Legacy M15/M5 (strat non encore portée) ──
+            else:
+                if data_source == "csv":
+                    csv_path = Path("data") / f"{ticker}_data_{tf_suffix}.csv"
+                    if not csv_path.exists():
+                        print(f"  [!] {csv_path} introuvable — skip {name}/{ticker}")
+                        continue
+                    df = load_csv(str(csv_path))
+                else:
+                    cid = resolve_contract(client, ticker, state)
+                    if not cid:
+                        print(f"  [!] contrat introuvable pour {ticker} — skip {name}")
+                        continue
+                    df = fetch_history(client, cid, fetch_start, fetch_end, unit_number)
+                if df.empty:
+                    print(f"  [!] {name}/{ticker} : aucune barre — skip")
+                    continue
+                tf = build_timeframes(df) if tf_suffix == "m15" else None
+                try:
+                    trades = module.run_backtest(
+                        df, ticker, tf=tf, params=spec["params"], topstep_guard=False
+                    )
+                except Exception as exc:
+                    print(f"  [!] run_backtest {name}/{ticker} échoué : {exc}")
+                    continue
+            # ── 3. Normalisation + filtre période (commun) ──
             if trades is None or len(trades) == 0:
                 continue
-            # Normalisation schéma : fib_v4 expose 'direction', les autres 'dir'.
             if "dir" not in trades.columns and "direction" in trades.columns:
                 trades = trades.rename(columns={"direction": "dir"})
             if "result" not in trades.columns or "dir" not in trades.columns:
                 print(f"  [!] {name}/{ticker} : schéma inattendu {list(trades.columns)[:6]} — skip")
                 continue
             trades = trades[trades["result"] != "NOT_FILLED"].copy()
-            # filtre période sur la date du trade (date NY ≈ UTC pour RTH)
-            d0, d1 = day_start.strftime("%Y-%m-%d"), day_end.strftime("%Y-%m-%d")
             trades = trades[(trades["date"].astype(str) >= d0) & (trades["date"].astype(str) <= d1)]
             for _, t in trades.iterrows():
                 rows.append(
@@ -211,7 +247,9 @@ def run_backtests(specs, tickers_filter, day_start, day_end, data_source, client
                         "fill_time": t.get("fill_time"),
                     }
                 )
-            print(f"  ✓ {name:<10} {ticker:<5} {len(trades):>2} trade(s) backtest")
+            src = "M1" if (is_m1 and data_source != "csv") else tf_suffix
+            extra = f"  → {html_path}" if html_path else ""
+            print(f"  ✓ {name:<10} {ticker:<5} {len(trades):>2} trade(s) [{src}]{extra}")
     return pd.DataFrame(rows)
 
 
@@ -643,7 +681,9 @@ def main():
         f"\n{'=' * 66}\n  BACKTEST vs LIVE — {label}  (source données : {args.data_source})\n{'=' * 66}"
     )
     print("Backtest des stratégies live…")
-    bt = run_backtests(specs, tickers_filter, day_start, day_end, args.data_source, client, state)
+    bt = run_backtests(
+        specs, tickers_filter, day_start, day_end, args.data_source, client, state, label
+    )
 
     print("Extraction de la vérité live…")
     live = live_trades_from_state(state, day_start, day_end)

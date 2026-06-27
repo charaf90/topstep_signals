@@ -26,6 +26,8 @@ from config import (
     FIB_V4_TICKERS,
     IB_RETEST_ENABLED,
     IB_RETEST_TICKERS,
+    OPR_NQ1_ENABLED,
+    OPR_NQ1_TICKER,
     OPR_V4_LIVE_TICKERS,
     OPR_V5_1_LIVE_TICKERS,
 )
@@ -67,6 +69,17 @@ _SPECS = {
         "params": None,  # défaut = config.IB_RETEST_* (prod 0.5/0.5/1.5), via strategies/ib_retest.py
         "enabled": bool(IB_RETEST_ENABLED),
         "strategy_key": "IB_RETEST",
+    },
+    # OPR NQ1 causal-matinal — LIVE TRADING (verdict 🔴, override utilisateur). Design FIGÉ
+    # encapsulé dans strategies/opr_nq1_shadow.py (F2 off + sl0.225/tp0.3375 + filtre 9-12h NY
+    # FILL + risk $150 + circuit-breaker daily −$500). Trade pour de vrai → apparaît dans
+    # state.placed_tags avec strategy="OPR_NQ1" (chemin SÉPARÉ de "OPR" YM1). enabled lié au
+    # flag OPR_NQ1_ENABLED (OFF par défaut → visible seulement avec --include-disabled).
+    "opr_nq1_shadow": {
+        "tickers": [OPR_NQ1_TICKER],
+        "params": None,  # design FIGÉ dans le module (params ignorés)
+        "enabled": bool(OPR_NQ1_ENABLED),
+        "strategy_key": "OPR_NQ1",
     },
 }
 

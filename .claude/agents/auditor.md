@@ -51,57 +51,41 @@ Dans ce cas, signale dans le rapport d'audit que le format est legacy
 - [ ] La fenêtre horaire est en NY-time (zoneinfo, pas pytz/hardcode)
 
 ### 2. Absence de look-ahead (BLOCANT)
-Pour chaque ligne où `df.iloc[i]` ou équivalent est utilisé :
-- [ ] La décision à `i` n'utilise jamais `bar["close"]` de la même barre (utiliser `prev`)
-- [ ] L'ATR/ADX/indicateurs sont calculés sur `df.iloc[:i]` ou shiftés explicitement (`.shift(1)`)
-- [ ] Le fill conservateur est appliqué : si SL et TP dans le range d'une barre M15, **SL prioritaire**
+- [ ] **Backtest = M1 (`core/bt_engine`)** : fills + SL/TP résolus à la minute (SL-prioritaire intra-minute).
+      Tout verdict **M15** d'une strat pré-migration est SUSPECT (artefact same-bar) → exiger le re-backtest M1.
+- [ ] `emit_signals` : la décision d'un arm (à `arm_ts`) n'utilise QUE des barres signal-TF CLÔTURÉES
+      (`df.iloc[:i]` / `.shift(1)`) — jamais le close/low/high FINAL de la barre courante ou future.
+- [ ] L'ATR/ADX/indicateurs sont calculés causalement (rolling sur barres ≤ i).
 - [ ] Pas de leak de target/label dans les features (si stratégie ML)
 
-#### 2-bis. Features mesurées sur la bougie de fill — Live-equivalence (BLOCANT)
+#### 2-bis. No-leak signal-TF & fidélité live (BLOCANT)
 
-Si la stratégie utilise des features dérivées de la **barre de fill** (ex : `wick_through_atr`,
-`mae_pending_atr`, `pivot_break_atr` mesuré au fill, profondeur de mèche, range
-intra-bar, MFE intra-bar), elles sont **intrinsèquement non-observables intra-bar**
-en live tel quel. Vérifier dans cet ordre :
+Le moteur M1 résout déjà honnêtement le fill same-bar (plus de PF gonflé par la résolution M15).
+Restent trois contrôles :
 
-- [ ] **Inventaire** : lister toutes les features du DataFrame trades qui dépendent
-      de `bar` au moment du fill (pas seulement des barres précédentes)
-- [ ] **Pour chaque feature ainsi identifiée**, l'une des conditions suivantes
-      doit être satisfaite :
-  - **(a) Infrastructure live disponible** : vérifier dans `broker/m1_buffer.py`
-        (`M1Buffer.get_current_forming_bar`, `get_recent_bars`) et
-        `broker/projectx_market_realtime.py` que le streaming tick/M1 est actif.
-        Si oui, la fonction live (`get_<id>_live_signal`) **DOIT** consommer ce
-        buffer pour évaluer la feature intra-bar avec granularité M1 (~1 min).
-        Pattern de référence : `core/opr.py` + `live_runner.py:470-481`.
-  - **(b) Live-equivalent backtest fourni** : un script
-        `scripts/live_eq_<strategy_id>.py` doit exister, qui re-simule la
-        décision SANS la bougie de fill (équivalent OPR v5.1 :
-        `scripts/live_eq_v5_1.py`). Les métriques OOS rapportées doivent être
-        celles du **live-eq**, pas du backtest naïf.
-- [ ] **Si ni (a) ni (b)** : le PF backtest est un upper bound non-atteignable.
-      **Rétrograder 🟢→🟡 minimum**, et flagger comme BLOCANT à corriger avant
-      `@forge`. Demander explicitement au user lequel des deux paths est retenu.
-- [ ] **Pour la fonction `get_<id>_live_signal`** (si elle existe) : vérifier
-      que la signature accepte `m1_buffer` et `contract_id` quand le ticker
-      en a besoin, et qu'elle est cohérente avec le backtest. Sinon : flagger
-      l'absence comme BLOCANT à la promotion.
+- [ ] **Features de `emit_signals`** : chacune connue à la **clôture de la barre de signal** (`arm_ts`) ?
+      Une feature lue sur la barre de **fill** (low/high/close final, profondeur de mèche, range/MFE
+      intra-bar) ou une barre future = look-ahead → **rétrograder 🟢→🟡 minimum**. Le M1 corrige la
+      RÉSOLUTION du fill, PAS un signal qui triche.
+- [ ] **Calibration backtest↔live** : `tools/backtest_vs_live.py --date <jour tradé>` doit donner
+      **0 DIVERGENCE** sur les trades appariés (Δ = friction net/gross). Sinon, fidélité non prouvée →
+      BLOCANT avant `@forge`.
+- [ ] **Wirage live** (à la promotion) : `get_<id>_live_signal(...)` reconstruit l'état courant via
+      `broker/m1_buffer.py`, cohérent avec `emit_signals`. Posé par `@forge`. Pattern : `core/opr.py`,
+      `core/ib_retest.py`.
 
-> **Cas d'école fib-v4 (2026-05-19)** : le verdict initial 🟢 était basé sur
-> un PF backtest naïf (wick_through_atr lu sur la bougie M15 close du fill).
-> Sans live-equivalence ni wirage `M1Buffer`, le PF live aurait été
-> significativement dégradé. La rétrogradation 🟢→🟡 a permis de demander
-> l'implémentation `M1Buffer`-aware avant promotion. Référence canonique pour
-> les futurs audits.
+> **Cas d'école fib-v4** : verdict M15 🟢 (filtre causal inclus) **RÉFUTÉ sur M1 honnête le 2026-06-18** —
+> l'edge entier était un **artefact same-bar** (11/29 trades M15 résolus à la bougie de fill, OOS M1 pool
+> 0.85/−$827). Leçon : un verdict M15 ne prouve rien ; toujours re-backtester M1 + calibrer vs live.
 
 ### 3. Frictions correctement intégrées (BLOCANT)
 - [ ] `SLIPPAGE_TICKS_PER_TICKER` appliqué à l'entrée ET à la sortie
 - [ ] `COMMISSION_RT_PER_CONTRACT` retiré du `pnl` net
 - [ ] La colonne `pnl` est nette ; si `pnl_gross` existe, vérifier la différence
 
-### 4. Schéma colonnes standard (BLOCANT pour compat avec core/optimizer.py)
-- [ ] Colonnes : `date, dir, entry, sl, tp, sl_dist, tp_dist, rr, n_ct, result, pnl, fill_time, exit_time, exit, regime`
-- [ ] `result` ∈ {TP, SL, TE, NOT_FILLED}
+### 4. Schéma colonnes standard (produit AUTO par `bt_engine` — compat `core/optimizer.py`)
+- [ ] Colonnes : `date, dir, entry, sl, tp, sl_dist, tp_dist, rr, n_ct, result, pnl, fill_time, exit_time, exit, regime` (+ `pnl_gross`, `timeframe`)
+- [ ] `result` ∈ {TP, SL, TE, NOT_FILLED} · `pnl` = NET (friction maison recalculée)
 - [ ] Pas de mutation silencieuse du schéma
 
 ### 5. Walk-forward correctement appliqué

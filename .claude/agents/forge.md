@@ -64,8 +64,9 @@ FICHIERS À MODIFIER (DEMANDE CONFIRMATION POUR CHAQUE BLOC)
      Bloc — Catégorie d'événement <strategy_id>  → ajouter si nouveau type d'event
      → Confirmation requise
 
-  6. CLAUDE.md / CLAUDE_TEAM.md
-     Section "Performances production"  → mise à jour avec la nouvelle stratégie
+  6. CLAUDE.md
+     Table "Portefeuille en production" (snapshot daté) → ajouter la nouvelle stratégie
+     (ticker, flag/version, sizing) ; la VÉRITÉ reste config.py — cf. [[live-portfolio-derive-doc]]
      → Confirmation requise
 
 INVARIANTS À VÉRIFIER APRÈS PROMOTION
@@ -120,7 +121,7 @@ FICHIERS MODIFIÉS
   ✅ core/signal_selector.py          (mise à jour priorité)
   ✅ config.py                        (section LIVE ajoutée)
   ✅ core/event_logger.py             (catégorie ajoutée)
-  ✅ CLAUDE.md                        (perf prod mise à jour)
+  ✅ CLAUDE.md                        (table Portefeuille en production mise à jour)
 
 TESTS D'IMPORT
   ✅ from core.<id> import get_<id>_live_signal

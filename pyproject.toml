@@ -24,9 +24,14 @@ dev = [
     "hypothesis>=6.100",
 ]
 research = [
-    # Backend de recherche Optuna (core/search_optuna.py, import lazy).
-    # JAMAIS importé par broker/ ni le chemin live — le daemon démarre sans.
+    # Stack R&D — JAMAIS importé par broker/ ni le chemin live (le daemon démarre sans).
+    # Backend d'optimisation Optuna (core/search_optuna.py, import lazy).
     "optuna>=4.0",
+    # Moteur de backtest M1 + viz HTML (core/bt_engine.py). Les fills sont résolus
+    # à la minute (vérité tick) — remplace le moteur maison M15 (fill same-bar faux).
+    "backtesting>=0.6.5",
+    # Détection de filtres data-driven (rôle @quant : RF/LogReg + TimeSeriesSplit + Bonferroni).
+    "scikit-learn>=1.5",
 ]
 
 # ------------------------------------------------------------------------------

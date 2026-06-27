@@ -48,6 +48,7 @@ from config import (
     TOPSTEP_DAILY_LOSS_MAX,
     TOPSTEP_TRAILING_DD,
 )
+from core import bt_engine
 from core import robustness as rb
 from core.data import build_timeframes, load_csv
 from core.optimizer import OOS_START
@@ -90,9 +91,7 @@ def collect_daily_pnl(start: str) -> tuple[pd.DataFrame, dict]:
                 tf = build_timeframes(df)
             else:
                 df, tf = None, None
-            trades = module.run_backtest(
-                df, ticker, tf=tf, params=spec["params"], topstep_guard=False
-            )
+            trades = bt_engine.run_trades(module, ticker, df_15m=df, tf=tf, params=spec["params"])
             if len(trades) == 0 or "date" not in trades.columns:
                 continue
             trades = trades[trades["result"] != "NOT_FILLED"]
@@ -158,42 +157,18 @@ def challenge_outcome_mc(
     État initial encodé relatif : cum=0 ; peak relatif = trailing_dd −
     dd_remaining (de sorte que le floor initial soit à −dd_remaining).
     """
-    rng = np.random.default_rng(seed)
-    outcomes = {"target": 0, "breach_trail": 0, "breach_daily": 0, "timeout": 0}
-    days_to_target: list[int] = []
-
-    for _ in range(n_sims):
-        cum = 0.0
-        peak = trailing_dd - dd_remaining  # floor initial = peak - trailing = -dd_remaining
-        result = "timeout"
-        days = rng.choice(daily_pnl, size=max_days, replace=True)
-        for i, day in enumerate(days):
-            if day <= -daily_loss_max:
-                result = "breach_daily"
-                break
-            cum += day
-            peak = max(peak, cum)
-            if cum <= peak - trailing_dd:
-                result = "breach_trail"
-                break
-            if cum >= target_remaining:
-                result = "target"
-                days_to_target.append(i + 1)
-                break
-        outcomes[result] += 1
-
-    return {
-        "n_sims": int(n_sims),
-        "max_days": int(max_days),
-        "target_remaining": float(target_remaining),
-        "dd_remaining": float(dd_remaining),
-        "p_target": round(outcomes["target"] / n_sims, 4),
-        "p_breach_trailing": round(outcomes["breach_trail"] / n_sims, 4),
-        "p_breach_daily": round(outcomes["breach_daily"] / n_sims, 4),
-        "p_timeout": round(outcomes["timeout"] / n_sims, 4),
-        "days_to_target_median": float(np.median(days_to_target)) if days_to_target else None,
-        "days_to_target_p90": float(np.percentile(days_to_target, 90)) if days_to_target else None,
-    }
+    # Source UNIQUE : core.robustness.topstep_forward_mc (même algo, mêmes sorties) —
+    # évite toute dérive avec la métrique d'utilité Topstep exposée dans robustness_<id>.
+    return rb.topstep_forward_mc(
+        daily_pnl,
+        dd_remaining=dd_remaining,
+        target_remaining=target_remaining,
+        daily_loss_max=daily_loss_max,
+        trailing_dd=trailing_dd,
+        n_sims=n_sims,
+        max_days=max_days,
+        seed=seed,
+    )
 
 
 def run(start: str, dd_remaining: float, target_remaining: float) -> dict:

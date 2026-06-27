@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from core import bt_engine
 from core import metrics as m
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -65,16 +66,28 @@ def run_for_ticker(
          "ticker": str, "strategy_id": str}
     """
     strategy_id = getattr(strategy, "STRATEGY_ID", "unknown")
+    is_m1 = bt_engine.supports(strategy)
 
     if verbose:
         print(f"\n{'=' * 60}")
         print(f"  BACKTEST — {ticker}  [{strategy_id}]")
         print(f"{'=' * 60}")
-        print(f"  {len(df_15m):,} bougies [{df_15m.index.min()} → {df_15m.index.max()}]")
+        if is_m1:
+            print("  moteur M1 (backtesting.py) — vérité de fill ; viz HTML nommée")
+        else:
+            print(f"  {len(df_15m):,} bougies [{df_15m.index.min()} → {df_15m.index.max()}]")
 
-    df_trades = strategy.run_backtest(
-        df_15m, ticker, tf=tf, params=params, topstep_guard=topstep_guard
-    )
+    html_path = None
+    if is_m1:
+        # Stratégie portée M1 : on IGNORE le df M15 fourni et on rejoue sur le M1
+        # (vérité de fill), avec génération du HTML viz nommé.
+        res = bt_engine.run(strategy, ticker, params=params, html=True, html_tag="full")
+        df_trades = res["trades"]
+        html_path = res.get("html_path")
+    else:
+        df_trades = strategy.run_backtest(
+            df_15m, ticker, tf=tf, params=params, topstep_guard=topstep_guard
+        )
 
     stats = m.compute_stats(df_trades)
     topstep = m.compute_topstep(df_trades, n_bootstrap=1000)
@@ -82,6 +95,8 @@ def run_for_ticker(
     if verbose:
         m.print_stats_report(stats, ticker, strategy_id)
         m.print_topstep_report(topstep, ticker)
+        if html_path:
+            print(f"  ✓ HTML {html_path}")
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -91,7 +106,8 @@ def run_for_ticker(
         if verbose:
             print(f"  ✓ {csv_path}")
 
-    if plot and len(df_trades) > 0:
+    # Charts PNG plot_day = legacy uniquement (le M1 produit le HTML backtesting.py).
+    if plot and not is_m1 and len(df_trades) > 0:
         _generate_sample_charts(
             strategy,
             df_15m,
@@ -108,6 +124,7 @@ def run_for_ticker(
         "topstep": topstep,
         "ticker": ticker,
         "strategy_id": strategy_id,
+        "html_path": html_path,
     }
 
 
